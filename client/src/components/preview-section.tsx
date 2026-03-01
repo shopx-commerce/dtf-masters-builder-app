@@ -2208,8 +2208,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         const ny = 0.5 - py / Math.max(1, dims.height);
         return { nx: Math.max(0.05, Math.min(0.95, nx)), ny: Math.max(0.05, Math.min(0.95, ny)) };
       };
+      (canvas as any).getSelectionZoomActive = () => selectionZoomActive;
+      (canvas as any).toggleSelectionZoom = () => setSelectionZoomActive((prev: boolean) => !prev);
       return canvas;
-    }, []);
+    }, [selectionZoomActive]);
 
     const getCheckerboardPattern = (ctx: CanvasRenderingContext2D, w: number, h: number): CanvasPattern | null => {
       if (checkerboardPatternRef.current?.width === w && checkerboardPatternRef.current?.height === h) {
@@ -3212,16 +3214,18 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                   </Button>
                 </div>
                 <div className="w-px h-3.5 bg-gray-300" />
-                <Button 
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setSelectionZoomActive(prev => !prev)}
-                  className={`${isMobile ? 'min-w-[36px] min-h-[36px] h-8 w-8 p-0 justify-center' : 'h-6 px-1.5'} hover:bg-gray-200 rounded whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ${selectionZoomActive ? 'bg-cyan-500/20 text-cyan-400' : 'text-gray-600'} flex items-center`}
-                  title={t("preview.selectionZoom")}
-                >
-                  <ScanSearch className={`${isMobile ? 'h-4 w-4' : 'h-2.5 w-2.5 mr-0.5'} flex-shrink-0`} />
-                  {!isMobile && t("preview.selectToZoom")}
-                </Button>
+                {!isMobile && (
+                  <Button 
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSelectionZoomActive(prev => !prev)}
+                    className={`h-6 px-1.5 hover:bg-gray-200 rounded whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ${selectionZoomActive ? 'bg-cyan-500/20 text-cyan-400' : 'text-gray-600'} flex items-center`}
+                    title={t("preview.selectionZoom")}
+                  >
+                    <ScanSearch className="h-2.5 w-2.5 mr-0.5 flex-shrink-0" />
+                    {t("preview.selectToZoom")}
+                  </Button>
+                )}
                 {!isMobile && (
                   <Button 
                     variant="ghost"

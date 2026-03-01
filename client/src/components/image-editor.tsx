@@ -22,7 +22,7 @@ import { useHistory, type HistorySnapshot } from "@/hooks/use-history";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useLanguage } from "@/lib/i18n";
 import { formatDimensions, formatLength, useMetric, cmToInches, getUnitSuffix } from "@/lib/format-length";
-import { Trash2, Copy, ChevronDown, ChevronUp, Undo2, Redo2, RotateCw, ArrowUpLeft, ArrowUpRight, ArrowDownLeft, ArrowDownRight, LayoutGrid, Layers, Loader2, Plus, Droplets, Link, Unlink, FlipHorizontal2, FlipVertical2, MousePointerClick, XCircle, Stamp, Check, X } from "lucide-react";
+import { Trash2, Copy, ChevronDown, ChevronUp, Undo2, Redo2, RotateCw, ArrowUpLeft, ArrowUpRight, ArrowDownLeft, ArrowDownRight, LayoutGrid, Layers, Loader2, Plus, Droplets, Link, Unlink, FlipHorizontal2, FlipVertical2, MousePointerClick, XCircle, Stamp, Check, X, ScanSearch } from "lucide-react";
 
 export type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
 import type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
@@ -243,6 +243,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
   const [selectedDesignId, setSelectedDesignId] = useState<string | null>(null);
   const [selectedDesignIds, setSelectedDesignIds] = useState<Set<string>>(new Set());
   const [showDesignInfo, setShowDesignInfo] = useState(false);
+  const [selectionZoomActive, setSelectionZoomActive] = useState(false);
   const [editingLayerName, setEditingLayerName] = useState<string | null>(null);
   const [editingNameValue, setEditingNameValue] = useState('');
   const clipboardRef = useRef<DesignItem[]>([]);
@@ -3101,8 +3102,21 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                 </button>
               </div>
               {isMobile && (
+                <button
+                  onClick={() => {
+                    const c = canvasRef.current as any;
+                    if (c?.toggleSelectionZoom) c.toggleSelectionZoom();
+                    setSelectionZoomActive(prev => !prev);
+                  }}
+                  className={`p-2 rounded-md transition-colors min-w-[40px] min-h-[40px] flex items-center justify-center ml-auto ${selectionZoomActive ? 'bg-cyan-500/20 text-cyan-400' : 'text-gray-600 hover:bg-gray-200/80 hover:text-cyan-400'}`}
+                  title={t("preview.selectionZoom")}
+                >
+                  <ScanSearch className="w-4 h-4" />
+                </button>
+              )}
+              {isMobile && (
                 <div
-                  className={`flex items-center gap-1 ml-auto flex-shrink-0 ${designs.length >= 2 ? 'opacity-100' : 'opacity-0'}`}
+                  className={`flex items-center gap-1 flex-shrink-0 ${designs.length >= 2 ? 'opacity-100' : 'opacity-0'}`}
                   aria-hidden={designs.length < 2}
                 >
                   <span className="text-[10px] text-gray-600">{t("editor.margin")}</span>
