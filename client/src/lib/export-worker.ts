@@ -65,14 +65,16 @@ function drawDesignsOnCtx(
     ctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
     ctx.drawImage(d.bitmap, -info.drawW / 2, -info.drawH / 2, info.drawW, info.drawH);
     if (d.printFileName && d.name) {
-      const fontSize = Math.max(8, Math.round(0.08 * info.exportDpi));
+      ctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
+      const fontSize = Math.max(8, Math.round(info.drawH * 0.06));
       ctx.font = `bold ${fontSize}px sans-serif`;
       ctx.fillStyle = '#000000';
       ctx.textAlign = 'right';
-      ctx.textBaseline = 'top';
-      const margin = Math.round(0.02 * info.exportDpi);
+      ctx.textBaseline = 'bottom';
+      const margin = Math.round(fontSize * 0.3);
       const displayName = d.name.replace(/\.[^/.]+$/, '');
-      ctx.fillText(displayName, info.drawW / 2 - margin, info.drawH / 2 + margin);
+      ctx.fillText(displayName, info.drawW / 2 - margin, info.drawH / 2 - margin);
+      ctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
     }
     ctx.restore();
     if (d.alphaThresholded) {

@@ -2518,14 +2518,16 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
             ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
             ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
             if (design.printFileName) {
-              const fontSize = Math.max(8, Math.round(0.08 * exportDpi));
+              ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
+              const fontSize = Math.max(8, Math.round(drawH * 0.06));
               ctx.font = `bold ${fontSize}px sans-serif`;
               ctx.fillStyle = '#000000';
               ctx.textAlign = 'right';
-              ctx.textBaseline = 'top';
-              const margin = Math.round(0.02 * exportDpi);
+              ctx.textBaseline = 'bottom';
+              const margin = Math.round(fontSize * 0.3);
               const displayName = design.name.replace(/\.[^/.]+$/, '');
-              ctx.fillText(displayName, drawW / 2 - margin, drawH / 2 + margin);
+              ctx.fillText(displayName, drawW / 2 - margin, drawH / 2 - margin);
+              ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
             }
             ctx.restore();
             if (design.alphaThresholded) { ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high'; }
