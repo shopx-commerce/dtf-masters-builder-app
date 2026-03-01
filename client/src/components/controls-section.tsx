@@ -128,7 +128,9 @@ export default function ControlsSection({
                 const fallback = extractColorsFromImage(imageInfo.image, 999);
                 colorCacheRef.current.set(cacheKey, fallback);
                 setExtractedColors(fallback);
-              } catch { /* sync fallback failed */ }
+              } catch {
+                setExtractedColors([]);
+              }
             });
           }).catch((err) => {
             if (cancelled) return;

@@ -58,7 +58,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const resizeLimitToastRef = useRef(0);
-    const zoomMax = Math.max(10, Math.ceil(artboardHeight / artboardWidth) * 3);
+    const zoomMax = Math.max(10, Math.ceil(artboardHeight / Math.max(artboardWidth, 0.1)) * 3);
     const zoomMaxRef = useRef(zoomMax);
     zoomMaxRef.current = zoomMax;
     const [zoom, setZoom] = useState(1);
@@ -435,6 +435,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
     const altDragDuplicatedRef = useRef(false);
     const altKeyRef = useRef(false);
+    const altKeyAtDragStartRef = useRef(false);
 
     useEffect(() => {
       transformRef.current = designTransform || { nx: 0.5, ny: 0.5, s: 1, rotation: 0 };
@@ -442,6 +443,15 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
     useEffect(() => {
       const onKeyDown = (e: KeyboardEvent) => {
+        // Always track Alt globally so alt+drag duplication is reliable
+        altKeyRef.current = e.altKey;
+        const dupFromKey = (isDraggingRef.current || isMultiDragRef.current) && e.altKey && !altDragDuplicatedRef.current;
+        if (dupFromKey) {
+          e.preventDefault();
+          altDragDuplicatedRef.current = true;
+          onDuplicateSelected?.();
+        }
+
         if (e.key === 'Escape' && selectionZoomActiveRef.current) {
           setSelectionZoomActive(false);
           isSelectionZoomDragging.current = false;
@@ -451,16 +461,16 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         }
         if (!isKeyboardScopeActiveRef.current) return;
         shiftKeyRef.current = e.shiftKey;
-        altKeyRef.current = e.altKey;
         if (e.code === 'Space' && !spaceDownRef.current) {
           spaceDownRef.current = true;
           e.preventDefault();
         }
       };
       const onKeyUp = (e: KeyboardEvent) => {
+        // Keep Alt state in sync even if keyboard scope is inactive
+        altKeyRef.current = e.altKey;
         if (!isKeyboardScopeActiveRef.current) return;
         shiftKeyRef.current = e.shiftKey;
-        altKeyRef.current = e.altKey;
         if (e.code === 'Space') {
           spaceDownRef.current = false;
           isPanningRef.current = false;
@@ -472,7 +482,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       window.addEventListener('keydown', onKeyDown);
       window.addEventListener('keyup', onKeyUp);
       return () => { window.removeEventListener('keydown', onKeyDown); window.removeEventListener('keyup', onKeyUp); };
-    }, []);
+    }, [onDuplicateSelected]);
 
     const getDesignRect = useCallback(() => {
       if (!imageInfo || !designTransform) return null;
@@ -751,6 +761,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     overlappingDesignsRef.current = overlappingDesigns;
 
     const overlapWorkerRef = useRef<Worker | null>(null);
+    const overlapRequestIdRef = useRef(0);
+    const overlapHandlerRef = useRef<((ev: MessageEvent) => void) | null>(null);
     useEffect(() => {
       try {
         overlapWorkerRef.current = new Worker(
@@ -758,7 +770,13 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           { type: 'module' }
         );
       } catch { /* OffscreenCanvas not supported — fallback to main thread */ }
-      return () => { overlapWorkerRef.current?.terminate(); };
+      return () => {
+        const w = overlapWorkerRef.current;
+        const h = overlapHandlerRef.current;
+        if (w && h) w.removeEventListener('message', h);
+        overlapHandlerRef.current = null;
+        overlapWorkerRef.current?.terminate();
+      };
     }, []);
 
     const checkPixelOverlap = useCallback(() => {
@@ -842,6 +860,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           const bmp = await createImageBitmap(d.imageInfo.image);
           return { idx, bmp };
         });
+        overlapRequestIdRef.current += 1;
+        const myRequestId = overlapRequestIdRef.current;
         Promise.all(bitmapPromises).then(bitmaps => {
           const bmpMap = new Map(bitmaps.map(b => [b.idx, b.bmp]));
           const workerDesigns = designRects.map((dr, idx) => ({
@@ -858,18 +878,29 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           const handler = (ev: MessageEvent) => {
             if (ev.data.type === 'result') {
               worker.removeEventListener('message', handler);
+              overlapHandlerRef.current = null;
+              if (myRequestId !== overlapRequestIdRef.current) return;
               const workerOverlapping = new Set<string>(ev.data.overlapping as string[]);
               for (const id of outOfBounds) workerOverlapping.add(id);
               const prev = overlappingDesignsRef.current;
               if (workerOverlapping.size !== prev.size || Array.from(workerOverlapping).some(id => !prev.has(id))) {
                 setOverlappingDesigns(workerOverlapping);
               }
+            } else if (ev.data.type === 'error') {
+              worker.removeEventListener('message', handler);
+              overlapHandlerRef.current = null;
+              const err = (ev.data as { error?: string }).error;
+              console.warn('Overlap worker error:', err);
+              runMainThreadOverlap();
             }
           };
+          overlapHandlerRef.current = handler;
           worker.addEventListener('message', handler);
           const transferable = Array.from(bmpMap.values());
           worker.postMessage({ type: 'check', designs: workerDesigns, sw, sh }, transferable as Transferable[]);
-        }).catch(() => {
+        }).catch((err) => {
+          if (myRequestId !== overlapRequestIdRef.current) return;
+          console.warn('Overlap worker fallback:', err);
           runMainThreadOverlap();
         });
         return;
@@ -959,7 +990,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       return null;
     }, [designs, artboardWidth, artboardHeight]);
 
-    const handleInteractionStart = useCallback((clientX: number, clientY: number, ctrlKey = false) => {
+    const handleInteractionStart = useCallback((clientX: number, clientY: number, ctrlKey = false, altKey = false) => {
       const local = canvasToLocal(clientX, clientY);
       const canvas = canvasRef.current;
       if (!canvas) return;
@@ -982,7 +1013,26 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
       // Group handles take priority when multiple designs are selected
       if (selectedDesignIds.size > 1) {
+        // When Alt is held, prefer multi-drag (for alt+drag duplicate) over group handles
+        const hitIdMulti = findDesignAtPoint(local.x, local.y);
+        if (altKey && hitIdMulti && selectedDesignIds.has(hitIdMulti)) {
+          altKeyAtDragStartRef.current = true;
+          isMultiDragRef.current = true;
+          multiDragStartRef.current = { x: clientX, y: clientY };
+          altDragDuplicatedRef.current = false;
+          if (canvasAreaRef.current) canvasAreaRef.current.style.cursor = 'move';
+          return;
+        }
+
         const multiHit = hitTestMultiHandles(local.x, local.y);
+        if (multiHit && altKey && hitIdMulti && selectedDesignIds.has(hitIdMulti)) {
+          altKeyAtDragStartRef.current = true;
+          isMultiDragRef.current = true;
+          multiDragStartRef.current = { x: clientX, y: clientY };
+          altDragDuplicatedRef.current = false;
+          if (canvasAreaRef.current) canvasAreaRef.current.style.cursor = 'move';
+          return;
+        }
         if (multiHit) {
           const bbox = getMultiSelectionBBox();
           if (bbox && canvas) {
@@ -1041,9 +1091,33 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       }
 
       if (selectedDesignId && imageInfo && onTransformChange) {
+        const hitD = hitTestDesign(local.x, local.y);
+        const hitIdAtPoint = findDesignAtPoint(local.x, local.y);
+        // When Alt is held, prefer drag (for alt+drag duplicate) over resize/rotate handles
+        if (altKey && (hitD || hitIdAtPoint === selectedDesignId)) {
+          altKeyAtDragStartRef.current = true;
+          isDraggingRef.current = true;
+          altDragDuplicatedRef.current = false;
+          if (canvasAreaRef.current) canvasAreaRef.current.style.cursor = 'move';
+          dragStartMouseRef.current = { x: clientX, y: clientY };
+          dragStartTransformRef.current = { ...transformRef.current };
+          return;
+        }
+
         const handleHit = hitTestHandles(local.x, local.y);
 
+        // When Alt is held, prefer drag (duplicate) even when clicking on a handle
+        if (handleHit && altKey) {
+          isDraggingRef.current = true;
+          altDragDuplicatedRef.current = false;
+          if (canvasAreaRef.current) canvasAreaRef.current.style.cursor = 'move';
+          dragStartMouseRef.current = { x: clientX, y: clientY };
+          dragStartTransformRef.current = { ...transformRef.current };
+          return;
+        }
+
         if (handleHit && handleHit.type === 'resize' && isClickInDesignInterior(local.x, local.y)) {
+          altKeyAtDragStartRef.current = false;
           isDraggingRef.current = true;
           altDragDuplicatedRef.current = false;
           if (canvasAreaRef.current) canvasAreaRef.current.style.cursor = 'move';
@@ -1084,7 +1158,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           return;
         }
 
-        if (hitTestDesign(local.x, local.y)) {
+        if (hitD) {
+          altKeyAtDragStartRef.current = false;
           isDraggingRef.current = true;
           altDragDuplicatedRef.current = false;
           if (canvasAreaRef.current) canvasAreaRef.current.style.cursor = 'move';
@@ -1098,8 +1173,24 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
       if (hitId) {
         if (hitId !== selectedDesignId) {
+          if (altKey && onSelectDesign && onTransformChange) {
+            const design = designs.find(d => d.id === hitId);
+            if (design) {
+              altKeyAtDragStartRef.current = true;
+              onSelectDesign(hitId);
+              const t = { ...design.transform };
+              transformRef.current = t;
+              dragStartTransformRef.current = t;
+              isDraggingRef.current = true;
+              altDragDuplicatedRef.current = false;
+              dragStartMouseRef.current = { x: clientX, y: clientY };
+              if (canvasAreaRef.current) canvasAreaRef.current.style.cursor = 'move';
+              return;
+            }
+          }
           onSelectDesign?.(hitId);
         } else {
+          altKeyAtDragStartRef.current = altKey;
           isDraggingRef.current = true;
           altDragDuplicatedRef.current = false;
           if (canvasAreaRef.current) canvasAreaRef.current.style.cursor = 'move';
@@ -1122,9 +1213,9 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         }
       }
       setMarqueeScreenRect(null);
-    }, [imageInfo, onTransformChange, canvasToLocal, hitTestHandles, hitTestDesign, isClickInDesignInterior, getDesignRect, selectedDesignId, selectedDesignIds, findDesignAtPoint, onSelectDesign, onMultiSelect, hitTestMultiHandles, getMultiSelectionBBox]);
+    }, [imageInfo, onTransformChange, canvasToLocal, hitTestHandles, hitTestDesign, isClickInDesignInterior, getDesignRect, selectedDesignId, selectedDesignIds, findDesignAtPoint, onSelectDesign, onMultiSelect, hitTestMultiHandles, getMultiSelectionBBox, designs]);
 
-    const handleInteractionMove = useCallback((clientX: number, clientY: number) => {
+    const handleInteractionMove = useCallback((clientX: number, clientY: number, altKeyFromEvent?: boolean) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
 
@@ -1157,7 +1248,9 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       }
 
       if (isMultiDragRef.current) {
-        if (altKeyRef.current && !altDragDuplicatedRef.current) {
+        if (altKeyFromEvent !== undefined) altKeyRef.current = altKeyFromEvent;
+        const altPressed = altKeyFromEvent ?? altKeyRef.current ?? altKeyAtDragStartRef.current;
+        if (altPressed && !altDragDuplicatedRef.current) {
           altDragDuplicatedRef.current = true;
           onDuplicateSelected?.();
         }
@@ -1220,7 +1313,9 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       if (!onTransformChange) return;
 
       if (isDraggingRef.current) {
-        if (altKeyRef.current && !altDragDuplicatedRef.current) {
+        if (altKeyFromEvent !== undefined) altKeyRef.current = altKeyFromEvent;
+        const altPressed = altKeyFromEvent ?? altKeyRef.current ?? altKeyAtDragStartRef.current;
+        if (altPressed && !altDragDuplicatedRef.current) {
           altDragDuplicatedRef.current = true;
           onDuplicateSelected?.();
         }
@@ -1399,6 +1494,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         isMultiRotateRef.current = false;
         resizeCommittedRef.current = false;
         altDragDuplicatedRef.current = false;
+        altKeyAtDragStartRef.current = false;
         stopBottomGlow();
         if (canvasAreaRef.current) canvasAreaRef.current.style.cursor = getIdleCursor();
         checkPixelOverlap();
@@ -1412,6 +1508,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       isRotatingRef.current = false;
       resizeCommittedRef.current = false;
       altDragDuplicatedRef.current = false;
+      altKeyAtDragStartRef.current = false;
       snapGuidesRef.current = [];
       stopBottomGlow();
       if (canvasAreaRef.current) canvasAreaRef.current.style.cursor = getIdleCursor();
@@ -1430,6 +1527,9 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
     const handleMouseDown = useCallback((e: React.MouseEvent) => {
       e.preventDefault();
+      // Ensure keyboard scope is active on mousedown (fixes first-upload case where mouseenter never fired)
+      isKeyboardScopeActiveRef.current = true;
+      altKeyRef.current = e.altKey;
       if (selectionZoomActiveRef.current) return;
       if ((e.target as HTMLElement).closest('[data-scrollbar]')) return;
       if (e.button === 1 || (e.button === 0 && spaceDownRef.current)) {
@@ -1445,7 +1545,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         if (canvasAreaRef.current) canvasAreaRef.current.style.cursor = 'grabbing';
         return;
       }
-      handleInteractionStart(e.clientX, e.clientY, e.ctrlKey || e.metaKey);
+      handleInteractionStart(e.clientX, e.clientY, e.ctrlKey || e.metaKey, e.altKey);
     }, [handleInteractionStart, panX, panY, isHorizOverflow]);
 
     const handleDoubleClick = useCallback((e: React.MouseEvent) => {
@@ -1472,7 +1572,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         return;
       }
       if (isMarqueeRef.current || isMultiDragRef.current || isMultiResizeRef.current || isMultiRotateRef.current || isDraggingRef.current || isResizingRef.current || isRotatingRef.current) {
-        handleInteractionMove(e.clientX, e.clientY);
+        handleInteractionMove(e.clientX, e.clientY, e.altKey);
         return;
       }
       if (!canvasAreaRef.current) return;
@@ -1917,7 +2017,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           setPanY(Math.max(-maxPanY, Math.min(maxPanY, rawPy)));
           return;
         }
-        handleInteractionMoveRef.current?.(e.clientX, e.clientY);
+        handleInteractionMoveRef.current?.(e.clientX, e.clientY, e.altKey);
       };
       const onGlobalUp = () => {
         const active = isPanningRef.current || isDraggingRef.current || isResizingRef.current || isRotatingRef.current || isMultiDragRef.current || isMultiResizeRef.current || isMultiRotateRef.current || isMarqueeRef.current;
@@ -2320,6 +2420,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         ctx.fillRect(0, 0, canvasWidth, canvasHeight);
       }
 
+      ctx.save();
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = Math.max(1, 2 * dpiScaleRef.current);
+      ctx.strokeRect(0.5, 0.5, canvasWidth - 1, canvasHeight - 1);
+      ctx.restore();
 
       for (const design of designs) {
         if (design.id === selectedDesignId) continue;

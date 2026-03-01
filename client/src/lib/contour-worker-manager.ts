@@ -239,8 +239,10 @@ class ContourWorkerManager {
       imageData.height
     );
 
-    const dpiFromWidth = canvas.width / resizeSettings.widthInches;
-    const dpiFromHeight = canvas.height / resizeSettings.heightInches;
+    const safeWidthInches = Math.max(resizeSettings.widthInches, 0.01);
+    const safeHeightInches = Math.max(resizeSettings.heightInches, 0.01);
+    const dpiFromWidth = canvas.width / safeWidthInches;
+    const dpiFromHeight = canvas.height / safeHeightInches;
     const effectiveDPI = Math.min(dpiFromWidth, dpiFromHeight);
     
     const scaledShapeInfo = detectedShapeInfo && scale !== 1 ? {

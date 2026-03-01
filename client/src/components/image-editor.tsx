@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { flushSync } from "react-dom";
 import UploadSection from "./upload-section";
 import PreviewSection from "./preview-section";
 import ControlsSection, { type SpotPreviewData } from "./controls-section";
@@ -257,6 +258,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
 
   // Undo/Redo history
   const { pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo } = useHistory();
+  const mountedRef = useRef(true);
+  useEffect(() => { return () => { mountedRef.current = false; }; }, []);
   const designsRef = useRef(designs);
   designsRef.current = designs;
   const nudgeSnapshotSavedRef = useRef(false);
@@ -268,19 +271,20 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
 
   const snapshotCacheRef = useRef<{designs: DesignItem[]; json: string; infoMap: Map<string, ImageInfo>} | null>(null);
   const getSnapshot = useCallback((): HistorySnapshot => {
+    const currentDesigns = designsRef.current;
     let json: string;
     let infoMap: Map<string, ImageInfo>;
     const cache = snapshotCacheRef.current;
-    if (cache && cache.designs === designs) {
+    if (cache && cache.designs === currentDesigns) {
       json = cache.json;
       infoMap = cache.infoMap;
     } else {
-      json = JSON.stringify(designs.map(d => ({ id: d.id, transform: d.transform, widthInches: d.widthInches, heightInches: d.heightInches, name: d.name })));
-      infoMap = new Map(designs.map(d => [d.id, d.imageInfo]));
-      snapshotCacheRef.current = { designs, json, infoMap };
+      json = JSON.stringify(currentDesigns.map(d => ({ id: d.id, transform: d.transform, widthInches: d.widthInches, heightInches: d.heightInches, name: d.name })));
+      infoMap = new Map(currentDesigns.map(d => [d.id, d.imageInfo]));
+      snapshotCacheRef.current = { designs: currentDesigns, json, infoMap };
     }
-    return { designsJson: json, selectedDesignId, imageInfoMap: infoMap, artboardWidth, artboardHeight };
-  }, [designs, selectedDesignId, artboardWidth, artboardHeight]);
+    return { designsJson: json, selectedDesignId, imageInfoMap: infoMap, artboardWidth: artboardWidthRef.current, artboardHeight: artboardHeightRef.current };
+  }, [selectedDesignId]);
 
   const saveSnapshot = useCallback(() => {
     pushSnapshot(getSnapshot());
@@ -295,6 +299,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       return;
     }
     const infoMap = snap.imageInfoMap ?? new Map<string, unknown>();
+    let restoredIds: Set<string> = new Set();
     setDesigns(prev => {
       const lookup = new Map(prev.map(d => [d.id, d]));
       const restored = parsed.map(p => {
@@ -316,11 +321,13 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         }
         return null;
       }).filter(Boolean) as DesignItem[];
+      restoredIds = new Set(restored.map(d => d.id));
       return restored;
     });
-    setSelectedDesignId(snap.selectedDesignId);
-    if (snap.selectedDesignId) {
-      const sel = parsed.find(p => p.id === snap.selectedDesignId);
+    const validSelectedId = restoredIds.has(snap.selectedDesignId) ? snap.selectedDesignId : null;
+    setSelectedDesignId(validSelectedId);
+    if (validSelectedId) {
+      const sel = parsed.find(p => p.id === validSelectedId);
       if (sel) setDesignTransform(sel.transform);
     } else {
       setDesignTransform({ nx: 0.5, ny: 0.5, s: 1, rotation: 0 });
@@ -366,21 +373,29 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     return activeImageInfo.dpi;
   }, [activeImageInfo]);
 
-  const layerGroupInfo = useMemo(() => {
+  const layerRows = useMemo(() => {
     const baseNameOf = (name: string) => name.replace(/ copy( \d+)?$/, '');
     const sizeKeyOf = (d: DesignItem) => `${(d.widthInches * d.transform.s).toFixed(2)}x${(d.heightInches * d.transform.s).toFixed(2)}`;
-    const groups = new Map<string, { count: number; baseSize: string; firstId: string }>();
+    const firstSizeByBase = new Map<string, string>();
+    const groups = new Map<string, DesignItem[]>();
     for (const d of designs) {
       const base = baseNameOf(d.name);
       const sk = sizeKeyOf(d);
-      const existing = groups.get(base);
-      if (!existing) {
-        groups.set(base, { count: 1, baseSize: sk, firstId: d.id });
-      } else {
-        existing.count++;
-      }
+      if (!firstSizeByBase.has(base)) firstSizeByBase.set(base, sk);
+      const key = `${base}::${sk}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(d);
     }
-    return { baseNameOf, sizeKeyOf, groups };
+    return Array.from(groups.entries()).map(([key, designsInGroup]) => {
+      const [baseName, sizeKey] = key.split('::');
+      const origSize = firstSizeByBase.get(baseName) ?? sizeKey;
+      return {
+        baseName,
+        sizeKey,
+        designs: designsInGroup,
+        isResized: sizeKey !== origSize,
+      };
+    });
   }, [designs]);
 
   useEffect(() => {
@@ -390,8 +405,10 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
   }, [activeImageInfo, onDesignUploaded]);
 
   const handleSelectDesign = useCallback((id: string | null) => {
-    setSelectedDesignId(id);
-    setSelectedDesignIds(id ? new Set([id]) : new Set());
+    flushSync(() => {
+      setSelectedDesignId(id);
+      setSelectedDesignIds(id ? new Set([id]) : new Set());
+    });
   }, []);
 
   const handleMultiSelect = useCallback((ids: string[]) => {
@@ -710,7 +727,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     const placeSeg = (segs: Seg[], px: number, iw: number, ih: number): Seg[] => {
       let topY = 0;
       for (const s of segs) {
-        if (s.x < px + iw && s.x + s.w > px) topY = Math.max(topY, s.y);
+        if (s.x < px + iw && s.x + s.w >= px - 0.01) topY = Math.max(topY, s.y);
       }
       const next: Seg[] = [];
       for (const s of segs) {
@@ -773,21 +790,25 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     const design = designs.find(d => d.id === selectedDesignId);
     if (!design) return;
     const newId = crypto.randomUUID();
-    const baseName = design.name.replace(/ copy \d+$/, '');
+    const baseName = design.name.replace(/ copy( \d+)?$/, '');
     const escaped = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const re = new RegExp(`^${escaped} copy (\\d+)$`);
     const maxNum = designs.reduce((mx, d) => { const m = d.name.match(re); return m ? Math.max(mx, parseInt(m[1])) : mx; }, 0);
-    const offsetNx = Math.min(0.95, design.transform.nx + 0.03);
+    const offsetT = { ...design.transform, nx: design.transform.nx + 0.03, ny: design.transform.ny };
+    const { nx, ny } = clampDesignToArtboard({ ...design, transform: offsetT }, artboardWidth, artboardHeight);
     const newDesign: DesignItem = {
       ...design,
       id: newId,
       name: `${baseName} copy ${maxNum + 1}`,
-      transform: { ...design.transform, nx: offsetNx, ny: design.transform.ny },
+      transform: { ...design.transform, nx, ny },
     };
     saveSnapshot();
     setDesigns(prev => [...prev, newDesign]);
-    setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true }), 0);
-  }, [selectedDesignId, designs, saveSnapshot, toast]);
+    setSelectedDesignId(newId);
+    requestAnimationFrame(() => {
+      handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true });
+    });
+  }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight]);
 
   const handleDuplicateSelected = useCallback((): string[] => {
     const toDup = designs.filter(d => selectedDesignIds.has(d.id));
@@ -797,8 +818,9 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       const newId = crypto.randomUUID();
       newIds.push(newId);
       const base = d.name.replace(/ copy( \d+)?$/, '');
-      const offsetNx = Math.min(0.95, d.transform.nx + 0.03 + i * 0.01);
-      return { ...d, id: newId, name: `${base} copy`, transform: { ...d.transform, nx: offsetNx, ny: d.transform.ny } };
+      const offsetT = { ...d.transform, nx: d.transform.nx + 0.03 + i * 0.01, ny: d.transform.ny };
+      const { nx, ny } = clampDesignToArtboard({ ...d, transform: offsetT }, artboardWidth, artboardHeight);
+      return { ...d, id: newId, name: `${base} copy`, transform: { ...d.transform, nx, ny } };
     });
     multiDragAccumRef.current = null;
     multiResizeStartRef.current = null;
@@ -809,7 +831,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     if (newIds.length === 1) setSelectedDesignId(newIds[0]);
     else setSelectedDesignId(newIds[newIds.length - 1]);
     return newIds;
-  }, [designs, selectedDesignIds, saveSnapshot]);
+  }, [designs, selectedDesignIds, saveSnapshot, artboardWidth, artboardHeight]);
 
   const handleDuplicateById = useCallback((designId: string) => {
     const design = designs.find(d => d.id === designId);
@@ -819,20 +841,24 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     const escaped = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const re = new RegExp(`^${escaped} copy (\\d+)$`);
     const maxNum = designs.reduce((mx, d) => { const m = d.name.match(re); return m ? Math.max(mx, parseInt(m[1])) : mx; }, 0);
-    const offsetNx = Math.min(0.95, design.transform.nx + 0.03);
+    const offsetT = { ...design.transform, nx: design.transform.nx + 0.03, ny: design.transform.ny };
+    const { nx, ny } = clampDesignToArtboard({ ...design, transform: offsetT }, artboardWidth, artboardHeight);
     const newDesign: DesignItem = {
       ...design,
       id: newId,
       name: `${baseName} copy ${maxNum + 1}`,
-      transform: { ...design.transform, nx: offsetNx, ny: design.transform.ny },
+      transform: { ...design.transform, nx, ny },
     };
     saveSnapshot();
     setDesigns(prev => [...prev, newDesign]);
+    setSelectedDesignId(newId);
     setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true }), 0);
-  }, [designs, saveSnapshot, toast]);
+  }, [designs, saveSnapshot, artboardWidth, artboardHeight]);
 
-  const handleRemoveOneCopy = useCallback((baseName: string) => {
-    const copies = designs.filter(d => d.name.replace(/ copy( \d+)?$/, '') === baseName);
+  const handleRemoveOneCopy = useCallback((baseName: string, sizeKey: string) => {
+    const baseNameOf = (name: string) => name.replace(/ copy( \d+)?$/, '');
+    const sizeKeyOf = (d: DesignItem) => `${(d.widthInches * d.transform.s).toFixed(2)}x${(d.heightInches * d.transform.s).toFixed(2)}`;
+    const copies = designs.filter(d => baseNameOf(d.name) === baseName && sizeKeyOf(d) === sizeKey);
     if (copies.length <= 1) return;
     const last = copies[copies.length - 1];
     saveSnapshot();
@@ -840,8 +866,9 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     if (selectedDesignId === last.id) {
       setSelectedDesignId(copies.length > 1 ? copies[copies.length - 2].id : null);
     }
-    selectedDesignIds.delete(last.id);
-    setSelectedDesignIds(new Set(selectedDesignIds));
+    const nextIds = new Set(selectedDesignIds);
+    nextIds.delete(last.id);
+    setSelectedDesignIds(nextIds);
     setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true }), 0);
   }, [designs, saveSnapshot, selectedDesignId, selectedDesignIds]);
 
@@ -872,6 +899,33 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     setSelectedDesignIds(new Set(newIds));
     setSelectedDesignId(newIds[newIds.length - 1]);
   }, [saveSnapshot, artboardWidth, artboardHeight]);
+
+  const handleDeleteGroup = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    saveSnapshot();
+    const idSet = new Set(ids);
+    const toDelete = designsRef.current.filter(d => idSet.has(d.id));
+    const remaining = designsRef.current.filter(d => !idSet.has(d.id));
+    for (const d of toDelete) {
+      const srcStillUsed = remaining.some(r => r.imageInfo.image.src === d.imageInfo.image.src);
+      if (!srcStillUsed) {
+        thumbnailCacheRef.current.delete(d.imageInfo.image.src);
+        contentFillCacheRef.current.delete(d.imageInfo.image.src);
+      }
+    }
+    setDesigns(remaining);
+    setSelectedDesignIds(prev => {
+      const next = new Set(prev);
+      for (const id of ids) next.delete(id);
+      return next;
+    });
+    if (remaining.length === 0) {
+      setSelectedDesignId(null);
+      setImageInfo(null);
+    } else if (ids.includes(selectedDesignId ?? '')) {
+      setSelectedDesignId(remaining[remaining.length - 1].id);
+    }
+  }, [selectedDesignId, saveSnapshot]);
 
   const handleDeleteDesign = useCallback((id: string) => {
     saveSnapshot();
@@ -999,7 +1053,9 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     saveSnapshot();
     const ids = selectedDesignIds.size > 0 ? selectedDesignIds : new Set([selectedDesignId]);
     setDesigns(prev => prev.map(d => ids.has(d.id) ? { ...d, transform: { ...d.transform, flipX: !d.transform.flipX } } : d));
-    setDesignTransform(prev => ({ ...prev, flipX: !prev.flipX }));
+    if (ids.has(selectedDesignId)) {
+      setDesignTransform(prev => ({ ...prev, flipX: !prev.flipX }));
+    }
   }, [selectedDesignId, selectedDesignIds, saveSnapshot]);
 
   const handleFlipY = useCallback(() => {
@@ -1007,7 +1063,9 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     saveSnapshot();
     const ids = selectedDesignIds.size > 0 ? selectedDesignIds : new Set([selectedDesignId]);
     setDesigns(prev => prev.map(d => ids.has(d.id) ? { ...d, transform: { ...d.transform, flipY: !d.transform.flipY } } : d));
-    setDesignTransform(prev => ({ ...prev, flipY: !prev.flipY }));
+    if (ids.has(selectedDesignId)) {
+      setDesignTransform(prev => ({ ...prev, flipY: !prev.flipY }));
+    }
   }, [selectedDesignId, selectedDesignIds, saveSnapshot]);
 
   const handleCanvasContextMenu = useCallback((x: number, y: number, designId: string | null) => {
@@ -1067,21 +1125,21 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
   const contentFillCacheRef = useRef<Map<string, number>>(new Map());
 
   const handleAutoArrange = useCallback((opts?: { skipSnapshot?: boolean; preserveSelection?: boolean }) => {
-    if (designs.length === 0) return;
+    const currentDesigns = designsRef.current;
+    if (currentDesigns.length === 0) { console.warn('[autoArrange] no designs'); return; }
     if (!opts?.skipSnapshot) saveSnapshot();
 
-    const isAggressive = true;
-
-    const usableW = artboardWidth;
-    const usableH = artboardHeight;
+    const usableW = artboardWidthRef.current;
+    const usableH = artboardHeightRef.current;
+    console.log('[autoArrange] starting', { designCount: currentDesigns.length, usableW, usableH });
 
     const arrangeSelection = selectedDesignIds.size >= 2;
     const designsToArrange = arrangeSelection
-      ? designs.filter(d => selectedDesignIds.has(d.id))
-      : designs;
+      ? currentDesigns.filter(d => selectedDesignIds.has(d.id))
+      : currentDesigns;
 
     if (designsToArrange.length === 1 && !arrangeSelection) {
-      const d = designs[0];
+      const d = currentDesigns[0];
       setDesigns([{ ...d, transform: { ...d.transform, nx: 0.5, ny: 0.5 } }]);
       if (!opts?.preserveSelection) {
         setSelectedDesignId(null);
@@ -1119,21 +1177,28 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       return fill;
     };
 
-    const items = designsToArrange.map(d => ({
-      id: d.id,
-      w: d.widthInches * d.transform.s,
-      h: d.heightInches * d.transform.s,
-      fill: getContentFill(d),
-    }));
+    const originalRotations = new Map<string, number>();
+    const items = designsToArrange.map(d => {
+      const t = d.transform;
+      const rad = ((t.rotation ?? 0) * Math.PI) / 180;
+      const cos = Math.abs(Math.cos(rad));
+      const sin = Math.abs(Math.sin(rad));
+      const w = d.widthInches * t.s * cos + d.heightInches * t.s * sin;
+      const h = d.widthInches * t.s * sin + d.heightInches * t.s * cos;
+      originalRotations.set(d.id, t.rotation ?? 0);
+      return { id: d.id, w, h, fill: getContentFill(d) };
+    });
 
     const fixedRects: Array<{ x: number; y: number; w: number; h: number }> | undefined = arrangeSelection
-      ? designs.filter(d => !selectedDesignIds.has(d.id)).map(d => {
+      ? currentDesigns.filter(d => !selectedDesignIds.has(d.id)).map(d => {
           const t = d.transform;
-          let w = d.widthInches * t.s;
-          let h = d.heightInches * t.s;
-          if (t.rotation === 90 || t.rotation === -270 || t.rotation === 270 || t.rotation === -90) { const tmp = w; w = h; h = tmp; }
-          const cx = t.nx * artboardWidth;
-          const cy = t.ny * artboardHeight;
+          const rad = ((t.rotation ?? 0) * Math.PI) / 180;
+          const cos = Math.abs(Math.cos(rad));
+          const sin = Math.abs(Math.sin(rad));
+          const w = d.widthInches * t.s * cos + d.heightInches * t.s * sin;
+          const h = d.widthInches * t.s * sin + d.heightInches * t.s * cos;
+          const cx = t.nx * usableW;
+          const cy = t.ny * usableH;
           return { x: cx - w / 2, y: cy - h / 2, w, h };
         })
       : undefined;
@@ -1143,15 +1208,19 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     const applyResult = (bestResult: PlacedItem[], anyRotated: boolean, hasOverflow: boolean) => {
       if (hasOverflow) {
         toast({ title: t("toast.noSpace"), description: t("toast.noSpaceDesc"), variant: "destructive" });
-        return;
-      }
-      if (anyRotated) {
+      } else if (anyRotated) {
         toast({ title: t("toast.autoArranged"), description: t("toast.autoArrangedDesc") });
       }
+      const abW = artboardWidthRef.current;
+      const abH = artboardHeightRef.current;
       setDesigns(prev => prev.map(d => {
         const p = bestResult.find(r => r.id === d.id);
         if (!p) return d;
-        return { ...d, transform: { ...d.transform, nx: p.nx, ny: p.ny, rotation: p.rotation } };
+        const origRot = originalRotations.get(d.id) ?? d.transform.rotation ?? 0;
+        const finalRotation = (origRot + p.rotation) % 360;
+        const newTransform = { ...d.transform, nx: p.nx, ny: p.ny, rotation: finalRotation };
+        const { nx, ny } = clampDesignToArtboard({ ...d, transform: newTransform }, abW, abH);
+        return { ...d, transform: { ...newTransform, nx, ny } };
       }));
       if (!opts?.preserveSelection) {
         setSelectedDesignId(null);
@@ -1165,6 +1234,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       return;
     }
     if (worker) {
+      console.log('[autoArrange] using worker');
       const requestId = ++_arrangeReqCounter;
       let settled = false;
       const cleanup = () => { worker.removeEventListener('message', handler); clearTimeout(timer); };
@@ -1173,13 +1243,22 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         if (settled) return;
         settled = true;
         cleanup();
-        if (e.data.type === 'error') { console.warn('Arrange worker error:', e.data.error); return; }
+        if (!mountedRef.current) return;
+        if (e.data.type === 'error') { console.warn('[autoArrange] worker error:', e.data.error); toast({ title: "Arrange failed", variant: "destructive" }); return; }
         const bestResult: PlacedItem[] = e.data.result;
+        console.log('[autoArrange] worker result:', bestResult.length, 'items, overflows:', bestResult.filter(p => p.overflows).length);
         const anyRotated = bestResult.some(p => p.rotation !== 0);
         const hasOverflow = bestResult.some(p => p.overflows);
         applyResult(bestResult, anyRotated, hasOverflow);
       };
-      const timer = setTimeout(() => { if (!settled) { settled = true; cleanup(); } }, 30_000);
+      const timer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          console.warn('[autoArrange] worker timed out, using fallback');
+          runFallbackArrange();
+        }
+      }, 10_000);
       worker.addEventListener('message', handler);
       worker.postMessage({
         type: 'arrange',
@@ -1187,15 +1266,18 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         items,
         usableW,
         usableH,
-        artboardWidth,
-        artboardHeight,
-        isAggressive,
+        artboardWidth: usableW,
+        artboardHeight: usableH,
+        isAggressive: true,
         customGap: designGap,
         fixedRects,
       });
     } else {
-      // Fallback: synchronous on main thread (same logic lives in arrange-worker.ts)
-      // This path only triggers if the worker fails to load
+      console.log('[autoArrange] no worker, using fallback');
+      runFallbackArrange();
+    }
+
+    function runFallbackArrange() {
       const hasCustomGap = designGap !== undefined && designGap >= 0;
       const GAP = hasCustomGap ? designGap : 0.25;
       const getItemGapVal = (_fill: number) => GAP;
@@ -1221,7 +1303,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       };
       const placeSeg = (sky: SkylineSeg[], px: number, iw: number, ih: number): SkylineSeg[] => {
         let topY = 0;
-        for (const s of sky) { if (s.x < px + iw && s.x + s.w > px) topY = Math.max(topY, s.y); }
+        for (const s of sky) { if (s.x < px + iw && s.x + s.w >= px - 0.01) topY = Math.max(topY, s.y); }
         const next: SkylineSeg[] = [];
         for (const s of sky) { const sR = s.x + s.w, iR = px + iw; if (sR <= px || s.x >= iR) { next.push(s); continue; } if (s.x < px) next.push({ x: s.x, y: s.y, w: px - s.x }); if (sR > iR) next.push({ x: iR, y: s.y, w: sR - iR }); }
         next.push({ x: px, y: topY + ih, w: iw }); next.sort((a, b) => a.x - b.x);
@@ -1240,7 +1322,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
           let pos = findBestPos(sky, it.w + g, it.h + g); let rw = it.w + g, rh = it.h + g;
           if (!pos) { pos = findBestPos(sky, it.w + hg, it.h + hg); if (pos) { rw = it.w + hg; rh = it.h + hg; } }
           if (pos) { tw += pos.waste; sky = placeSeg(sky, pos.x, rw, rh); const p = toNxNy(pos.x + it.w / 2, pos.y + it.h / 2, it.w, it.h); res.push({ id: it.id, nx: p.nx, ny: p.ny, rotation: it.rotation, overflows: false }); }
-          else { const sm = sky.length > 0 ? Math.max(...sky.map(s => s.y)) : 0; sky = placeSeg(sky, 0, Math.min(it.w + hg, usableW), it.h + hg); const p = toNxNy(it.w / 2, sm + it.h / 2, it.w, it.h); res.push({ id: it.id, nx: p.nx, ny: p.ny, rotation: it.rotation, overflows: true }); }
+          else { const sm = sky.length > 0 ? Math.max(...sky.map(s => s.y)) : 0; const ph = it.h + hg; sky = placeSeg(sky, 0, Math.min(it.w + hg, usableW), ph); const p = toNxNy(it.w / 2, sm + ph / 2, it.w, it.h); res.push({ id: it.id, nx: p.nx, ny: p.ny, rotation: it.rotation, overflows: true }); }
         }
         return { result: res, maxHeight: sky.length > 0 ? Math.max(...sky.map(s => s.y)) : 0, wastedArea: tw };
       };
@@ -1259,7 +1341,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
           let bp: { x: number; y: number; waste: number } | null = null, bo = orients[0], bs = sky;
           for (const o of orients) { const hg = g / 2; for (const a of [{ w: o.w + g, h: o.h + g }, { w: o.w + hg, h: o.h + hg }]) { const pos = findBestPos(sky, a.w, a.h); if (!pos) continue; const sc = pos.y * 10000 + pos.x * 10 + pos.waste; if (!bp || sc < bp.y * 10000 + bp.x * 10 + bp.waste) { bp = pos; bo = o; bs = placeSeg(sky.map(s => ({ ...s })), pos.x, a.w, a.h); } break; } }
           if (bp) { tw += bp.waste; sky = bs; const p = toNxNy(bp.x + bo.w / 2, bp.y + bo.h / 2, bo.w, bo.h); res.push({ id: it.id, nx: p.nx, ny: p.ny, rotation: bo.rot, overflows: false }); }
-          else { const sm = sky.length > 0 ? Math.max(...sky.map(s => s.y)) : 0; sky = placeSeg(sky, 0, Math.min(it.w + g, usableW), it.h + g); const p = toNxNy(it.w / 2, sm + it.h / 2, it.w, it.h); res.push({ id: it.id, nx: p.nx, ny: p.ny, rotation: 0, overflows: true }); }
+          else { const sm = sky.length > 0 ? Math.max(...sky.map(s => s.y)) : 0; const ph = it.h + g; sky = placeSeg(sky, 0, Math.min(it.w + g, usableW), ph); const p = toNxNy(it.w / 2, sm + ph / 2, it.w, it.h); res.push({ id: it.id, nx: p.nx, ny: p.ny, rotation: 0, overflows: true }); }
         }
         return { result: res, maxHeight: sky.length > 0 ? Math.max(...sky.map(s => s.y)) : 0, wastedArea: tw };
       };
@@ -1303,7 +1385,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
               if (!cont) freeRects.push(nf[i]);
             }
           } else {
-            const p = toNxNy(it.w / 2, mH + it.h / 2, it.w, it.h);
+            const p = toNxNy(it.w / 2, mH + ih / 2, it.w, it.h);
             res.push({ id: it.id, nx: p.nx, ny: p.ny, rotation: it.rotation, overflows: true }); mH += ih;
           }
         }
@@ -1313,7 +1395,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         const res: PlacedItem[] = []; let cY = 0, cX = 0, sH = 0, tia = 0;
         for (const it of pi) {
           const g = it.gap, iw = it.w + g, ih = it.h + g;
-          if (cX + iw > usableW + 0.001) { cY += sH; cX = 0; sH = 0; }
+          if (cX + iw > usableW + 0.001) { cY += sH + g; cX = 0; sH = 0; }
           sH = Math.max(sH, ih); tia += it.w * it.h;
           const ov = cX + iw > usableW + 0.001 || cY + ih > usableH + 0.001;
           const p = toNxNy(cX + it.w / 2, cY + it.h / 2, it.w, it.h);
@@ -1396,7 +1478,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       const best = cands[0].result;
       applyResult(best, best.some(p => p.rotation !== 0), best.some(p => p.overflows));
     }
-  }, [designs, selectedDesignIds, artboardWidth, artboardHeight, saveSnapshot, toast, designGap]);
+  }, [selectedDesignIds, saveSnapshot, toast, designGap]);
 
   const handleArtboardResize = useCallback((newWidth: number, newHeight: number) => {
     if (newWidth <= 0 || newHeight <= 0) return;
@@ -1414,10 +1496,9 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     setDesigns(prev => prev.map(d => {
       const absCx = d.transform.nx * oldW;
       const absCy = d.transform.ny * oldH;
-      return {
-        ...d,
-        transform: { ...d.transform, nx: absCx / newWidth, ny: absCy / newHeight },
-      };
+      const newTransform = { ...d.transform, nx: absCx / newWidth, ny: absCy / newHeight };
+      const { nx, ny } = clampDesignToArtboard({ ...d, transform: newTransform }, newWidth, newHeight);
+      return { ...d, transform: { ...newTransform, nx, ny } };
     }));
 
     setArtboardWidth(newWidth);
@@ -1709,7 +1790,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     image: HTMLImageElement,
     opts?: { dpi?: number; skipCrop?: boolean }
   ) => {
-    const dpi = opts?.dpi ?? (await fetchImageDpi(file).catch(() => 300));
+    const dpi = opts?.dpi ?? (await fetchImageDpi(file).catch((err) => { console.warn('[fetchImageDpi] failed, using 300:', err); return 300; }));
     
     let croppedCanvas: HTMLCanvasElement | null = null;
     if (opts?.skipCrop) {
@@ -1749,8 +1830,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       if (effectiveDPI < 278) {
         toast({
           title: t("toast.lowRes"),
-          description: t("toast.lowResDesc", { dpi: Math.round(effectiveDPI) }),
-          variant: "destructive",
+          description: t("toast.lowResDesc"),
+          variant: "warning",
         });
       }
     };
@@ -1783,7 +1864,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       await new Promise(r => setTimeout(r, 0));
       setUploadProgress(25);
       
-      const dpi = await fetchImageDpi(file).catch(() => 300);
+      const dpi = await fetchImageDpi(file).catch((err) => { console.warn('[fetchImageDpi] failed, using 300:', err); return 300; });
       const imgWidthInches = image.width / dpi;
       const imgHeightInches = image.height / dpi;
       const ARTBOARD_MATCH_TOLERANCE = 0.05;
@@ -1887,8 +1968,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       if (effectiveDPI < 278) {
         toast({
           title: t("toast.lowRes"),
-          description: t("toast.lowResDesc", { dpi: Math.round(effectiveDPI) }),
-          variant: "destructive",
+          description: t("toast.lowResDesc"),
+          variant: "warning",
         });
       }
       } catch (error) {
@@ -1896,7 +1977,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         setIsUploading(false);
         setUploadProgress(0);
         try {
-          const dpiFallback = await fetchImageDpi(file).catch(() => 300);
+          const dpiFallback = await fetchImageDpi(file).catch((err) => { console.warn('[fetchImageDpi] failed, using 300:', err); return 300; });
           const wIn = image.width / dpiFallback;
           const hIn = image.height / dpiFallback;
           const match = Math.abs(wIn - artboardWidth) / Math.max(artboardWidth, 0.1) <= 0.05 &&
@@ -2017,43 +2098,95 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
   const handleSidebarFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files ? Array.from(e.target.files) : [];
     e.target.value = '';
-    if (files.length > 1 && artboardHeightRef.current < 48) {
-      setArtboardHeight(48);
+    if (files.length > 1) {
+      const targetHeight = Math.min(48, profile.gangsheetHeights[profile.gangsheetHeights.length - 1]);
+      const validHeight = profile.gangsheetHeights.reduce((best, h) => h <= targetHeight && h > best ? h : best, profile.gangsheetHeights[0]);
+      if (artboardHeightRef.current < validHeight) {
+        setArtboardHeight(validHeight);
+      }
     }
     for (const file of files) {
       await processSidebarFile(file);
     }
-  }, [processSidebarFile]);
+  }, [processSidebarFile, profile.gangsheetHeights]);
+
+  const [isDragOver, setIsDragOver] = useState(false);
+  const dragCounterRef = useRef(0);
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current++;
+    if (e.dataTransfer.types.includes('Files')) {
+      setIsDragOver(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current--;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setIsDragOver(false);
+    }
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current = 0;
+    setIsDragOver(false);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 0) return;
+    if (files.length > 1) {
+      const targetHeight = Math.min(48, profile.gangsheetHeights[profile.gangsheetHeights.length - 1]);
+      const validHeight = profile.gangsheetHeights.reduce((best, h) => h <= targetHeight && h > best ? h : best, profile.gangsheetHeights[0]);
+      if (artboardHeightRef.current < validHeight) {
+        setArtboardHeight(validHeight);
+      }
+    }
+    for (const file of files) {
+      await processSidebarFile(file);
+    }
+  }, [processSidebarFile, profile.gangsheetHeights]);
 
   const handleResizeChange = useCallback((newSettings: Partial<ResizeSettings>) => {
     const currentImageInfo = selectedDesign?.imageInfo || imageInfo;
     const hasSizeChange = newSettings.widthInches !== undefined || newSettings.heightInches !== undefined;
     if (hasSizeChange && selectedDesignId) saveSnapshot();
 
+    const canComputeAspect = currentImageInfo?.originalWidth && currentImageInfo?.originalHeight;
+    let finalSettings: ResizeSettings = resizeSettings;
     setResizeSettings(prev => {
       const updated = { ...prev, ...newSettings };
-      
-      if (updated.maintainAspectRatio && currentImageInfo && newSettings.widthInches !== undefined) {
-        const aspectRatio = currentImageInfo.originalHeight / currentImageInfo.originalWidth;
-        updated.heightInches = Math.max(0.01, parseFloat((newSettings.widthInches * aspectRatio).toFixed(1)));
-      } else if (updated.maintainAspectRatio && currentImageInfo && newSettings.heightInches !== undefined) {
-        const aspectRatio = currentImageInfo.originalWidth / currentImageInfo.originalHeight;
-        updated.widthInches = Math.max(0.01, parseFloat((newSettings.heightInches * aspectRatio).toFixed(1)));
+
+      if (updated.maintainAspectRatio && canComputeAspect && newSettings.widthInches !== undefined) {
+        const aspectRatio = currentImageInfo!.originalHeight / currentImageInfo!.originalWidth;
+        updated.heightInches = Math.max(0.01, parseFloat((newSettings.widthInches! * aspectRatio).toFixed(1)));
+      } else if (updated.maintainAspectRatio && canComputeAspect && newSettings.heightInches !== undefined) {
+        const aspectRatio = currentImageInfo!.originalWidth / currentImageInfo!.originalHeight;
+        updated.widthInches = Math.max(0.01, parseFloat((newSettings.heightInches! * aspectRatio).toFixed(1)));
       }
 
+      finalSettings = updated;
       return updated;
     });
 
     if (hasSizeChange && selectedDesignId) {
-      const finalSettings = { ...resizeSettings, ...newSettings };
-      if (resizeSettings.maintainAspectRatio && currentImageInfo && newSettings.widthInches !== undefined) {
-        const aspectRatio = currentImageInfo.originalHeight / currentImageInfo.originalWidth;
-        finalSettings.heightInches = Math.max(0.01, parseFloat((newSettings.widthInches * aspectRatio).toFixed(1)));
-      } else if (resizeSettings.maintainAspectRatio && currentImageInfo && newSettings.heightInches !== undefined) {
-        const aspectRatio = currentImageInfo.originalWidth / currentImageInfo.originalHeight;
-        finalSettings.widthInches = Math.max(0.01, parseFloat((newSettings.heightInches * aspectRatio).toFixed(1)));
-      }
-      setDesigns(prev => prev.map(d => d.id === selectedDesignId ? { ...d, widthInches: finalSettings.widthInches, heightInches: finalSettings.heightInches } : d));
+      const abW = artboardWidthRef.current;
+      const abH = artboardHeightRef.current;
+      setDesigns(prev => prev.map(d => {
+        if (d.id !== selectedDesignId) return d;
+        const updated = { ...d, widthInches: finalSettings.widthInches, heightInches: finalSettings.heightInches };
+        const { nx, ny } = clampDesignToArtboard(updated, abW, abH);
+        return { ...updated, transform: { ...updated.transform, nx, ny } };
+      }));
     }
   }, [imageInfo, selectedDesign, selectedDesignId, saveSnapshot, resizeSettings]);
 
@@ -2201,8 +2334,19 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
           } else {
             cctx.drawImage(img, 0, 0, drawW, drawH);
           }
-          const pngDataUrl = cvs.toDataURL('image/png');
-          const pngBytes = Uint8Array.from(atob(pngDataUrl.split(',')[1]), c => c.charCodeAt(0));
+          let pngDataUrl: string;
+          try {
+            pngDataUrl = cvs.toDataURL('image/png');
+          } catch (err) {
+            console.warn('Canvas toDataURL failed for design', design.id, err);
+            continue;
+          }
+          const base64 = pngDataUrl.split(',')[1];
+          if (!base64) {
+            console.warn('Invalid PNG data URL for design', design.id);
+            continue;
+          }
+          const pngBytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
           const pdfImage = await pdfDoc.embedPng(pngBytes);
 
           const designWidthPt = design.widthInches * design.transform.s * 72;
@@ -2210,10 +2354,13 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
           const centerXPt = design.transform.nx * pageWidthPt;
           const centerYPt = pageHeightPt - design.transform.ny * pageHeightPt;
           const rotDeg = design.transform.rotation ?? 0;
+          const rotRad = (-rotDeg * Math.PI) / 180;
+          const cosR = Math.cos(rotRad);
+          const sinR = Math.sin(rotRad);
 
           page.drawImage(pdfImage, {
-            x: centerXPt - designWidthPt / 2,
-            y: centerYPt - designHeightPt / 2,
+            x: centerXPt - (designWidthPt / 2) * cosR + (designHeightPt / 2) * sinR,
+            y: centerYPt - (designWidthPt / 2) * sinR - (designHeightPt / 2) * cosR,
             width: designWidthPt,
             height: designHeightPt,
             rotate: degrees(-rotDeg),
@@ -2382,7 +2529,22 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
 
   if (!activeImageInfo) {
     return (
-      <div className="h-full flex items-center justify-center bg-gray-50">
+      <div
+        className="h-full flex items-center justify-center bg-gray-50 relative"
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
+        {isDragOver && (
+          <div className="absolute inset-0 z-50 bg-blue-500/10 border-2 border-dashed border-blue-500 rounded-lg flex items-center justify-center pointer-events-none">
+            <div className="bg-white/90 backdrop-blur-sm rounded-xl px-8 py-6 shadow-lg text-center">
+              <Plus className="w-10 h-10 text-blue-500 mx-auto mb-2" />
+              <p className="text-blue-600 font-semibold text-lg">Drop files to add designs</p>
+              <p className="text-gray-500 text-sm mt-1">PNG, JPG, WebP, or PDF</p>
+            </div>
+          </div>
+        )}
         <div className="w-full max-w-xl mx-auto transition-all duration-300 px-4">
           {isUploading ? (
             <div className="flex flex-col items-center gap-6 py-12">
@@ -2416,7 +2578,22 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
   }
 
   return (
-    <div className={`h-full flex flex-col ${isMobile ? "pb-16" : ""}`}>
+    <div
+      className={`h-full flex flex-col ${isMobile ? "pb-16" : ""} relative`}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
+      {isDragOver && (
+        <div className="absolute inset-0 z-50 bg-blue-500/10 border-2 border-dashed border-blue-500 rounded-lg flex items-center justify-center pointer-events-none">
+          <div className="bg-white/90 backdrop-blur-sm rounded-xl px-8 py-6 shadow-lg text-center">
+            <Plus className="w-10 h-10 text-blue-500 mx-auto mb-2" />
+            <p className="text-blue-600 font-semibold text-lg">Drop files to add designs</p>
+            <p className="text-gray-500 text-sm mt-1">PNG, JPG, WebP, or PDF</p>
+          </div>
+        </div>
+      )}
       <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
       {/* Left sidebar - Layers + Settings */}
       <div className="flex-shrink-0 w-full lg:w-[320px] xl:w-[340px] border-r border-gray-200 bg-white overflow-y-auto overflow-x-hidden">
@@ -2489,84 +2666,75 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                     .layers-scroll::-webkit-scrollbar-thumb { background: #9ca3af; border-radius: 4px; }
                     .layers-scroll::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
                   `}</style>
-                  {designs.map((d) => {
-                    const isSelected = d.id === selectedDesignId || selectedDesignIds.has(d.id);
-                    const baseName = layerGroupInfo.baseNameOf(d.name);
-                    const group = layerGroupInfo.groups.get(baseName);
-                    const groupCount = group?.count ?? 1;
-                    const isResized = group ? layerGroupInfo.sizeKeyOf(d) !== group.baseSize : false;
+                  {layerRows.map((row) => {
+                    const first = row.designs[0];
+                    const count = row.designs.length;
+                    const isSelected = row.designs.some(d => d.id === selectedDesignId || selectedDesignIds.has(d.id));
                     return (
                     <div
-                      key={d.id}
+                      key={`${row.baseName}::${row.sizeKey}`}
                       className={`flex items-center gap-2 px-2.5 py-1.5 cursor-pointer transition-colors ${isSelected ? 'bg-cyan-50 border-l-2 border-cyan-400' : 'hover:bg-gray-100/70 border-l-2 border-transparent'}`}
                       onClick={(e) => {
                         if (e.ctrlKey || e.metaKey) {
                           setSelectedDesignIds(prev => {
                             const next = new Set(prev);
-                            if (next.has(d.id)) {
-                              next.delete(d.id);
-                              if (next.size === 1) {
-                                const remaining = next.values().next().value;
-                                setSelectedDesignId(remaining!);
-                                return next;
-                              }
-                              if (selectedDesignId === d.id) {
-                                setSelectedDesignId(next.size > 0 ? Array.from(next)[next.size - 1] : null);
-                              }
+                            const allSelected = row.designs.every(d => next.has(d.id));
+                            if (allSelected) {
+                              for (const d of row.designs) next.delete(d.id);
+                              setSelectedDesignId(next.size > 0 ? Array.from(next)[next.size - 1] : null);
                             } else {
-                              next.add(d.id);
-                              if (next.size > 1) {
-                                if (!next.has(selectedDesignId!)) next.add(selectedDesignId!);
-                              }
-                              setSelectedDesignId(d.id);
+                              for (const d of row.designs) next.add(d.id);
+                              setSelectedDesignId(first.id);
                             }
                             return next;
                           });
                         } else {
-                          handleSelectDesign(d.id);
+                          handleSelectDesign(first.id);
                         }
                       }}
                     >
                       <div className="w-7 h-7 rounded bg-gray-100 border border-gray-300 flex-shrink-0 overflow-hidden flex items-center justify-center">
                         <img
-                          src={getLayerThumbnail(d)}
+                          src={getLayerThumbnail(first)}
                           alt=""
                           className="max-w-full max-h-full object-contain"
                           loading="lazy"
-                          style={{ transform: `${d.transform.flipX ? 'scaleX(-1)' : ''} ${d.transform.flipY ? 'scaleY(-1)' : ''}` }}
+                          style={{ transform: `${first.transform.flipX ? 'scaleX(-1)' : ''} ${first.transform.flipY ? 'scaleY(-1)' : ''}` }}
                         />
                       </div>
                       <div className="min-w-0 flex-1 overflow-hidden">
                         <p className="text-[11px] text-gray-900 truncate">
-                          {d.name}
-                          {isResized && <span className="ml-1 text-[9px] text-amber-400/80 font-medium">{t("editor.resized")}</span>}
+                          {row.baseName}
+                          {row.isResized && <span className="ml-1 text-[9px] text-amber-400/80 font-medium">{t("editor.resized")}</span>}
                         </p>
-                        <p className={`text-gray-600 truncate tabular-nums ${lang !== 'en' ? 'text-[9px]' : 'text-[10px]'}`} title={formatDimensions(d.widthInches * d.transform.s, d.heightInches * d.transform.s, lang)}>
-                          {formatDimensions(d.widthInches * d.transform.s, d.heightInches * d.transform.s, lang)}
+                        <p className={`text-gray-600 truncate tabular-nums ${lang !== 'en' ? 'text-[9px]' : 'text-[10px]'}`} title={formatDimensions(first.widthInches * first.transform.s, first.heightInches * first.transform.s, lang)}>
+                          {formatDimensions(first.widthInches * first.transform.s, first.heightInches * first.transform.s, lang)}
                         </p>
                       </div>
-                      {groupCount > 1 && (
-                        <div className="flex items-center gap-0.5 flex-shrink-0">
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleRemoveOneCopy(baseName); }}
-                            className="p-0 rounded hover:bg-gray-200 text-gray-600 hover:text-gray-700 transition-colors"
-                            title={t("editor.removeOne")}
-                          >
-                            <ChevronDown className="w-3 h-3" />
-                          </button>
-                          <span className="text-[10px] text-cyan-400 font-medium min-w-[18px] text-center">x{groupCount}</span>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleDuplicateById(d.id); }}
-                            className="p-0 rounded hover:bg-gray-200 text-gray-600 hover:text-gray-700 transition-colors"
-                            title={t("editor.addOneMore")}
-                          >
-                            <ChevronUp className="w-3 h-3" />
-                          </button>
-                        </div>
-                      )}
+                      <div className="flex items-center gap-0.5 flex-shrink-0">
+                        {count > 1 && (
+                          <>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleRemoveOneCopy(row.baseName, row.sizeKey); }}
+                              className="p-0 rounded hover:bg-gray-200 text-gray-600 hover:text-gray-700 transition-colors"
+                              title={t("editor.removeOne")}
+                            >
+                              <ChevronDown className="w-3 h-3" />
+                            </button>
+                            <span className="text-[10px] text-cyan-400 font-medium min-w-[18px] text-center">x{count}</span>
+                          </>
+                        )}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleDuplicateById(first.id); }}
+                          className="p-0 rounded hover:bg-gray-200 text-gray-600 hover:text-gray-700 transition-colors"
+                          title={t("editor.addOneMore")}
+                        >
+                          <ChevronUp className="w-3 h-3" />
+                        </button>
+                      </div>
                       <button
-                        onClick={(e) => { e.stopPropagation(); handleDeleteDesign(d.id); }}
-                        className="p-0.5 rounded hover:bg-gray-200 text-gray-600 hover:text-red-400 transition-colors flex-shrink-0"
+                        onClick={(e) => { e.stopPropagation(); handleDeleteGroup(row.designs.map(d => d.id)); }}
+                        className="p-0.5 rounded hover:bg-gray-200 text-red-500 hover:text-red-600 transition-colors flex-shrink-0"
                       >
                         <Trash2 className="w-3 h-3" />
                       </button>
@@ -2581,8 +2749,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
 
       {/* Right area - Canvas workspace */}
       <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden">
-        {/* Top bar: three rows on mobile, single row on desktop */}
-        <div className="flex-shrink-0 flex flex-col lg:flex-row lg:flex-wrap lg:items-center gap-1.5 lg:gap-2 bg-white border-b border-gray-200 px-2 py-1 lg:px-3 lg:py-1.5">
+        {/* Top bar: three rows on mobile, wraps on desktop when metric to avoid overlap */}
+        <div className={`flex-shrink-0 flex flex-col gap-1.5 lg:gap-2 bg-white border-b border-gray-200 px-2 py-1 lg:px-3 lg:py-1.5 ${useMetric(lang) ? 'lg:flex-wrap lg:flex-row lg:items-center' : 'lg:flex-row lg:items-center'}`}>
           {/* Row 1: Upload, file info, Auto-Arrange, Undo/Redo/Dup/Del */}
           <div className="flex items-center gap-1.5 lg:gap-2 min-w-0 flex-wrap lg:flex-nowrap flex-shrink-0">
             <UploadSection 
@@ -2601,18 +2769,50 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                 {activeImageInfo.file.name}
               </p>
             )}
-            <div
-              className={`flex items-center gap-1.5 flex-shrink-0 ml-auto lg:ml-0 ${designs.length >= 2 ? 'opacity-100' : 'opacity-0'}`}
-              aria-hidden={designs.length < 2}
-            >
+            <div className="flex items-center gap-1 flex-shrink-0 ml-auto lg:ml-0">
+              <button
+                onClick={handleThresholdAlpha}
+                disabled={!selectedDesignId && selectedDesignIds.size === 0}
+                className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
+                  selectedDesignId || selectedDesignIds.size > 0
+                    ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#2563EB] border border-[#CBD5E1] shadow-none'
+                    : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+                }`}
+                title={t("editor.cleanAlphaTitle")}
+              >
+                <Droplets className="w-3 h-3" />
+                {t("editor.cleanAlpha")}
+              </button>
+              <button
+                onClick={handleThresholdAlphaAll}
+                disabled={designs.length === 0}
+                className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
+                  designs.length > 0
+                    ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#2563EB] border border-[#CBD5E1] shadow-none'
+                    : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+                }`}
+                title={t("editor.cleanAlphaAllTitle")}
+              >
+                <Droplets className="w-3 h-3" />
+                {t("editor.cleanAlphaAll")}
+              </button>
               <button
                 onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2 })}
                 disabled={designs.length < 2 && selectedDesignIds.size < 2}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-md bg-gray-100 hover:bg-gray-200 border border-gray-300 hover:border-cyan-500/50 text-gray-600 hover:text-cyan-400 font-medium transition-colors whitespace-nowrap disabled:pointer-events-none ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'}`}
+                className={`flex items-center gap-1 px-2 py-1 rounded-md bg-[#FF6F61] hover:bg-[#FF5A4D] text-white font-medium shadow-sm transition-all whitespace-nowrap disabled:pointer-events-none disabled:opacity-50 min-h-[36px] lg:min-h-0 ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'}`}
                 title={selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll")}
               >
                 <LayoutGrid className="w-3 h-3 flex-shrink-0" />
                 {t("editor.autoArrange")}
+              </button>
+              <button
+                onClick={handleDuplicateDesign}
+                disabled={!selectedDesignId}
+                className="flex items-center gap-1 px-2 py-1 rounded-md bg-blue-500 hover:bg-blue-600 text-white text-[11px] font-medium shadow-sm transition-all whitespace-nowrap disabled:pointer-events-none disabled:opacity-50 min-h-[36px] lg:min-h-0"
+                title={t("editor.duplicate")}
+              >
+                <Copy className="w-3 h-3" />
+                {t("editor.duplicate").replace(/ \(.*/, '')}
               </button>
             </div>
             <div className="flex items-center gap-0.5 flex-shrink-0 flex-wrap lg:flex-nowrap">
@@ -2634,14 +2834,6 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
               </button>
               <div className="w-px h-4 bg-gray-100 mx-0.5" />
               <button
-                onClick={handleDuplicateDesign}
-                disabled={!selectedDesignId}
-                className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
-                title={t("editor.duplicate")}
-              >
-                <Copy className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
-              </button>
-              <button
                 onClick={() => {
                   if (selectedDesignIds.size > 1) {
                     handleDeleteMulti(selectedDesignIds);
@@ -2650,15 +2842,15 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                   }
                 }}
                 disabled={!selectedDesignId}
-                className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-red-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
+                className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-red-500 hover:text-red-600 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
                 title={t("editor.delete")}
               >
                 <Trash2 className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
               </button>
             </div>
           </div>
-          {/* Row 2: Size, DPI, Margin, Rotate, Align, Clean Alpha */}
-          <div className="flex items-center gap-1.5 lg:gap-2 flex-wrap lg:flex-1 lg:justify-end">
+          {/* Row 2: Size, DPI, Margin, Rotate, Align, Clean Alpha - wraps when metric to avoid overlap */}
+          <div className={`flex items-center gap-1.5 lg:gap-2 lg:flex-1 lg:justify-end ${useMetric(lang) ? 'flex-wrap' : 'flex-wrap lg:flex-nowrap'}`}>
             {activeImageInfo && (
               <>
                 <div className="w-px h-5 bg-gray-100 flex-shrink-0 hidden lg:block" />
@@ -2693,7 +2885,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                   <span
                     className={`text-[9px] font-semibold px-1.5 py-0.5 rounded flex-shrink-0 inline-flex items-center gap-1.5 ${
                       effectiveDPI < 198
-                        ? 'text-red-600 bg-red-100 border border-red-400 animate-dpi-alarm'
+                        ? 'text-amber-600 bg-amber-100 border border-amber-400'
                         : effectiveDPI < 277
                           ? 'text-amber-600 bg-amber-100 border border-amber-400'
                           : 'text-emerald-600 bg-emerald-100 border border-emerald-700'
@@ -2737,7 +2929,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                 </select>
               </div>
             </div>
-            {/* Row 3 on mobile: Rotate, Align, Clean Alpha */}
+            {/* Row 3 on mobile: Rotate, Align */}
             <div className="flex items-center gap-0.5 flex-shrink-0 flex-wrap lg:flex-nowrap w-full lg:w-auto">
               <div className="w-px h-4 bg-gray-100 mx-0.5 hidden lg:block" />
               <button
@@ -2782,33 +2974,6 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                   <ArrowDownRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
                 </button>
               </div>
-              <div className="w-px h-4 bg-gray-100 mx-0.5 hidden lg:block" />
-              <button
-                onClick={handleThresholdAlpha}
-                disabled={!selectedDesignId && selectedDesignIds.size === 0}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 lg:px-3 lg:py-1 rounded-md transition-all whitespace-nowrap min-h-[40px] lg:min-h-0 ${
-                  selectedDesignId || selectedDesignIds.size > 0
-                    ? 'bg-gradient-to-r from-emerald-600 to-green-500 hover:from-emerald-500 hover:to-green-400 text-white shadow-sm shadow-green-500/20 hover:shadow-green-400/30'
-                    : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
-                }`}
-                title={t("editor.cleanAlphaTitle")}
-              >
-                <Droplets className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
-                <span className={`font-medium ${lang !== 'en' ? 'text-[9px]' : 'text-[10px]'}`}>{t("editor.cleanAlpha")}</span>
-              </button>
-              <button
-                onClick={handleThresholdAlphaAll}
-                disabled={designs.length === 0}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 lg:px-3 lg:py-1 rounded-md transition-all whitespace-nowrap min-h-[40px] lg:min-h-0 ${
-                  designs.length > 0
-                    ? 'bg-gradient-to-r from-emerald-700 to-green-600 hover:from-emerald-600 hover:to-green-500 text-white shadow-sm shadow-green-500/20 hover:shadow-green-400/30'
-                    : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
-                }`}
-                title={t("editor.cleanAlphaAllTitle")}
-              >
-                <Droplets className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
-                <span className={`font-medium ${lang !== 'en' ? 'text-[9px]' : 'text-[10px]'}`}>{t("editor.cleanAlphaAll")}</span>
-              </button>
             </div>
           </div>
         </div>
