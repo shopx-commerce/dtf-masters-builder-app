@@ -558,8 +558,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       if (!rect) return null;
       const z = Math.max(0.25, zoomRef.current);
       const inv = dpiScaleRef.current / z;
-      const resizeR = 7 * inv;
-      const rotateOuterR = 18 * inv;
+      const resizeR = (isMobile ? 18 : 7) * inv;
+      const rotateOuterR = (isMobile ? 30 : 18) * inv;
 
       const tl = handles.find(h => h.id === 'tl');
       const tr = handles.find(h => h.id === 'tr');
@@ -575,19 +575,16 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         }
       }
 
-      const brResizeR = isMobile ? resizeR * 2 : resizeR;
       for (const h of handles) {
         const d = Math.sqrt((px - h.x) ** 2 + (py - h.y) ** 2);
-        const r = h.id === 'br' ? brResizeR : resizeR;
-        if (d < r) {
+        if (d < resizeR) {
           return { type: 'resize', id: h.id };
         }
       }
 
       for (const h of handles) {
         const d = Math.sqrt((px - h.x) ** 2 + (py - h.y) ** 2);
-        const r = h.id === 'br' ? brResizeR : resizeR;
-        if (d >= r && d < rotateOuterR) {
+        if (d >= resizeR && d < rotateOuterR) {
           return { type: 'rotate', id: `rot-${h.id}` };
         }
       }
@@ -647,10 +644,9 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       if (handles.length === 0) return null;
       const z = Math.max(0.25, zoomRef.current);
       const inv = dpiScaleRef.current / z;
-      const resizeR = 9 * inv;
-      const rotateOuterR = 20 * inv;
+      const resizeR = (isMobile ? 18 : 9) * inv;
+      const rotateOuterR = (isMobile ? 30 : 20) * inv;
 
-      // Rotation handle at top-center
       const tl = handles.find(h => h.id === 'tl');
       const tr = handles.find(h => h.id === 'tr');
       if (tl && tr) {
@@ -664,19 +660,16 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         }
       }
 
-      const brResizeR = isMobile ? resizeR * 2 : resizeR;
       for (const h of handles) {
         const d = Math.sqrt((px - h.x) ** 2 + (py - h.y) ** 2);
-        const r = h.id === 'br' ? brResizeR : resizeR;
-        if (d < r) {
+        if (d < resizeR) {
           return { type: 'resize', id: h.id };
         }
       }
 
       for (const h of handles) {
         const d = Math.sqrt((px - h.x) ** 2 + (py - h.y) ** 2);
-        const r = h.id === 'br' ? brResizeR : resizeR;
-        if (d >= r && d < rotateOuterR) {
+        if (d >= resizeR && d < rotateOuterR) {
           return { type: 'rotate', id: `rot-${h.id}` };
         }
       }
@@ -1116,7 +1109,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           return;
         }
 
-        if (handleHit && handleHit.type === 'resize' && isClickInDesignInterior(local.x, local.y)) {
+        if (!isMobile && handleHit && handleHit.type === 'resize' && isClickInDesignInterior(local.x, local.y)) {
           altKeyAtDragStartRef.current = false;
           isDraggingRef.current = true;
           altDragDuplicatedRef.current = false;
