@@ -3108,10 +3108,11 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                     if (c?.toggleSelectionZoom) c.toggleSelectionZoom();
                     setSelectionZoomActive(prev => !prev);
                   }}
-                  className={`p-2 rounded-md transition-colors min-w-[40px] min-h-[40px] flex items-center justify-center ml-auto ${selectionZoomActive ? 'bg-cyan-500/20 text-cyan-400' : 'text-gray-600 hover:bg-gray-200/80 hover:text-cyan-400'}`}
+                  className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] ml-auto ${selectionZoomActive ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-400/40' : 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-gray-600 border border-[#CBD5E1] shadow-none'}`}
                   title={t("preview.selectionZoom")}
                 >
-                  <ScanSearch className="w-4 h-4" />
+                  <ScanSearch className="w-3 h-3" />
+                  {t("preview.selectToZoom")}
                 </button>
               )}
               {isMobile && (
