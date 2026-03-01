@@ -48,10 +48,12 @@ interface PreviewSectionProps {
   onExpandArtboard?: () => void;
   onDesignContextMenu?: (x: number, y: number, designId: string | null) => void;
   spotPreviewData?: { enabled: boolean; colors: Array<{ hex: string; rgb: { r: number; g: number; b: number }; spotWhite?: boolean; spotGloss?: boolean; spotFluorY?: boolean; spotFluorM?: boolean; spotFluorG?: boolean; spotFluorOrange?: boolean }> };
+  selectionZoomActive?: boolean;
+  onSelectionZoomChange?: (active: boolean) => void;
 }
 
 const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
-  ({ imageInfo, resizeSettings, artboardWidth = 24.5, artboardHeight = 12, designTransform, onTransformChange, designs = [], selectedDesignId, selectedDesignIds = new Set(), onSelectDesign, onMultiSelect, onMultiDragDelta, onMultiResizeDelta, onMultiRotateDelta, onDuplicateSelected, onInteractionEnd, onExpandArtboard, onDesignContextMenu, spotPreviewData }, ref) => {
+  ({ imageInfo, resizeSettings, artboardWidth = 24.5, artboardHeight = 12, designTransform, onTransformChange, designs = [], selectedDesignId, selectedDesignIds = new Set(), onSelectDesign, onMultiSelect, onMultiDragDelta, onMultiResizeDelta, onMultiRotateDelta, onDuplicateSelected, onInteractionEnd, onExpandArtboard, onDesignContextMenu, spotPreviewData, selectionZoomActive: selectionZoomActiveProp, onSelectionZoomChange }, ref) => {
     const { toast } = useToast();
     const { t, lang } = useLanguage();
     const isMobile = useIsMobile();
@@ -78,7 +80,13 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       panXRef.current = panX;
       panYRef.current = panY;
     }
-    const [selectionZoomActive, setSelectionZoomActive] = useState(false);
+    const [selectionZoomActiveInternal, setSelectionZoomActiveInternal] = useState(false);
+    const selectionZoomActive = selectionZoomActiveProp !== undefined ? selectionZoomActiveProp : selectionZoomActiveInternal;
+    const setSelectionZoomActive = useCallback((valOrFn: boolean | ((prev: boolean) => boolean)) => {
+      const newVal = typeof valOrFn === 'function' ? valOrFn(selectionZoomActive) : valOrFn;
+      setSelectionZoomActiveInternal(newVal);
+      onSelectionZoomChange?.(newVal);
+    }, [selectionZoomActive, onSelectionZoomChange]);
     const selectionZoomActiveRef = useRef(false);
     selectionZoomActiveRef.current = selectionZoomActive;
     const [moveMode, setMoveMode] = useState(false);
@@ -2208,10 +2216,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         const ny = 0.5 - py / Math.max(1, dims.height);
         return { nx: Math.max(0.05, Math.min(0.95, nx)), ny: Math.max(0.05, Math.min(0.95, ny)) };
       };
-      (canvas as any).getSelectionZoomActive = () => selectionZoomActive;
-      (canvas as any).toggleSelectionZoom = () => setSelectionZoomActive((prev: boolean) => !prev);
       return canvas;
-    }, [selectionZoomActive]);
+    }, []);
 
     const getCheckerboardPattern = (ctx: CanvasRenderingContext2D, w: number, h: number): CanvasPattern | null => {
       if (checkerboardPatternRef.current?.width === w && checkerboardPatternRef.current?.height === h) {

@@ -3103,11 +3103,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
               </div>
               {isMobile && (
                 <button
-                  onClick={() => {
-                    const c = canvasRef.current as any;
-                    if (c?.toggleSelectionZoom) c.toggleSelectionZoom();
-                    setSelectionZoomActive(prev => !prev);
-                  }}
+                  onClick={() => setSelectionZoomActive(prev => !prev)}
                   className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] ml-auto ${selectionZoomActive ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-400/40' : 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-gray-600 border border-[#CBD5E1] shadow-none'}`}
                   title={t("preview.selectionZoom")}
                 >
@@ -3170,6 +3166,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
             onExpandArtboard={artboardHeight < MAX_ARTBOARD_HEIGHT ? handleExpandArtboard : undefined}
             onDesignContextMenu={handleCanvasContextMenu}
             spotPreviewData={profile.enableFluorescent ? spotPreviewData : undefined}
+            selectionZoomActive={selectionZoomActive}
+            onSelectionZoomChange={setSelectionZoomActive}
           />
         </div>
       </div>
