@@ -1,5 +1,5 @@
 export const en: Record<string, string> = {
-  "landing.title": "GANGSHEET BUILDER PRO",
+  "landing.title": "ANYNEST APP",
   "landing.subtitle": "Click on your desired product and start loading up your designs!",
   "landing.footer": "Have tips and app improvement suggestions? Send it over!",
   "landing.comingSoon": "Coming soon",

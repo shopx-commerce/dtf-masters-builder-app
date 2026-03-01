@@ -1,5 +1,5 @@
 export const es: Record<string, string> = {
-  "landing.title": "GANGSHEET BUILDER PRO",
+  "landing.title": "ANYNEST APP",
   "landing.subtitle": "¡Haz clic en el producto que deseas y comienza a cargar tus diseños!",
   "landing.footer": "¿Tienes sugerencias o ideas para mejorar la app? ¡Envíalas!",
   "landing.comingSoon": "Próximamente",
