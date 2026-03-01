@@ -66,13 +66,13 @@ function drawDesignsOnCtx(
     ctx.drawImage(d.bitmap, -info.drawW / 2, -info.drawH / 2, info.drawW, info.drawH);
     if (d.printFileName && d.name) {
       ctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
-      const fontSize = Math.max(8, Math.round(info.drawH * 0.045));
+      const fontSize = Math.max(8, Math.round(info.drawH * 0.015));
       ctx.font = `bold ${fontSize}px sans-serif`;
       ctx.fillStyle = '#000000';
       ctx.textAlign = 'right';
       ctx.textBaseline = 'bottom';
       const margin = Math.round(fontSize * 0.3);
-      const displayName = d.name.replace(/\.[^/.]+$/, '');
+      const displayName = d.name.replace(/\.[^/.]+$/, '').replace(/ copy ?(\d+)?$/i, '');
       ctx.fillText(displayName, info.drawW / 2 - margin, info.drawH / 2 - margin);
       ctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
     }

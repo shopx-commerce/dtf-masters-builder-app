@@ -2367,8 +2367,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
           if (design.printFileName) {
             const { StandardFonts } = await import('pdf-lib');
             const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-            const displayName = design.name.replace(/\.[^/.]+$/, '');
-            const fontSize = Math.max(4, Math.round(0.08 * 72));
+            const displayName = design.name.replace(/\.[^/.]+$/, '').replace(/ copy ?(\d+)?$/i, '');
+            const fontSize = Math.max(3, Math.round(designHeightPt * 0.015));
             const textWidth = font.widthOfTextAtSize(displayName, fontSize);
             const margin = 0.02 * 72;
             const textX = centerXPt + (designWidthPt / 2) * cosR - (designHeightPt / 2) * sinR - textWidth - margin;
@@ -2519,13 +2519,13 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
             ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
             if (design.printFileName) {
               ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
-              const fontSize = Math.max(8, Math.round(drawH * 0.045));
+              const fontSize = Math.max(8, Math.round(drawH * 0.015));
               ctx.font = `bold ${fontSize}px sans-serif`;
               ctx.fillStyle = '#000000';
               ctx.textAlign = 'right';
               ctx.textBaseline = 'bottom';
               const margin = Math.round(fontSize * 0.3);
-              const displayName = design.name.replace(/\.[^/.]+$/, '');
+              const displayName = design.name.replace(/\.[^/.]+$/, '').replace(/ copy ?(\d+)?$/i, '');
               ctx.fillText(displayName, drawW / 2 - margin, drawH / 2 - margin);
               ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
             }
