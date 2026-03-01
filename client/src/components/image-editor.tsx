@@ -2750,7 +2750,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       {/* Right area - Canvas workspace */}
       <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden">
         {/* Top bar: three rows on mobile, wraps on desktop when metric to avoid overlap */}
-        <div className={`flex-shrink-0 flex flex-col gap-1.5 lg:gap-2 bg-white border-b border-gray-200 px-2 py-1 lg:px-3 lg:py-1.5 ${useMetric(lang) ? 'lg:flex-wrap lg:flex-row lg:items-center' : 'lg:flex-row lg:items-center'}`}>
+        <div className="flex-shrink-0 flex flex-col lg:flex-row lg:flex-wrap lg:items-center gap-1.5 lg:gap-2 bg-white border-b border-gray-200 px-2 py-1 lg:px-3 lg:py-1.5">
           {/* Row 1: Upload, file info, Auto-Arrange, Undo/Redo/Dup/Del */}
           <div className="flex items-center gap-1.5 lg:gap-2 min-w-0 flex-wrap lg:flex-nowrap flex-shrink-0">
             <UploadSection 
@@ -2850,7 +2850,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
             </div>
           </div>
           {/* Row 2: Size, DPI, Margin, Rotate, Align, Clean Alpha - wraps when metric to avoid overlap */}
-          <div className={`flex items-center gap-1.5 lg:gap-2 lg:flex-1 lg:justify-end ${useMetric(lang) ? 'flex-wrap' : 'flex-wrap lg:flex-nowrap'}`}>
+          <div className="flex items-center gap-1.5 lg:gap-2 flex-wrap lg:flex-1 lg:justify-end">
             {activeImageInfo && (
               <>
                 <div className="w-px h-5 bg-gray-100 flex-shrink-0 hidden lg:block" />
