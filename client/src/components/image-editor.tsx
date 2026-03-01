@@ -2852,7 +2852,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                 <button
                   onClick={handleThresholdAlpha}
                   disabled={!selectedDesignId && selectedDesignIds.size === 0}
-                  className={`flex items-center gap-1 ${isMobile ? 'px-1.5' : 'px-2'} py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
+                  className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
                     selectedDesignId || selectedDesignIds.size > 0
                       ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#2563EB] border border-[#CBD5E1] shadow-none'
                       : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
@@ -2860,12 +2860,12 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                   title={t("editor.cleanAlphaTitle")}
                 >
                   <Droplets className="w-3 h-3" />
-                  <span className={isMobile ? 'hidden' : ''}>{t("editor.cleanAlpha")}</span>
+                  {t("editor.cleanAlpha")}
                 </button>
                 <button
                   onClick={handleThresholdAlphaAll}
                   disabled={designs.length === 0}
-                  className={`flex items-center gap-1 ${isMobile ? 'px-1.5' : 'px-2'} py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
+                  className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
                     designs.length > 0
                       ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#2563EB] border border-[#CBD5E1] shadow-none'
                       : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
@@ -2873,14 +2873,14 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                   title={t("editor.cleanAlphaAllTitle")}
                 >
                   <Droplets className="w-3 h-3" />
-                  <span className={isMobile ? 'hidden' : ''}>{t("editor.cleanAlphaAll")}</span>
+                  {t("editor.cleanAlphaAll")}
                 </button>
               </div>
               <div className="flex items-center gap-1">
                 <button
                   onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2 })}
                   disabled={designs.length < 2 && selectedDesignIds.size < 2}
-                  className={`flex items-center gap-1 ${isMobile ? 'px-1.5' : 'px-2'} py-1 rounded-md transition-all whitespace-nowrap font-medium shadow-sm min-h-[36px] lg:min-h-0 ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ${
+                  className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap font-medium shadow-sm min-h-[36px] lg:min-h-0 ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ${
                     designs.length >= 2 || selectedDesignIds.size >= 2
                       ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
                       : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
@@ -2888,12 +2888,12 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                   title={selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll")}
                 >
                   <LayoutGrid className="w-3 h-3 flex-shrink-0" />
-                  <span className={isMobile ? 'hidden' : ''}>{t("editor.autoArrange")}</span>
+                  {t("editor.autoArrange")}
                 </button>
                 <button
                   onClick={handleDuplicateDesign}
                   disabled={!selectedDesignId}
-                  className={`flex items-center gap-1 ${isMobile ? 'px-1.5' : 'px-2'} py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
+                  className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
                     selectedDesignId
                       ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#7C3AED] border border-[#CBD5E1] shadow-none'
                       : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
@@ -2901,7 +2901,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                   title={t("editor.duplicate")}
                 >
                   <Copy className="w-3 h-3" />
-                  <span className={isMobile ? 'hidden' : ''}>{t("editor.duplicate").replace(/ \(.*/, '')}</span>
+                  {t("editor.duplicate").replace(/ \(.*/, '')}
                 </button>
               </div>
             </div>
@@ -2990,36 +2990,38 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                 </div>
               </>
             )}
-            <div
-              className={`flex items-center gap-1.5 flex-shrink-0 ${designs.length >= 2 ? 'opacity-100' : 'opacity-0'}`}
-              aria-hidden={designs.length < 2}
-            >
-              <div className="w-px h-5 bg-gray-100 hidden lg:block" />
-              <div className="flex items-center gap-1">
-                <span className="text-[10px] text-gray-600">{t("editor.margin")}</span>
-                <select
-                  value={designGap === undefined ? "auto" : String(designGap)}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    const newGap = v === "auto" ? undefined : parseFloat(v);
-                    setDesignGap(newGap);
-                    if (designs.length >= 2) {
-                      setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true }), 0);
-                    }
-                  }}
-                  className="h-5 px-1 bg-gray-100 border border-gray-300 rounded text-[10px] text-gray-700 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
-                  title={useMetric(lang) ? t("editor.marginGapCm") : t("editor.marginGap")}
-                >
-                  <option value="auto">{t("editor.marginAuto")}</option>
-                  <option value="0.0625">{useMetric(lang) ? formatLength(0.0625, lang) : "1/16″"}</option>
-                  <option value="0.125">{useMetric(lang) ? formatLength(0.125, lang) : "1/8″"}</option>
-                  <option value="0.25">{useMetric(lang) ? formatLength(0.25, lang) : "1/4″"}</option>
-                  <option value="0.5">{useMetric(lang) ? formatLength(0.5, lang) : "1/2″"}</option>
-                  <option value="1">{useMetric(lang) ? formatLength(1, lang) : "1″"}</option>
-                </select>
+            {!isMobile && (
+              <div
+                className={`flex items-center gap-1.5 flex-shrink-0 ${designs.length >= 2 ? 'opacity-100' : 'opacity-0'}`}
+                aria-hidden={designs.length < 2}
+              >
+                <div className="w-px h-5 bg-gray-100 hidden lg:block" />
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] text-gray-600">{t("editor.margin")}</span>
+                  <select
+                    value={designGap === undefined ? "auto" : String(designGap)}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      const newGap = v === "auto" ? undefined : parseFloat(v);
+                      setDesignGap(newGap);
+                      if (designs.length >= 2) {
+                        setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true }), 0);
+                      }
+                    }}
+                    className="h-5 px-1 bg-gray-100 border border-gray-300 rounded text-[10px] text-gray-700 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
+                    title={useMetric(lang) ? t("editor.marginGapCm") : t("editor.marginGap")}
+                  >
+                    <option value="auto">{t("editor.marginAuto")}</option>
+                    <option value="0.0625">{useMetric(lang) ? formatLength(0.0625, lang) : "1/16″"}</option>
+                    <option value="0.125">{useMetric(lang) ? formatLength(0.125, lang) : "1/8″"}</option>
+                    <option value="0.25">{useMetric(lang) ? formatLength(0.25, lang) : "1/4″"}</option>
+                    <option value="0.5">{useMetric(lang) ? formatLength(0.5, lang) : "1/2″"}</option>
+                    <option value="1">{useMetric(lang) ? formatLength(1, lang) : "1″"}</option>
+                  </select>
+                </div>
               </div>
-            </div>
-            {/* Row 3 on mobile: Rotate, Align */}
+            )}
+            {/* Row 3 on mobile: Rotate, Align, Margin */}
             <div className="flex items-center gap-0.5 flex-shrink-0 flex-wrap lg:flex-nowrap w-full lg:w-auto">
               <div className="w-px h-4 bg-gray-100 mx-0.5 hidden lg:block" />
               <button
@@ -3064,6 +3066,34 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                   <ArrowDownRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
                 </button>
               </div>
+              {isMobile && (
+                <div
+                  className={`flex items-center gap-1 ml-auto flex-shrink-0 ${designs.length >= 2 ? 'opacity-100' : 'opacity-0'}`}
+                  aria-hidden={designs.length < 2}
+                >
+                  <span className="text-[10px] text-gray-600">{t("editor.margin")}</span>
+                  <select
+                    value={designGap === undefined ? "auto" : String(designGap)}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      const newGap = v === "auto" ? undefined : parseFloat(v);
+                      setDesignGap(newGap);
+                      if (designs.length >= 2) {
+                        setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true }), 0);
+                      }
+                    }}
+                    className="h-7 px-1.5 bg-gray-100 border border-gray-300 rounded text-[11px] text-gray-700 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
+                    title={useMetric(lang) ? t("editor.marginGapCm") : t("editor.marginGap")}
+                  >
+                    <option value="auto">{t("editor.marginAuto")}</option>
+                    <option value="0.0625">{useMetric(lang) ? formatLength(0.0625, lang) : "1/16″"}</option>
+                    <option value="0.125">{useMetric(lang) ? formatLength(0.125, lang) : "1/8″"}</option>
+                    <option value="0.25">{useMetric(lang) ? formatLength(0.25, lang) : "1/4″"}</option>
+                    <option value="0.5">{useMetric(lang) ? formatLength(0.5, lang) : "1/2″"}</option>
+                    <option value="1">{useMetric(lang) ? formatLength(1, lang) : "1″"}</option>
+                  </select>
+                </div>
+              )}
             </div>
           </div>
         </div>
