@@ -1752,12 +1752,18 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       if (e.touches.length !== 1) return;
       e.preventDefault();
       if (isHorizOverflow() && !moveModeRef.current) {
-        isPanningRef.current = true;
-        panStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, px: panX, py: panY };
-        return;
+        const local = canvasToLocal(e.touches[0].clientX, e.touches[0].clientY);
+        const handleHit = selectedDesignId ? hitTestHandles(local.x, local.y) : null;
+        const multiHit = selectedDesignIds.size > 1 ? hitTestMultiHandles(local.x, local.y) : null;
+        const hitDesign = findDesignAtPoint(local.x, local.y);
+        if (!handleHit && !multiHit && !hitDesign) {
+          isPanningRef.current = true;
+          panStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, px: panX, py: panY };
+          return;
+        }
       }
       handleInteractionStart(e.touches[0].clientX, e.touches[0].clientY);
-    }, [handleInteractionStart, panX, panY, zoom, isHorizOverflow]);
+    }, [handleInteractionStart, panX, panY, zoom, isHorizOverflow, canvasToLocal, hitTestHandles, hitTestMultiHandles, selectedDesignId, selectedDesignIds, findDesignAtPoint]);
 
     const handleTouchMove = useCallback((e: React.TouchEvent) => {
       if (isPinchingRef.current && e.touches.length === 2) {
