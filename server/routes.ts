@@ -200,8 +200,8 @@ ${pdfData ? '<p><strong>PDF design with CutContour is attached.</strong></p>' : 
 `;
 
       const msg: sgMail.MailDataRequired = {
-        to: "sales@dtfmasters.com",
-        from: "sales@dtfmasters.com",
+        to: "support@anynestapp.com",
+        from: "support@anynestapp.com",
         subject: `New Sticker Design Submission from ${safeName}`,
         text: emailContent,
         html: htmlContent,

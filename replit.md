@@ -1,8 +1,8 @@
-# Sticker Maker App
+# AnyNest App
 
 ## Overview
 
-This is a full-stack web application for creating customizable stickers from PNG images. Users can upload images, add white outlines, adjust stroke settings, resize images in inches, and download high-quality 300 DPI print-ready files. The application offers features like shape backgrounds, precise contour generation, and various download modes for professional printing and cutting.
+This is a full-stack web application (branded as AnyNest App) for creating customizable gangsheets and stickers from PNG images. Users can upload images, add white outlines, adjust stroke settings, resize images in inches, and download high-quality 300 DPI print-ready files. The application offers features like shape backgrounds, precise contour generation, and various download modes for professional printing and cutting.
 
 ## User Preferences
 

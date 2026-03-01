@@ -210,8 +210,8 @@ export default function Landing() {
       <footer className="border-t border-gray-200 px-6 py-3 flex items-center justify-center gap-4">
         <span className="text-[11px] text-gray-600">
           {t("landing.footer")}{" "}
-          <a href="mailto:Sales@dtfmasters.com" className="text-cyan-600 hover:text-cyan-700 font-semibold">
-            Sales@dtfmasters.com
+          <a href="mailto:Support@anynestapp.com" className="text-cyan-600 hover:text-cyan-700 font-semibold">
+            Support@anynestapp.com
           </a>
         </span>
         <LanguageToggle />

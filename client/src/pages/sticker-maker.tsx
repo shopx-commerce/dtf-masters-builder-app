@@ -39,7 +39,7 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
           </div>
           <div className="flex items-center gap-3 flex-shrink-0">
             <span className="text-[11px] text-gray-600 hidden sm:inline">
-              {t("editor.tips")} <a href="mailto:Sales@dtfmasters.com" className="text-cyan-600 hover:text-cyan-700 font-semibold">Sales@dtfmasters.com</a>
+              {t("editor.tips")} <a href="mailto:Support@anynestapp.com" className="text-cyan-600 hover:text-cyan-700 font-semibold">Support@anynestapp.com</a>
             </span>
             <LanguageToggle />
           </div>

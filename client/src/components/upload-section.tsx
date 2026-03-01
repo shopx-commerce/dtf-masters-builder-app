@@ -187,7 +187,7 @@ export default function UploadSection({ onImageUpload, onBatchStart, imageInfo }
 
       {isEmptyState && (
         <p className="text-center mt-4 text-sm font-medium text-gray-600">
-          {t("upload.poweredBy")} <span className="text-cyan-600 font-semibold">DTFMASTERS</span>
+          {t("upload.poweredBy")} <span className="text-cyan-600 font-semibold">ANYNEST APP</span>
         </p>
       )}
     </div>
