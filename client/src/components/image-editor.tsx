@@ -793,15 +793,12 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     if (!design) return;
     const newId = crypto.randomUUID();
     const baseName = design.name.replace(/ copy( \d+)?$/, '');
-    const escaped = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const re = new RegExp(`^${escaped} copy (\\d+)$`);
-    const maxNum = designs.reduce((mx, d) => { const m = d.name.match(re); return m ? Math.max(mx, parseInt(m[1])) : mx; }, 0);
     const offsetT = { ...design.transform, nx: design.transform.nx + 0.03, ny: design.transform.ny };
     const { nx, ny } = clampDesignToArtboard({ ...design, transform: offsetT }, artboardWidth, artboardHeight);
     const newDesign: DesignItem = {
       ...design,
       id: newId,
-      name: `${baseName} copy ${maxNum + 1}`,
+      name: baseName,
       transform: { ...design.transform, nx, ny },
     };
     saveSnapshot();
@@ -822,7 +819,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       const base = d.name.replace(/ copy( \d+)?$/, '');
       const offsetT = { ...d.transform, nx: d.transform.nx + 0.03 + i * 0.01, ny: d.transform.ny };
       const { nx, ny } = clampDesignToArtboard({ ...d, transform: offsetT }, artboardWidth, artboardHeight);
-      return { ...d, id: newId, name: `${base} copy`, transform: { ...d.transform, nx, ny } };
+      return { ...d, id: newId, name: base, transform: { ...d.transform, nx, ny } };
     });
     multiDragAccumRef.current = null;
     multiResizeStartRef.current = null;
@@ -840,15 +837,12 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     if (!design) return;
     const newId = crypto.randomUUID();
     const baseName = design.name.replace(/ copy( \d+)?$/, '');
-    const escaped = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const re = new RegExp(`^${escaped} copy (\\d+)$`);
-    const maxNum = designs.reduce((mx, d) => { const m = d.name.match(re); return m ? Math.max(mx, parseInt(m[1])) : mx; }, 0);
     const offsetT = { ...design.transform, nx: design.transform.nx + 0.03, ny: design.transform.ny };
     const { nx, ny } = clampDesignToArtboard({ ...design, transform: offsetT }, artboardWidth, artboardHeight);
     const newDesign: DesignItem = {
       ...design,
       id: newId,
-      name: `${baseName} copy ${maxNum + 1}`,
+      name: baseName,
       transform: { ...design.transform, nx, ny },
     };
     saveSnapshot();
@@ -893,7 +887,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       return {
         ...d,
         id: newId,
-        name: d.name.replace(/ copy$/, '') + ' copy',
+        name: d.name.replace(/ copy( \d+)?$/, ''),
         transform: { ...d.transform, nx, ny },
       };
     });
