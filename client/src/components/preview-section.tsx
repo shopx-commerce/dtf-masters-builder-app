@@ -3113,46 +3113,62 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
               <div className="flex items-center gap-1.5 min-w-0 overflow-x-auto overflow-y-hidden flex-1 [scrollbar-width:thin]">
                 {selectedDesignId && designTransform && (
                   <>
-                    <span className={`font-medium tabular-nums text-gray-600 ${lang !== 'en' ? 'text-[10px] max-w-[110px] truncate sm:max-w-none' : 'text-[11px]'}`}>
-                      {formatDimensions(
-                        resizeSettings.widthInches * (designTransform.s || 1),
-                        resizeSettings.heightInches * (designTransform.s || 1),
-                        lang
-                      )}
-                    </span>
-                    <div className="w-px h-3.5 bg-gray-300" />
-                    {editingRotation ? (
-                      <input
-                        type="number"
-                        className="w-12 h-5 bg-gray-100 text-[11px] text-gray-900 text-center rounded border border-gray-300 outline-none"
-                        value={rotationInput}
-                        autoFocus
-                        onChange={(e) => setRotationInput(e.target.value)}
-                        onBlur={() => {
-                          setEditingRotation(false);
-                          const val = parseFloat(rotationInput);
-                          if (!isNaN(val) && onTransformChange) {
-                            onTransformChange({ ...designTransform, rotation: ((val % 360) + 360) % 360 });
-                          }
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                        }}
-                      />
-                    ) : (
-                      <span
-                        className="text-[11px] text-gray-600 font-medium cursor-pointer hover:text-gray-900 tabular-nums"
-                        title={t("preview.editRotation")}
-                        onClick={() => {
-                          setRotationInput(String(Math.round(designTransform.rotation || 0)));
-                          setEditingRotation(true);
-                        }}
-                      >
-                        {Math.round(designTransform.rotation || 0)}°
-                      </span>
+                    {!isMobile && (
+                      <>
+                        <span className={`font-medium tabular-nums text-gray-600 ${lang !== 'en' ? 'text-[10px] max-w-[110px] truncate sm:max-w-none' : 'text-[11px]'}`}>
+                          {formatDimensions(
+                            resizeSettings.widthInches * (designTransform.s || 1),
+                            resizeSettings.heightInches * (designTransform.s || 1),
+                            lang
+                          )}
+                        </span>
+                        <div className="w-px h-3.5 bg-gray-300" />
+                        {editingRotation ? (
+                          <input
+                            type="number"
+                            className="w-12 h-5 bg-gray-100 text-[11px] text-gray-900 text-center rounded border border-gray-300 outline-none"
+                            value={rotationInput}
+                            autoFocus
+                            onChange={(e) => setRotationInput(e.target.value)}
+                            onBlur={() => {
+                              setEditingRotation(false);
+                              const val = parseFloat(rotationInput);
+                              if (!isNaN(val) && onTransformChange) {
+                                onTransformChange({ ...designTransform, rotation: ((val % 360) + 360) % 360 });
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                            }}
+                          />
+                        ) : (
+                          <span
+                            className="text-[11px] text-gray-600 font-medium cursor-pointer hover:text-gray-900 tabular-nums"
+                            title={t("preview.editRotation")}
+                            onClick={() => {
+                              setRotationInput(String(Math.round(designTransform.rotation || 0)));
+                              setEditingRotation(true);
+                            }}
+                          >
+                            {Math.round(designTransform.rotation || 0)}°
+                          </span>
+                        )}
+                        <div className="w-px h-3.5 bg-gray-300" />
+                      </>
                     )}
-                    <div className="w-px h-3.5 bg-gray-300" />
                   </>
+                )}
+                {isMobile && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={resetView}
+                    className="min-w-[40px] min-h-[40px] h-8 px-2 hover:bg-gray-200 rounded text-gray-600 whitespace-nowrap text-[11px] flex items-center justify-center"
+                    title={t("preview.resetView")}
+                  >
+                    <RotateCcw className="h-3.5 w-3.5 mr-1 flex-shrink-0" />
+                    {t("preview.reset")}
+                  </Button>
                 )}
                 <div className="flex items-center gap-0.5 flex-shrink-0 items-center">
                   <Button
