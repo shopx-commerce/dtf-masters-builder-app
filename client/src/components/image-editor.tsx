@@ -22,7 +22,7 @@ import { useHistory, type HistorySnapshot } from "@/hooks/use-history";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useLanguage } from "@/lib/i18n";
 import { formatDimensions, formatLength, useMetric, cmToInches, getUnitSuffix } from "@/lib/format-length";
-import { Trash2, Copy, ChevronDown, ChevronUp, Undo2, Redo2, RotateCw, ArrowUpLeft, ArrowUpRight, ArrowDownLeft, ArrowDownRight, LayoutGrid, Layers, Loader2, Plus, Droplets, Link, Unlink, FlipHorizontal2, FlipVertical2, MousePointerClick, XCircle, Type, Check, X } from "lucide-react";
+import { Trash2, Copy, ChevronDown, ChevronUp, Undo2, Redo2, RotateCw, ArrowUpLeft, ArrowUpRight, ArrowDownLeft, ArrowDownRight, LayoutGrid, Layers, Loader2, Plus, Droplets, Link, Unlink, FlipHorizontal2, FlipVertical2, MousePointerClick, XCircle, Stamp, Check, X } from "lucide-react";
 
 export type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
 import type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
@@ -2814,7 +2814,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                         className={`p-0.5 rounded transition-colors flex-shrink-0 ${first.printFileName ? 'text-cyan-500 hover:text-cyan-600 bg-cyan-50' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-200'}`}
                         title={first.printFileName ? t("editor.printNameOn") : t("editor.printName")}
                       >
-                        <Type className="w-3 h-3" />
+                        <Stamp className="w-3 h-3" />
                       </button>
                       <button
                         onClick={(e) => { e.stopPropagation(); handleDeleteGroup(row.designs.map(d => d.id)); }}
