@@ -2847,12 +2847,12 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                 {activeImageInfo.file.name}
               </p>
             )}
-            <div className="flex flex-col gap-1 lg:flex-row lg:gap-1 flex-shrink-0 ml-auto lg:ml-0">
+            <div className={`flex ${isMobile ? 'flex-row' : 'flex-col'} gap-1 lg:flex-row lg:gap-1 flex-shrink-0 ml-auto lg:ml-0`}>
               <div className="flex items-center gap-1">
                 <button
                   onClick={handleThresholdAlpha}
                   disabled={!selectedDesignId && selectedDesignIds.size === 0}
-                  className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
+                  className={`flex items-center gap-1 ${isMobile ? 'px-1.5' : 'px-2'} py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
                     selectedDesignId || selectedDesignIds.size > 0
                       ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#2563EB] border border-[#CBD5E1] shadow-none'
                       : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
@@ -2860,12 +2860,12 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                   title={t("editor.cleanAlphaTitle")}
                 >
                   <Droplets className="w-3 h-3" />
-                  {t("editor.cleanAlpha")}
+                  <span className={isMobile ? 'hidden' : ''}>{t("editor.cleanAlpha")}</span>
                 </button>
                 <button
                   onClick={handleThresholdAlphaAll}
                   disabled={designs.length === 0}
-                  className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
+                  className={`flex items-center gap-1 ${isMobile ? 'px-1.5' : 'px-2'} py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
                     designs.length > 0
                       ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#2563EB] border border-[#CBD5E1] shadow-none'
                       : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
@@ -2873,14 +2873,14 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                   title={t("editor.cleanAlphaAllTitle")}
                 >
                   <Droplets className="w-3 h-3" />
-                  {t("editor.cleanAlphaAll")}
+                  <span className={isMobile ? 'hidden' : ''}>{t("editor.cleanAlphaAll")}</span>
                 </button>
               </div>
               <div className="flex items-center gap-1">
                 <button
                   onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2 })}
                   disabled={designs.length < 2 && selectedDesignIds.size < 2}
-                  className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap font-medium shadow-sm min-h-[36px] lg:min-h-0 ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ${
+                  className={`flex items-center gap-1 ${isMobile ? 'px-1.5' : 'px-2'} py-1 rounded-md transition-all whitespace-nowrap font-medium shadow-sm min-h-[36px] lg:min-h-0 ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ${
                     designs.length >= 2 || selectedDesignIds.size >= 2
                       ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
                       : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
@@ -2888,12 +2888,12 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                   title={selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll")}
                 >
                   <LayoutGrid className="w-3 h-3 flex-shrink-0" />
-                  {t("editor.autoArrange")}
+                  <span className={isMobile ? 'hidden' : ''}>{t("editor.autoArrange")}</span>
                 </button>
                 <button
                   onClick={handleDuplicateDesign}
                   disabled={!selectedDesignId}
-                  className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
+                  className={`flex items-center gap-1 ${isMobile ? 'px-1.5' : 'px-2'} py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
                     selectedDesignId
                       ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#7C3AED] border border-[#CBD5E1] shadow-none'
                       : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
@@ -2901,7 +2901,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                   title={t("editor.duplicate")}
                 >
                   <Copy className="w-3 h-3" />
-                  {t("editor.duplicate").replace(/ \(.*/, '')}
+                  <span className={isMobile ? 'hidden' : ''}>{t("editor.duplicate").replace(/ \(.*/, '')}</span>
                 </button>
               </div>
             </div>

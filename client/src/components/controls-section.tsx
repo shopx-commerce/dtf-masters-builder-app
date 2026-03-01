@@ -448,7 +448,7 @@ export default function ControlsSection({
           }`}
           style={isMobile ? { paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" } : undefined}
         >
-          <div className="flex items-center gap-2 text-xs text-gray-600 flex-shrink-0">
+          <div className={`flex items-center gap-2 text-xs text-gray-600 flex-shrink-0 ${isMobile ? 'hidden' : ''}`}>
             <FileCheck className="w-3.5 h-3.5 text-gray-600" />
             <span className="tabular-nums">{designCount !== 1 ? t("controls.designsPlural", { count: designCount }) : t("controls.designs", { count: designCount })}</span>
             <span className="text-gray-600">·</span>
