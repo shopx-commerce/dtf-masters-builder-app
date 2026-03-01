@@ -2849,8 +2849,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
               </button>
             </div>
           </div>
-          {/* Row 2: Size, DPI, Margin, Rotate, Align, Clean Alpha - wraps when metric to avoid overlap */}
-          <div className="flex items-center gap-1.5 lg:gap-2 flex-wrap lg:flex-1 lg:justify-end">
+          {/* Row 2: Size, DPI, Margin, Rotate, Align — always on its own line */}
+          <div className="flex items-center gap-1.5 lg:gap-2 flex-wrap lg:basis-full">
             {activeImageInfo && (
               <>
                 <div className="w-px h-5 bg-gray-100 flex-shrink-0 hidden lg:block" />
