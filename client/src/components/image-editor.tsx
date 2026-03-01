@@ -2800,7 +2800,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                   disabled={designs.length < 2 && selectedDesignIds.size < 2}
                   className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap font-medium shadow-sm min-h-[36px] lg:min-h-0 ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ${
                     designs.length >= 2 || selectedDesignIds.size >= 2
-                      ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#4F46E5] border border-[#CBD5E1] shadow-none'
+                      ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
                       : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
                   }`}
                   title={selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll")}
@@ -2813,7 +2813,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                   disabled={!selectedDesignId}
                   className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
                     selectedDesignId
-                      ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#4F46E5] border border-[#CBD5E1] shadow-none'
+                      ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#7C3AED] border border-[#CBD5E1] shadow-none'
                       : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
                   }`}
                   title={t("editor.duplicate")}
