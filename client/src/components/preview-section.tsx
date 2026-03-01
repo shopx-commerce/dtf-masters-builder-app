@@ -558,8 +558,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       if (!rect) return null;
       const z = Math.max(0.25, zoomRef.current);
       const inv = dpiScaleRef.current / z;
-      const resizeR = (isMobile ? 18 : 7) * inv;
-      const rotateOuterR = (isMobile ? 30 : 18) * inv;
+      const resizeR = 7 * inv;
+      const rotateOuterR = 18 * inv;
 
       const tl = handles.find(h => h.id === 'tl');
       const tr = handles.find(h => h.id === 'tr');
@@ -644,8 +644,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       if (handles.length === 0) return null;
       const z = Math.max(0.25, zoomRef.current);
       const inv = dpiScaleRef.current / z;
-      const resizeR = (isMobile ? 18 : 9) * inv;
-      const rotateOuterR = (isMobile ? 30 : 20) * inv;
+      const resizeR = 9 * inv;
+      const rotateOuterR = 20 * inv;
 
       const tl = handles.find(h => h.id === 'tl');
       const tr = handles.find(h => h.id === 'tr');
