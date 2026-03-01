@@ -3216,22 +3216,24 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                   variant="ghost"
                   size="sm"
                   onClick={() => setSelectionZoomActive(prev => !prev)}
-                  className={`h-6 px-1.5 hover:bg-gray-200 rounded whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ${selectionZoomActive ? 'bg-cyan-500/20 text-cyan-400' : 'text-gray-600'}`}
+                  className={`${isMobile ? 'min-w-[36px] min-h-[36px] h-8 w-8 p-0 justify-center' : 'h-6 px-1.5'} hover:bg-gray-200 rounded whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ${selectionZoomActive ? 'bg-cyan-500/20 text-cyan-400' : 'text-gray-600'} flex items-center`}
                   title={t("preview.selectionZoom")}
                 >
-                  <ScanSearch className="h-2.5 w-2.5 mr-0.5 flex-shrink-0" />
-                  {t("preview.selectToZoom")}
+                  <ScanSearch className={`${isMobile ? 'h-4 w-4' : 'h-2.5 w-2.5 mr-0.5'} flex-shrink-0`} />
+                  {!isMobile && t("preview.selectToZoom")}
                 </Button>
-                <Button 
-                  variant="ghost"
-                  size="sm"
-                  onClick={resetView}
-                  className={`h-6 px-1.5 hover:bg-gray-200 rounded text-gray-600 whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'}`}
-                  title={t("preview.resetView")}
-                >
-                  <RotateCcw className="h-2.5 w-2.5 mr-0.5 flex-shrink-0" />
-                  {t("preview.reset")}
-                </Button>
+                {!isMobile && (
+                  <Button 
+                    variant="ghost"
+                    size="sm"
+                    onClick={resetView}
+                    className={`h-6 px-1.5 hover:bg-gray-200 rounded text-gray-600 whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'}`}
+                    title={t("preview.resetView")}
+                  >
+                    <RotateCcw className="h-2.5 w-2.5 mr-0.5 flex-shrink-0" />
+                    {t("preview.reset")}
+                  </Button>
+                )}
                 <Button
                   variant="ghost"
                   size="sm"
@@ -3244,27 +3246,27 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                       return next;
                     });
                   }}
-                  className={`h-6 px-1.5 hover:bg-gray-200 rounded whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ${moveMode ? 'bg-cyan-500/20 text-cyan-400' : 'text-gray-600'}`}
+                  className={`${isMobile ? 'min-w-[36px] min-h-[36px] h-8 w-8 p-0 justify-center' : 'h-6 px-1.5'} hover:bg-gray-200 rounded whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ${moveMode ? 'bg-cyan-500/20 text-cyan-400' : 'text-gray-600'} flex items-center`}
                   title={t("preview.moveMode")}
                 >
-                  <MousePointer2 className="h-2.5 w-2.5 mr-0.5 flex-shrink-0" />
-                  {t("preview.move")}
+                  <MousePointer2 className={`${isMobile ? 'h-4 w-4' : 'h-2.5 w-2.5 mr-0.5'} flex-shrink-0`} />
+                  {!isMobile && t("preview.move")}
                 </Button>
                 {selectedDesignId && (
                   <Button
                     variant="ghost"
                     size="sm"
                     onClick={zoomToSelected}
-                    className={`h-6 px-1.5 hover:bg-gray-200 rounded text-gray-600 whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'}`}
+                    className={`${isMobile ? 'min-w-[36px] min-h-[36px] h-8 w-8 p-0 justify-center' : 'h-6 px-1.5'} hover:bg-gray-200 rounded text-gray-600 whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} flex items-center`}
                     title={t("preview.focusTitle")}
                   >
-                    <Focus className="h-2.5 w-2.5 mr-0.5 flex-shrink-0" />
-                    {t("preview.focus")}
+                    <Focus className={`${isMobile ? 'h-4 w-4' : 'h-2.5 w-2.5 mr-0.5'} flex-shrink-0`} />
+                    {!isMobile && t("preview.focus")}
                   </Button>
                 )}
               </div>
 
-              <div className="flex items-center gap-1 flex-shrink-0">
+              <div className={`flex items-center ${isMobile ? 'gap-1.5' : 'gap-1'} flex-shrink-0`}>
                 {[
                   { color: 'transparent', label: 'Transparent' },
                   { color: '#ffffff', label: 'White' },
@@ -3275,11 +3277,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                   <button
                     key={color}
                     onClick={() => setPreviewBgColor(color)}
-                    className={`w-4.5 h-4.5 rounded-full border-2 transition-all ${previewBgColor === color ? 'border-cyan-400 scale-110' : 'border-gray-300 hover:border-gray-500'}`}
+                    className={`rounded-full border-2 transition-all ${previewBgColor === color ? 'border-cyan-400 scale-110' : 'border-gray-300 hover:border-gray-500'}`}
                     title={label}
                     style={{
-                      width: 18,
-                      height: 18,
+                      width: isMobile ? 22 : 18,
+                      height: isMobile ? 22 : 18,
                       background: color === 'transparent'
                         ? 'repeating-conic-gradient(#ccc 0% 25%, #fff 0% 50%) 50% / 6px 6px'
                         : color
