@@ -1177,15 +1177,10 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       return fill;
     };
 
-    const originalRotations = new Map<string, number>();
     const items = designsToArrange.map(d => {
       const t = d.transform;
-      const rad = ((t.rotation ?? 0) * Math.PI) / 180;
-      const cos = Math.abs(Math.cos(rad));
-      const sin = Math.abs(Math.sin(rad));
-      const w = d.widthInches * t.s * cos + d.heightInches * t.s * sin;
-      const h = d.widthInches * t.s * sin + d.heightInches * t.s * cos;
-      originalRotations.set(d.id, t.rotation ?? 0);
+      const w = d.widthInches * t.s;
+      const h = d.heightInches * t.s;
       return { id: d.id, w, h, fill: getContentFill(d) };
     });
 
@@ -1216,8 +1211,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       setDesigns(prev => prev.map(d => {
         const p = bestResult.find(r => r.id === d.id);
         if (!p) return d;
-        const origRot = originalRotations.get(d.id) ?? d.transform.rotation ?? 0;
-        const finalRotation = (origRot + p.rotation) % 360;
+        const finalRotation = p.rotation % 360;
         const newTransform = { ...d.transform, nx: p.nx, ny: p.ny, rotation: finalRotation };
         const { nx, ny } = clampDesignToArtboard({ ...d, transform: newTransform }, abW, abH);
         return { ...d, transform: { ...newTransform, nx, ny } };
