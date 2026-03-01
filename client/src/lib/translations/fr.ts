@@ -78,6 +78,10 @@ export const fr: Record<string, string> = {
   "editor.removeOne": "Supprimer une copie",
   "editor.addOneMore": "Ajouter une copie",
   "editor.resized": "(redimensionné)",
+  "editor.printName": "Imprimer Nom",
+  "editor.printNameOn": "Le nom sera imprimé sur le design",
+  "editor.printNameOff": "Impression du nom désactivée",
+  "editor.renameDesign": "Cliquez pour renommer",
 
   "upload.makeGangsheet": "Créer une Feuille de Designs",
   "upload.preferredFormat": "Format préféré",

@@ -33,6 +33,7 @@ export interface DesignItem {
   name: string;
   originalDPI: number;
   alphaThresholded?: boolean;
+  printFileName?: boolean;
 }
 
 export function computeLayerRect(

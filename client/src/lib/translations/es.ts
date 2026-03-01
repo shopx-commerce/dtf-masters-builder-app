@@ -78,6 +78,10 @@ export const es: Record<string, string> = {
   "editor.removeOne": "Eliminar una copia",
   "editor.addOneMore": "Agregar una copia más",
   "editor.resized": "(redimensionado)",
+  "editor.printName": "Imprimir Nombre",
+  "editor.printNameOn": "El nombre se imprimirá en el diseño",
+  "editor.printNameOff": "Impresión de nombre desactivada",
+  "editor.renameDesign": "Clic para renombrar",
 
   "upload.makeGangsheet": "Crear una Hoja de Diseños",
   "upload.preferredFormat": "Formato preferido",

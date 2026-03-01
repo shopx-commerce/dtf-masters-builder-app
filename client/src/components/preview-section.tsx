@@ -2377,6 +2377,17 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       ctx.rotate((design.transform.rotation * Math.PI) / 180);
       ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
       ctx.drawImage(design.imageInfo.image, -rect.width / 2, -rect.height / 2, rect.width, rect.height);
+      if (design.printFileName) {
+        const pxPerInch = cw / artboardWidth;
+        const fontSize = Math.max(6, Math.round(0.08 * pxPerInch));
+        ctx.font = `bold ${fontSize}px sans-serif`;
+        ctx.fillStyle = '#000000';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'top';
+        const margin = Math.round(0.02 * pxPerInch);
+        const displayName = design.name.replace(/\.[^/.]+$/, '');
+        ctx.fillText(displayName, rect.width / 2 - margin, rect.height / 2 + margin);
+      }
       ctx.restore();
     }, [artboardWidth, artboardHeight]);
 

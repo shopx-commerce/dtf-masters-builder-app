@@ -78,6 +78,10 @@ export const en: Record<string, string> = {
   "editor.removeOne": "Remove one copy",
   "editor.addOneMore": "Add one more copy",
   "editor.resized": "(resized)",
+  "editor.printName": "Print Name",
+  "editor.printNameOn": "Name will print on design",
+  "editor.printNameOff": "Name printing disabled",
+  "editor.renameDesign": "Click to rename",
 
   "upload.makeGangsheet": "Make a Gangsheet",
   "upload.preferredFormat": "Preferred format",

@@ -22,7 +22,7 @@ import { useHistory, type HistorySnapshot } from "@/hooks/use-history";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useLanguage } from "@/lib/i18n";
 import { formatDimensions, formatLength, useMetric, cmToInches, getUnitSuffix } from "@/lib/format-length";
-import { Trash2, Copy, ChevronDown, ChevronUp, Undo2, Redo2, RotateCw, ArrowUpLeft, ArrowUpRight, ArrowDownLeft, ArrowDownRight, LayoutGrid, Layers, Loader2, Plus, Droplets, Link, Unlink, FlipHorizontal2, FlipVertical2, MousePointerClick, XCircle } from "lucide-react";
+import { Trash2, Copy, ChevronDown, ChevronUp, Undo2, Redo2, RotateCw, ArrowUpLeft, ArrowUpRight, ArrowDownLeft, ArrowDownRight, LayoutGrid, Layers, Loader2, Plus, Droplets, Link, Unlink, FlipHorizontal2, FlipVertical2, MousePointerClick, XCircle, Type, Check, X } from "lucide-react";
 
 export type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
 import type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
@@ -243,6 +243,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
   const [selectedDesignId, setSelectedDesignId] = useState<string | null>(null);
   const [selectedDesignIds, setSelectedDesignIds] = useState<Set<string>>(new Set());
   const [showDesignInfo, setShowDesignInfo] = useState(false);
+  const [editingLayerName, setEditingLayerName] = useState<string | null>(null);
+  const [editingNameValue, setEditingNameValue] = useState('');
   const clipboardRef = useRef<DesignItem[]>([]);
   const [proportionalLock, setProportionalLock] = useState(true);
   const designInfoRef = useRef<HTMLDivElement>(null);
@@ -2362,6 +2364,24 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
             rotate: degrees(-rotDeg),
           });
 
+          if (design.printFileName) {
+            const { StandardFonts } = await import('pdf-lib');
+            const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+            const displayName = design.name.replace(/\.[^/.]+$/, '');
+            const fontSize = Math.max(4, Math.round(0.08 * 72));
+            const textWidth = font.widthOfTextAtSize(displayName, fontSize);
+            const margin = 0.02 * 72;
+            const textX = centerXPt + (designWidthPt / 2) * cosR - (designHeightPt / 2) * sinR - textWidth - margin;
+            const textY = centerYPt - (designWidthPt / 2) * sinR - (designHeightPt / 2) * cosR + margin;
+            page.drawText(displayName, {
+              x: textX,
+              y: textY,
+              size: fontSize,
+              font,
+              rotate: degrees(-rotDeg),
+            });
+          }
+
           if (spotColorsByDesign) {
             const designSpotColors = spotColorsByDesign[design.id];
             if (designSpotColors && designSpotColors.length > 0) {
@@ -2438,6 +2458,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
             flipY: d.transform.flipY,
             bitmap: bitmaps[i],
             alphaThresholded: d.alphaThresholded,
+            printFileName: d.printFileName,
+            name: d.name,
           }));
           const requestId = ++_exportReqCounter;
           pngBlob = await new Promise<Blob>((resolve, reject) => {
@@ -2495,6 +2517,16 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
             ctx.rotate((design.transform.rotation * Math.PI) / 180);
             ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
             ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
+            if (design.printFileName) {
+              const fontSize = Math.max(8, Math.round(0.08 * exportDpi));
+              ctx.font = `bold ${fontSize}px sans-serif`;
+              ctx.fillStyle = '#000000';
+              ctx.textAlign = 'right';
+              ctx.textBaseline = 'top';
+              const margin = Math.round(0.02 * exportDpi);
+              const displayName = design.name.replace(/\.[^/.]+$/, '');
+              ctx.fillText(displayName, drawW / 2 - margin, drawH / 2 + margin);
+            }
             ctx.restore();
             if (design.alphaThresholded) { ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high'; }
           }
@@ -2699,10 +2731,51 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                         />
                       </div>
                       <div className="min-w-0 flex-1 overflow-hidden">
-                        <p className="text-[11px] text-gray-900 truncate">
-                          {row.baseName}
-                          {row.isResized && <span className="ml-1 text-[9px] text-amber-400/80 font-medium">{t("editor.resized")}</span>}
-                        </p>
+                        {editingLayerName === `${row.baseName}::${row.sizeKey}` ? (
+                          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              autoFocus
+                              className="text-[11px] text-gray-900 bg-white border border-cyan-400 rounded px-1 py-0 w-full outline-none"
+                              value={editingNameValue}
+                              onChange={(e) => setEditingNameValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  const trimmed = editingNameValue.trim();
+                                  if (trimmed) {
+                                    setDesigns(prev => prev.map(d =>
+                                      row.designs.some(rd => rd.id === d.id) ? { ...d, name: trimmed } : d
+                                    ));
+                                  }
+                                  setEditingLayerName(null);
+                                } else if (e.key === 'Escape') {
+                                  setEditingLayerName(null);
+                                }
+                              }}
+                              onBlur={() => {
+                                const trimmed = editingNameValue.trim();
+                                if (trimmed) {
+                                  setDesigns(prev => prev.map(d =>
+                                    row.designs.some(rd => rd.id === d.id) ? { ...d, name: trimmed } : d
+                                  ));
+                                }
+                                setEditingLayerName(null);
+                              }}
+                            />
+                          </div>
+                        ) : (
+                          <p
+                            className="text-[11px] text-gray-900 truncate cursor-text hover:text-cyan-600 transition-colors"
+                            title={t("editor.renameDesign")}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingLayerName(`${row.baseName}::${row.sizeKey}`);
+                              setEditingNameValue(first.name);
+                            }}
+                          >
+                            {row.baseName}
+                            {row.isResized && <span className="ml-1 text-[9px] text-amber-400/80 font-medium">{t("editor.resized")}</span>}
+                          </p>
+                        )}
                         <p className={`text-gray-600 truncate tabular-nums ${lang !== 'en' ? 'text-[9px]' : 'text-[10px]'}`} title={formatDimensions(first.widthInches * first.transform.s, first.heightInches * first.transform.s, lang)}>
                           {formatDimensions(first.widthInches * first.transform.s, first.heightInches * first.transform.s, lang)}
                         </p>
@@ -2728,6 +2801,19 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                           <ChevronUp className="w-3 h-3" />
                         </button>
                       </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const hasPrint = first.printFileName ?? false;
+                          setDesigns(prev => prev.map(d =>
+                            row.designs.some(rd => rd.id === d.id) ? { ...d, printFileName: !hasPrint } : d
+                          ));
+                        }}
+                        className={`p-0.5 rounded transition-colors flex-shrink-0 ${first.printFileName ? 'text-cyan-500 hover:text-cyan-600 bg-cyan-50' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-200'}`}
+                        title={first.printFileName ? t("editor.printNameOn") : t("editor.printName")}
+                      >
+                        <Type className="w-3 h-3" />
+                      </button>
                       <button
                         onClick={(e) => { e.stopPropagation(); handleDeleteGroup(row.designs.map(d => d.id)); }}
                         className="p-0.5 rounded hover:bg-gray-200 text-red-500 hover:text-red-600 transition-colors flex-shrink-0"

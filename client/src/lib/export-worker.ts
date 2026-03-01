@@ -9,6 +9,8 @@ interface DesignExportData {
   flipY?: boolean;
   bitmap: ImageBitmap;
   alphaThresholded?: boolean;
+  printFileName?: boolean;
+  name?: string;
 }
 
 interface ExportInput {
@@ -48,7 +50,7 @@ function makePngChunk(type: string, data: Uint8Array): Uint8Array {
 
 function drawDesignsOnCtx(
   ctx: OffscreenCanvasRenderingContext2D,
-  drawInfos: Array<{ design: DesignExportData; drawW: number; drawH: number; centerX: number; centerY: number; radius: number }>,
+  drawInfos: Array<{ design: DesignExportData; drawW: number; drawH: number; centerX: number; centerY: number; radius: number; exportDpi: number }>,
   stripY: number,
   stripH: number,
 ) {
@@ -62,6 +64,16 @@ function drawDesignsOnCtx(
     ctx.rotate((d.rotation * Math.PI) / 180);
     ctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
     ctx.drawImage(d.bitmap, -info.drawW / 2, -info.drawH / 2, info.drawW, info.drawH);
+    if (d.printFileName && d.name) {
+      const fontSize = Math.max(8, Math.round(0.08 * info.exportDpi));
+      ctx.font = `bold ${fontSize}px sans-serif`;
+      ctx.fillStyle = '#000000';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'top';
+      const margin = Math.round(0.02 * info.exportDpi);
+      const displayName = d.name.replace(/\.[^/.]+$/, '');
+      ctx.fillText(displayName, info.drawW / 2 - margin, info.drawH / 2 + margin);
+    }
     ctx.restore();
     if (d.alphaThresholded) {
       ctx.imageSmoothingEnabled = true;
@@ -101,7 +113,7 @@ async function buildPngStreaming(input: ExportInput): Promise<Blob> {
     const centerX = d.nx * outW;
     const centerY = d.ny * outH;
     const radius = Math.sqrt(drawW * drawW + drawH * drawH) / 2;
-    return { design: d, drawW, drawH, centerX, centerY, radius };
+    return { design: d, drawW, drawH, centerX, centerY, radius, exportDpi };
   });
 
   const cs = new CompressionStream('deflate');
