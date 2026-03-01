@@ -2379,13 +2379,13 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       ctx.drawImage(design.imageInfo.image, -rect.width / 2, -rect.height / 2, rect.width, rect.height);
       if (design.printFileName) {
         ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
-        const fontSize = Math.max(5, Math.round(rect.height * 0.015));
+        const fontSize = Math.max(7, Math.round(rect.height * 0.045));
         ctx.font = `bold ${fontSize}px sans-serif`;
         ctx.fillStyle = '#000000';
         ctx.textAlign = 'right';
         ctx.textBaseline = 'bottom';
         const margin = Math.round(fontSize * 0.3);
-        const displayName = design.name.replace(/\.[^/.]+$/, '').replace(/ copy ?(\d+)?$/i, '');
+        const displayName = design.name.replace(/\.[^/.]+$/, '');
         ctx.fillText(displayName, rect.width / 2 - margin, rect.height / 2 - margin);
       }
       ctx.restore();
@@ -2669,13 +2669,13 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       }
       if (selDesign?.printFileName) {
         ctx.scale(t.flipX ? -1 : 1, t.flipY ? -1 : 1);
-        const fontSize = Math.max(5, Math.round(rect.height * 0.015));
+        const fontSize = Math.max(7, Math.round(rect.height * 0.045));
         ctx.font = `bold ${fontSize}px sans-serif`;
         ctx.fillStyle = '#000000';
         ctx.textAlign = 'right';
         ctx.textBaseline = 'bottom';
         const margin = Math.round(fontSize * 0.3);
-        const displayName = selDesign.name.replace(/\.[^/.]+$/, '').replace(/ copy ?(\d+)?$/i, '');
+        const displayName = selDesign.name.replace(/\.[^/.]+$/, '');
         ctx.fillText(displayName, rect.width / 2 - margin, rect.height / 2 - margin);
       }
       ctx.restore();
