@@ -1605,13 +1605,15 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         }
         return;
       }
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selId) {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && (selId || selectedDesignIdsRef.current.size > 0)) {
         e.preventDefault();
         const idsToDelete = selectedDesignIdsRef.current;
         if (idsToDelete.size > 1) {
           handleDeleteMultiRef.current(idsToDelete);
-        } else {
+        } else if (selId) {
           handleDeleteDesignRef.current(selId);
+        } else if (idsToDelete.size === 1) {
+          handleDeleteDesignRef.current([...idsToDelete][0]);
         }
         return;
       }
