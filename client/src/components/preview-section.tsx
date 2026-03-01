@@ -2379,7 +2379,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       ctx.drawImage(design.imageInfo.image, -rect.width / 2, -rect.height / 2, rect.width, rect.height);
       if (design.printFileName) {
         ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
-        const fontSize = Math.max(8, Math.round(rect.height * 0.06));
+        const fontSize = Math.max(7, Math.round(rect.height * 0.045));
         ctx.font = `bold ${fontSize}px sans-serif`;
         ctx.fillStyle = '#000000';
         ctx.textAlign = 'right';
@@ -2666,6 +2666,17 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         ctx.globalAlpha = spotPulseRef.current * 0.7;
         ctx.drawImage(overlayCanvas, -rect.width / 2, -rect.height / 2, rect.width, rect.height);
         ctx.globalAlpha = 1;
+      }
+      if (selDesign?.printFileName) {
+        ctx.scale(t.flipX ? -1 : 1, t.flipY ? -1 : 1);
+        const fontSize = Math.max(7, Math.round(rect.height * 0.045));
+        ctx.font = `bold ${fontSize}px sans-serif`;
+        ctx.fillStyle = '#000000';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'bottom';
+        const margin = Math.round(fontSize * 0.3);
+        const displayName = selDesign.name.replace(/\.[^/.]+$/, '');
+        ctx.fillText(displayName, rect.width / 2 - margin, rect.height / 2 - margin);
       }
       ctx.restore();
 

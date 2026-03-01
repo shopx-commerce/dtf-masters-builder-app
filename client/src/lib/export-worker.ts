@@ -66,7 +66,7 @@ function drawDesignsOnCtx(
     ctx.drawImage(d.bitmap, -info.drawW / 2, -info.drawH / 2, info.drawW, info.drawH);
     if (d.printFileName && d.name) {
       ctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
-      const fontSize = Math.max(8, Math.round(info.drawH * 0.06));
+      const fontSize = Math.max(8, Math.round(info.drawH * 0.045));
       ctx.font = `bold ${fontSize}px sans-serif`;
       ctx.fillStyle = '#000000';
       ctx.textAlign = 'right';

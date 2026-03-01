@@ -2519,7 +2519,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
             ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
             if (design.printFileName) {
               ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
-              const fontSize = Math.max(8, Math.round(drawH * 0.06));
+              const fontSize = Math.max(8, Math.round(drawH * 0.045));
               ctx.font = `bold ${fontSize}px sans-serif`;
               ctx.fillStyle = '#000000';
               ctx.textAlign = 'right';
