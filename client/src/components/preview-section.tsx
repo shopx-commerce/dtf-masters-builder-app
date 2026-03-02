@@ -2862,7 +2862,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                 style={{ 
                   width: previewDims.width,
                   height: previewDims.height,
-                  border: '2px solid #000000',
+                  border: '3px solid #ffffff',
+                  outline: '2px solid #000000',
                   boxSizing: 'content-box',
                   maxWidth: '100%',
                   maxHeight: '100%',
