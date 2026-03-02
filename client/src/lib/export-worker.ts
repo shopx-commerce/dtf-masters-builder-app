@@ -48,6 +48,36 @@ function makePngChunk(type: string, data: Uint8Array): Uint8Array {
   return chunk;
 }
 
+const bitmapOverlapCache = new Map<string, boolean>();
+
+function checkBitmapNameOverlap(bitmap: ImageBitmap, flipX: boolean, flipY: boolean): boolean {
+  const key = `${bitmap.width}x${bitmap.height}_${flipX}_${flipY}`;
+  const cached = bitmapOverlapCache.get(key);
+  if (cached !== undefined) return cached;
+
+  const sw = bitmap.width;
+  const sh = bitmap.height;
+  const regionW = Math.min(Math.round(sw * 0.4), sw);
+  const regionH = Math.min(Math.round(sh * 0.12), sh);
+  const rx = flipX ? 0 : sw - regionW;
+  const ry = flipY ? 0 : sh - regionH;
+
+  const oc = new OffscreenCanvas(regionW, regionH);
+  const octx = oc.getContext('2d');
+  if (!octx) { bitmapOverlapCache.set(key, false); return false; }
+  octx.drawImage(bitmap, rx, ry, regionW, regionH, 0, 0, regionW, regionH);
+  const data = octx.getImageData(0, 0, regionW, regionH).data;
+
+  let opaqueCount = 0;
+  const total = regionW * regionH;
+  for (let i = 3; i < data.length; i += 4) {
+    if (data[i] > 20) opaqueCount++;
+  }
+  const result = opaqueCount / total > 0.4;
+  bitmapOverlapCache.set(key, result);
+  return result;
+}
+
 function drawDesignsOnCtx(
   ctx: OffscreenCanvasRenderingContext2D,
   drawInfos: Array<{ design: DesignExportData; drawW: number; drawH: number; centerX: number; centerY: number; radius: number; exportDpi: number }>,
@@ -68,12 +98,20 @@ function drawDesignsOnCtx(
       ctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
       const fontSize = Math.max(8, Math.round(info.drawH * 0.045));
       ctx.font = `bold ${fontSize}px sans-serif`;
-      ctx.fillStyle = '#000000';
-      ctx.textAlign = 'right';
-      ctx.textBaseline = 'bottom';
       const margin = Math.round(fontSize * 0.3);
       const displayName = d.name.replace(/\.[^/.]+$/, '');
-      ctx.fillText(displayName, info.drawW / 2 - margin, info.drawH / 2 - margin);
+      const overlap = checkBitmapNameOverlap(d.bitmap, !!d.flipX, !!d.flipY);
+      if (overlap) {
+        ctx.fillStyle = '#000000';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.fillText(displayName, 0, info.drawH / 2 + margin);
+      } else {
+        ctx.fillStyle = '#000000';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(displayName, info.drawW / 2 - margin, info.drawH / 2 - margin);
+      }
       ctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
     }
     ctx.restore();

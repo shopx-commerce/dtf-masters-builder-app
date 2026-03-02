@@ -2369,6 +2369,37 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
     createSpotOverlayCanvasRef.current = createSpotOverlayCanvas;
 
+    const nameOverlapCache = useRef<Map<string, boolean>>(new Map());
+
+    const checkNameOverlap = useCallback((img: HTMLImageElement, flipX: boolean, flipY: boolean): boolean => {
+      const key = `${img.src}_${flipX}_${flipY}`;
+      const cached = nameOverlapCache.current.get(key);
+      if (cached !== undefined) return cached;
+
+      const sampleCanvas = document.createElement('canvas');
+      const sw = img.naturalWidth || img.width;
+      const sh = img.naturalHeight || img.height;
+      const regionW = Math.min(Math.round(sw * 0.4), sw);
+      const regionH = Math.min(Math.round(sh * 0.12), sh);
+      const rx = flipX ? 0 : sw - regionW;
+      const ry = flipY ? 0 : sh - regionH;
+      sampleCanvas.width = regionW;
+      sampleCanvas.height = regionH;
+      const sctx = sampleCanvas.getContext('2d');
+      if (!sctx) { nameOverlapCache.current.set(key, false); return false; }
+      sctx.drawImage(img, rx, ry, regionW, regionH, 0, 0, regionW, regionH);
+      const data = sctx.getImageData(0, 0, regionW, regionH).data;
+
+      let opaqueCount = 0;
+      const total = regionW * regionH;
+      for (let i = 3; i < data.length; i += 4) {
+        if (data[i] > 20) opaqueCount++;
+      }
+      const result = opaqueCount / total > 0.4;
+      nameOverlapCache.current.set(key, result);
+      return result;
+    }, []);
+
     const drawSingleDesign = useCallback((ctx: CanvasRenderingContext2D, design: DesignItem, cw: number, ch: number) => {
       const rect = computeLayerRect(
         design.imageInfo.image.width, design.imageInfo.image.height,
@@ -2388,15 +2419,23 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
         const fontSize = Math.max(7, Math.round(rect.height * 0.045));
         ctx.font = `bold ${fontSize}px sans-serif`;
-        ctx.fillStyle = '#000000';
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'bottom';
         const margin = Math.round(fontSize * 0.3);
         const displayName = design.name.replace(/\.[^/.]+$/, '');
-        ctx.fillText(displayName, rect.width / 2 - margin, rect.height / 2 - margin);
+        const overlap = checkNameOverlap(design.imageInfo.image, !!design.transform.flipX, !!design.transform.flipY);
+        if (overlap) {
+          ctx.fillStyle = '#000000';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'top';
+          ctx.fillText(displayName, 0, rect.height / 2 + margin);
+        } else {
+          ctx.fillStyle = '#000000';
+          ctx.textAlign = 'right';
+          ctx.textBaseline = 'bottom';
+          ctx.fillText(displayName, rect.width / 2 - margin, rect.height / 2 - margin);
+        }
       }
       ctx.restore();
-    }, [artboardWidth, artboardHeight]);
+    }, [artboardWidth, artboardHeight, checkNameOverlap]);
 
     useEffect(() => {
       if (!canvasRef.current || (!imageInfo && designs.length === 0)) return;
@@ -2678,12 +2717,20 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         ctx.scale(t.flipX ? -1 : 1, t.flipY ? -1 : 1);
         const fontSize = Math.max(7, Math.round(rect.height * 0.045));
         ctx.font = `bold ${fontSize}px sans-serif`;
-        ctx.fillStyle = '#000000';
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'bottom';
         const margin = Math.round(fontSize * 0.3);
         const displayName = selDesign.name.replace(/\.[^/.]+$/, '');
-        ctx.fillText(displayName, rect.width / 2 - margin, rect.height / 2 - margin);
+        const overlap = checkNameOverlap(imageInfo.image, !!t.flipX, !!t.flipY);
+        if (overlap) {
+          ctx.fillStyle = '#000000';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'top';
+          ctx.fillText(displayName, 0, rect.height / 2 + margin);
+        } else {
+          ctx.fillStyle = '#000000';
+          ctx.textAlign = 'right';
+          ctx.textBaseline = 'bottom';
+          ctx.fillText(displayName, rect.width / 2 - margin, rect.height / 2 - margin);
+        }
       }
       ctx.restore();
 
