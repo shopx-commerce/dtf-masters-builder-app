@@ -2439,12 +2439,6 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         ctx.fillRect(0, 0, canvasWidth, canvasHeight);
       }
 
-      ctx.save();
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = Math.max(1, 2 * dpiScaleRef.current);
-      ctx.strokeRect(0.5, 0.5, canvasWidth - 1, canvasHeight - 1);
-      ctx.restore();
-
       for (const design of designs) {
         if (design.id === selectedDesignId) continue;
         drawSingleDesign(ctx, design, canvasWidth, canvasHeight);
@@ -2868,6 +2862,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                 style={{ 
                   width: previewDims.width,
                   height: previewDims.height,
+                  border: '2px solid #000000',
+                  boxSizing: 'content-box',
                   maxWidth: '100%',
                   maxHeight: '100%',
                   transform: `scale(${zoom}) translate(${panX}px, ${panY}px)`,
