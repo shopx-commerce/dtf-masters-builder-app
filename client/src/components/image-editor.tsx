@@ -801,6 +801,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       id: newId,
       name: baseName,
       transform: { ...design.transform, nx, ny },
+      printFileName: false,
     };
     saveSnapshot();
     setDesigns(prev => [...prev, newDesign]);
@@ -820,7 +821,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       const base = d.name.replace(/ copy( \d+)?$/, '');
       const offsetT = { ...d.transform, nx: d.transform.nx + 0.03 + i * 0.01, ny: d.transform.ny };
       const { nx, ny } = clampDesignToArtboard({ ...d, transform: offsetT }, artboardWidth, artboardHeight);
-      return { ...d, id: newId, name: base, transform: { ...d.transform, nx, ny } };
+      return { ...d, id: newId, name: base, transform: { ...d.transform, nx, ny }, printFileName: false };
     });
     multiDragAccumRef.current = null;
     multiResizeStartRef.current = null;
@@ -845,6 +846,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       id: newId,
       name: baseName,
       transform: { ...design.transform, nx, ny },
+      printFileName: false,
     };
     saveSnapshot();
     setDesigns(prev => [...prev, newDesign]);
@@ -890,6 +892,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         id: newId,
         name: d.name.replace(/ copy( \d+)?$/, ''),
         transform: { ...d.transform, nx, ny },
+        printFileName: false,
       };
     });
     setDesigns(prev => [...prev, ...pasted]);
@@ -1177,7 +1180,10 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     const items = designsToArrange.map(d => {
       const t = d.transform;
       const w = d.widthInches * t.s;
-      const h = d.heightInches * t.s;
+      let h = d.heightInches * t.s;
+      if (d.printFileName) {
+        h += 0.1 + d.heightInches * t.s * 0.05;
+      }
       return { id: d.id, w, h, fill: getContentFill(d) };
     });
 
@@ -1187,8 +1193,10 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
           const rad = ((t.rotation ?? 0) * Math.PI) / 180;
           const cos = Math.abs(Math.cos(rad));
           const sin = Math.abs(Math.sin(rad));
-          const w = d.widthInches * t.s * cos + d.heightInches * t.s * sin;
-          const h = d.widthInches * t.s * sin + d.heightInches * t.s * cos;
+          let dh = d.heightInches * t.s;
+          if (d.printFileName) dh += 0.1 + d.heightInches * t.s * 0.05;
+          const w = d.widthInches * t.s * cos + dh * sin;
+          const h = d.widthInches * t.s * sin + dh * cos;
           const cx = t.nx * usableW;
           const cy = t.ny * usableH;
           return { x: cx - w / 2, y: cy - h / 2, w, h };
