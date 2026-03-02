@@ -1,5 +1,5 @@
 import { useEffect, useRef, forwardRef, useImperativeHandle, useState, useCallback, useMemo } from "react";
-import { ZoomIn, ZoomOut, RotateCcw, ScanSearch, MousePointer2, Focus } from "lucide-react";
+import { ZoomIn, ZoomOut, RotateCcw, ScanSearch, Focus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/lib/i18n";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -3244,24 +3244,6 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                     {t("preview.reset")}
                   </Button>
                 )}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setMoveMode(prev => {
-                      const next = !prev;
-                      if (canvasAreaRef.current) {
-                        canvasAreaRef.current.style.cursor = (isHorizOverflow() && !next) ? 'grab' : 'default';
-                      }
-                      return next;
-                    });
-                  }}
-                  className={`${isMobile ? 'min-w-[36px] min-h-[36px] h-8 w-8 p-0 justify-center' : 'h-6 px-1.5'} hover:bg-gray-200 rounded whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ${moveMode ? 'bg-cyan-500/20 text-cyan-400' : 'text-gray-600'} flex items-center`}
-                  title={t("preview.moveMode")}
-                >
-                  <MousePointer2 className={`${isMobile ? 'h-4 w-4' : 'h-2.5 w-2.5 mr-0.5'} flex-shrink-0`} />
-                  {!isMobile && t("preview.move")}
-                </Button>
                 {selectedDesignId && (
                   <Button
                     variant="ghost"
