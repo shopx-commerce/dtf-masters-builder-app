@@ -1514,7 +1514,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     for (const d of designs) {
       const rad = ((d.transform.rotation ?? 0) * Math.PI) / 180;
       const cos = Math.abs(Math.cos(rad)), sin = Math.abs(Math.sin(rad));
-      const halfH = (d.widthInches * d.transform.s * sin + d.heightInches * d.transform.s * cos) / 2;
+      const effH = getEffectiveHeight(d);
+      const halfH = (d.widthInches * d.transform.s * sin + effH * cos) / 2;
       const cy = d.transform.ny * artboardHeight;
       minY = Math.min(minY, cy - halfH);
       maxY = Math.max(maxY, cy + halfH);
