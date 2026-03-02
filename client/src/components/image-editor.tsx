@@ -2689,7 +2689,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
               </div>
               {showDesignInfo && (
                 <div
-                  className="layers-scroll border-t border-gray-200 max-h-[180px] overflow-y-scroll"
+                  className={`layers-scroll border-t border-gray-200 overflow-y-scroll ${layerRows.length > 2 ? 'max-h-[400px]' : 'max-h-[180px]'}`}
                   style={{
                     scrollbarWidth: 'thin',
                     scrollbarColor: '#9ca3af transparent',
