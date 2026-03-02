@@ -14,6 +14,7 @@ interface OverlapRequest {
     rotation: number;
     cx: number;
     cy: number;
+    stampExtraH?: number;
   }>;
   sw: number;
   sh: number;
@@ -71,6 +72,10 @@ self.onmessage = (e: MessageEvent<OverlapRequest>) => {
       ctx.translate(d.cx, d.cy);
       ctx.rotate((d.rotation * Math.PI) / 180);
       ctx.drawImage(d.imgBitmap, -d.drawW / 2, -d.drawH / 2, d.drawW, d.drawH);
+      if (d.stampExtraH && d.stampExtraH > 0) {
+        ctx.fillStyle = 'rgba(0,0,0,1)';
+        ctx.fillRect(-d.drawW / 2, d.drawH / 2, d.drawW, d.stampExtraH);
+      }
       const rgba = ctx.getImageData(0, 0, rw, rh).data;
       // Extract only alpha channel to save memory
       const alpha = new Uint8Array(rw * rh);

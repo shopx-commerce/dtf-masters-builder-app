@@ -803,13 +803,18 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           artboardWidth, artboardHeight,
           d.widthInches, d.heightInches,
         );
+        let effHeight = rect.height;
+        if (d.printFileName) {
+          const stampInches = 0.1 + d.heightInches * d.transform.s * 0.05;
+          effHeight += (stampInches / artboardHeight) * sh;
+        }
         const cx = rect.x + rect.width / 2;
-        const cy = rect.y + rect.height / 2;
+        const cy = rect.y + rect.height / 2 + (effHeight - rect.height) / 2;
         const rad = Math.abs(d.transform.rotation * Math.PI / 180);
         const cos = Math.abs(Math.cos(rad));
         const sin = Math.abs(Math.sin(rad));
-        const rotW = rect.width * cos + rect.height * sin;
-        const rotH = rect.width * sin + rect.height * cos;
+        const rotW = rect.width * cos + effHeight * sin;
+        const rotH = rect.width * sin + effHeight * cos;
         designRects.push({ id: d.id, left: cx - rotW / 2, top: cy - rotH / 2, right: cx + rotW / 2, bottom: cy + rotH / 2, design: d, rect });
       }
 
@@ -865,16 +870,24 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         const myRequestId = overlapRequestIdRef.current;
         Promise.all(bitmapPromises).then(bitmaps => {
           const bmpMap = new Map(bitmaps.map(b => [b.idx, b.bmp]));
-          const workerDesigns = designRects.map((dr, idx) => ({
-            id: dr.id,
-            left: dr.left, top: dr.top, right: dr.right, bottom: dr.bottom,
-            imgBitmap: bmpMap.get(idx) ?? (null as unknown as ImageBitmap),
-            drawX: dr.rect.x, drawY: dr.rect.y,
-            drawW: dr.rect.width, drawH: dr.rect.height,
-            rotation: dr.design.transform.rotation,
-            cx: dr.rect.x + dr.rect.width / 2,
-            cy: dr.rect.y + dr.rect.height / 2,
-          }));
+          const workerDesigns = designRects.map((dr, idx) => {
+            let stampExtraH = 0;
+            if (dr.design.printFileName) {
+              const stampInches = 0.1 + dr.design.heightInches * dr.design.transform.s * 0.05;
+              stampExtraH = (stampInches / artboardHeight) * sh;
+            }
+            return {
+              id: dr.id,
+              left: dr.left, top: dr.top, right: dr.right, bottom: dr.bottom,
+              imgBitmap: bmpMap.get(idx) ?? (null as unknown as ImageBitmap),
+              drawX: dr.rect.x, drawY: dr.rect.y,
+              drawW: dr.rect.width, drawH: dr.rect.height,
+              rotation: dr.design.transform.rotation,
+              cx: dr.rect.x + dr.rect.width / 2,
+              cy: dr.rect.y + dr.rect.height / 2,
+              stampExtraH,
+            };
+          });
 
           const handler = (ev: MessageEvent) => {
             if (ev.data.type === 'result') {
@@ -933,6 +946,12 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           octx.rotate((d.transform.rotation * Math.PI) / 180);
           try {
             octx.drawImage(d.imageInfo.image, -rect.width / 2, -rect.height / 2, rect.width, rect.height);
+            if (d.printFileName) {
+              const stampInches = 0.1 + d.heightInches * d.transform.s * 0.05;
+              const stampPx = (stampInches / artboardHeight) * sh;
+              octx.fillStyle = 'rgba(0,0,0,1)';
+              octx.fillRect(-rect.width / 2, rect.height / 2, rect.width, stampPx);
+            }
             octx.restore();
             alphaBuffers.set(idx, octx.getImageData(0, 0, sw, sh).data);
           } catch { octx.restore(); continue; }
