@@ -196,16 +196,23 @@ function crc32(data: Uint8Array): number {
   return (c ^ 0xFFFFFFFF) >>> 0;
 }
 
+function getEffectiveHeight(d: { heightInches: number; transform: ImageTransform; printFileName?: boolean }): number {
+  let h = d.heightInches * d.transform.s;
+  if (d.printFileName) h += 0.1 + d.heightInches * d.transform.s * 0.05;
+  return h;
+}
+
 function clampDesignToArtboard(
-  d: { widthInches: number; heightInches: number; transform: ImageTransform },
+  d: { widthInches: number; heightInches: number; transform: ImageTransform; printFileName?: boolean },
   abW: number, abH: number,
 ): { nx: number; ny: number } {
   const t = d.transform;
   const rad = (t.rotation * Math.PI) / 180;
   const cos = Math.abs(Math.cos(rad));
   const sin = Math.abs(Math.sin(rad));
-  const halfW = (d.widthInches * t.s * cos + d.heightInches * t.s * sin) / 2;
-  const halfH = (d.widthInches * t.s * sin + d.heightInches * t.s * cos) / 2;
+  const effH = getEffectiveHeight(d);
+  const halfW = (d.widthInches * t.s * cos + effH * sin) / 2;
+  const halfH = (d.widthInches * t.s * sin + effH * cos) / 2;
   const minNx = halfW / abW;
   const maxNx = 1 - halfW / abW;
   const minNy = halfH / abH;
@@ -1178,12 +1185,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     };
 
     const items = designsToArrange.map(d => {
-      const t = d.transform;
-      const w = d.widthInches * t.s;
-      let h = d.heightInches * t.s;
-      if (d.printFileName) {
-        h += 0.1 + d.heightInches * t.s * 0.05;
-      }
+      const w = d.widthInches * d.transform.s;
+      const h = getEffectiveHeight(d);
       return { id: d.id, w, h, fill: getContentFill(d) };
     });
 
@@ -1193,10 +1196,9 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
           const rad = ((t.rotation ?? 0) * Math.PI) / 180;
           const cos = Math.abs(Math.cos(rad));
           const sin = Math.abs(Math.sin(rad));
-          let dh = d.heightInches * t.s;
-          if (d.printFileName) dh += 0.1 + d.heightInches * t.s * 0.05;
-          const w = d.widthInches * t.s * cos + dh * sin;
-          const h = d.widthInches * t.s * sin + dh * cos;
+          const effH = getEffectiveHeight(d);
+          const w = d.widthInches * t.s * cos + effH * sin;
+          const h = d.widthInches * t.s * sin + effH * cos;
           const cx = t.nx * usableW;
           const cy = t.ny * usableH;
           return { x: cx - w / 2, y: cy - h / 2, w, h };
