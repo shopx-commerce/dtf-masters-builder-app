@@ -3123,14 +3123,6 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                   <>
                     {!isMobile && (
                       <>
-                        <span className={`font-medium tabular-nums text-gray-600 ${lang !== 'en' ? 'text-[10px] max-w-[110px] truncate sm:max-w-none' : 'text-[11px]'}`}>
-                          {formatDimensions(
-                            resizeSettings.widthInches * (designTransform.s || 1),
-                            resizeSettings.heightInches * (designTransform.s || 1),
-                            lang
-                          )}
-                        </span>
-                        <div className="w-px h-3.5 bg-gray-300" />
                         {editingRotation ? (
                           <input
                             type="number"
