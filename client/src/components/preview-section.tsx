@@ -2369,39 +2369,6 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
     createSpotOverlayCanvasRef.current = createSpotOverlayCanvas;
 
-    const stampOverlapCache = useRef<Map<string, boolean>>(new Map());
-
-    const checkStampOverlap = useCallback((img: HTMLImageElement | HTMLCanvasElement, textWidthFraction: number): boolean => {
-      const key = `${(img as any).src || 'canvas'}_${img.width}_${img.height}_${textWidthFraction.toFixed(2)}`;
-      const cached = stampOverlapCache.current.get(key);
-      if (cached !== undefined) return cached;
-
-      const sampleW = Math.min(128, img.width);
-      const sampleH = Math.min(32, img.height);
-      const tmpCanvas = document.createElement('canvas');
-      tmpCanvas.width = sampleW;
-      tmpCanvas.height = sampleH;
-      const tmpCtx = tmpCanvas.getContext('2d', { willReadFrequently: true });
-      if (!tmpCtx) { stampOverlapCache.current.set(key, true); return true; }
-
-      const srcX = Math.max(0, img.width - Math.round(img.width * textWidthFraction));
-      const srcY = Math.max(0, img.height - Math.round(img.height * 0.08));
-      const srcW = img.width - srcX;
-      const srcH = img.height - srcY;
-      if (srcW <= 0 || srcH <= 0) { stampOverlapCache.current.set(key, false); return false; }
-
-      tmpCtx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, sampleW, sampleH);
-      const data = tmpCtx.getImageData(0, 0, sampleW, sampleH).data;
-      let opaqueCount = 0;
-      const total = sampleW * sampleH;
-      for (let i = 3; i < data.length; i += 4) {
-        if (data[i] > 20) opaqueCount++;
-      }
-      const result = opaqueCount / total > 0.3;
-      stampOverlapCache.current.set(key, result);
-      return result;
-    }, []);
-
     const drawSingleDesign = useCallback((ctx: CanvasRenderingContext2D, design: DesignItem, cw: number, ch: number) => {
       const rect = computeLayerRect(
         design.imageInfo.image.width, design.imageInfo.image.height,
@@ -2424,22 +2391,13 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         const fontSize = Math.max(7, Math.round(rect.height * 0.045));
         ctx.font = `bold ${fontSize}px sans-serif`;
         const displayName = design.name.replace(/\.[^/.]+$/, '');
-        const textW = ctx.measureText(displayName).width;
-        const textWidthFrac = Math.min(1, (textW + 4) / rect.width);
-        const hasOverlap = checkStampOverlap(design.imageInfo.image, textWidthFrac);
         ctx.fillStyle = '#000000';
-        if (hasOverlap) {
-          ctx.textAlign = 'right';
-          ctx.textBaseline = 'top';
-          ctx.fillText(displayName, rect.width / 2, rect.height / 2 + marginPx);
-        } else {
-          ctx.textAlign = 'right';
-          ctx.textBaseline = 'bottom';
-          ctx.fillText(displayName, rect.width / 2, rect.height / 2 - 2);
-        }
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'top';
+        ctx.fillText(displayName, rect.width / 2, rect.height / 2 + marginPx);
       }
       ctx.restore();
-    }, [artboardWidth, artboardHeight, checkStampOverlap]);
+    }, [artboardWidth, artboardHeight]);
 
     useEffect(() => {
       if (!canvasRef.current || (!imageInfo && designs.length === 0)) return;
@@ -2725,19 +2683,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         const fontSize = Math.max(7, Math.round(rect.height * 0.045));
         ctx.font = `bold ${fontSize}px sans-serif`;
         const displayName = selDesign.name.replace(/\.[^/.]+$/, '');
-        const textW = ctx.measureText(displayName).width;
-        const textWidthFrac = Math.min(1, (textW + 4) / rect.width);
-        const hasOverlap = checkStampOverlap(imageInfo.image, textWidthFrac);
         ctx.fillStyle = '#000000';
-        if (hasOverlap) {
-          ctx.textAlign = 'right';
-          ctx.textBaseline = 'top';
-          ctx.fillText(displayName, rect.width / 2, rect.height / 2 + marginPx);
-        } else {
-          ctx.textAlign = 'right';
-          ctx.textBaseline = 'bottom';
-          ctx.fillText(displayName, rect.width / 2, rect.height / 2 - 2);
-        }
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'top';
+        ctx.fillText(displayName, rect.width / 2, rect.height / 2 + marginPx);
       }
       ctx.restore();
 

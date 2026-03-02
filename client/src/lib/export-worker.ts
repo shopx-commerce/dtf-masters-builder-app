@@ -48,37 +48,6 @@ function makePngChunk(type: string, data: Uint8Array): Uint8Array {
   return chunk;
 }
 
-const stampOverlapCacheWorker = new Map<string, boolean>();
-
-function checkStampOverlapWorker(bitmap: ImageBitmap, textWidthFraction: number): boolean {
-  const key = `${bitmap.width}_${bitmap.height}_${textWidthFraction.toFixed(2)}`;
-  const cached = stampOverlapCacheWorker.get(key);
-  if (cached !== undefined) return cached;
-
-  const sampleW = Math.min(128, bitmap.width);
-  const sampleH = Math.min(32, bitmap.height);
-  const tmpCanvas = new OffscreenCanvas(sampleW, sampleH);
-  const tmpCtx = tmpCanvas.getContext('2d', { willReadFrequently: true } as any);
-  if (!tmpCtx) { stampOverlapCacheWorker.set(key, true); return true; }
-
-  const srcX = Math.max(0, bitmap.width - Math.round(bitmap.width * textWidthFraction));
-  const srcY = Math.max(0, bitmap.height - Math.round(bitmap.height * 0.08));
-  const srcW = bitmap.width - srcX;
-  const srcH = bitmap.height - srcY;
-  if (srcW <= 0 || srcH <= 0) { stampOverlapCacheWorker.set(key, false); return false; }
-
-  tmpCtx.drawImage(bitmap, srcX, srcY, srcW, srcH, 0, 0, sampleW, sampleH);
-  const data = tmpCtx.getImageData(0, 0, sampleW, sampleH).data;
-  let opaqueCount = 0;
-  const total = sampleW * sampleH;
-  for (let i = 3; i < data.length; i += 4) {
-    if (data[i] > 20) opaqueCount++;
-  }
-  const result = opaqueCount / total > 0.3;
-  stampOverlapCacheWorker.set(key, result);
-  return result;
-}
-
 function drawDesignsOnCtx(
   ctx: OffscreenCanvasRenderingContext2D,
   drawInfos: Array<{ design: DesignExportData; drawW: number; drawH: number; centerX: number; centerY: number; radius: number; exportDpi: number }>,
@@ -101,19 +70,10 @@ function drawDesignsOnCtx(
       const fontSize = Math.max(8, Math.round(info.drawH * 0.045));
       ctx.font = `bold ${fontSize}px sans-serif`;
       const displayName = d.name.replace(/\.[^/.]+$/, '');
-      const textW = ctx.measureText(displayName).width;
-      const textWidthFrac = Math.min(1, (textW + 4) / info.drawW);
-      const hasOverlap = checkStampOverlapWorker(d.bitmap, textWidthFrac);
       ctx.fillStyle = '#000000';
-      if (hasOverlap) {
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'top';
-        ctx.fillText(displayName, info.drawW / 2, info.drawH / 2 + marginPx);
-      } else {
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'bottom';
-        ctx.fillText(displayName, info.drawW / 2, info.drawH / 2 - 2);
-      }
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'top';
+      ctx.fillText(displayName, info.drawW / 2, info.drawH / 2 + marginPx);
       ctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
     }
     ctx.restore();
@@ -260,19 +220,10 @@ async function runExportLegacy(input: ExportInput): Promise<Blob> {
       const fontSize = Math.max(8, Math.round(drawH * 0.045));
       ctx.font = `bold ${fontSize}px sans-serif`;
       const displayName = design.name.replace(/\.[^/.]+$/, '');
-      const textW = ctx.measureText(displayName).width;
-      const textWidthFrac = Math.min(1, (textW + 4) / drawW);
-      const hasOverlap = checkStampOverlapWorker(design.bitmap, textWidthFrac);
       ctx.fillStyle = '#000000';
-      if (hasOverlap) {
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'top';
-        ctx.fillText(displayName, drawW / 2, drawH / 2 + marginPx);
-      } else {
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'bottom';
-        ctx.fillText(displayName, drawW / 2, drawH / 2 - 2);
-      }
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'top';
+      ctx.fillText(displayName, drawW / 2, drawH / 2 + marginPx);
       ctx.scale(design.flipX ? -1 : 1, design.flipY ? -1 : 1);
     }
     ctx.restore();
