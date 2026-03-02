@@ -102,10 +102,15 @@ function drawDesignsOnCtx(
       const displayName = d.name.replace(/\.[^/.]+$/, '');
       const overlap = checkBitmapNameOverlap(d.bitmap, !!d.flipX, !!d.flipY);
       if (overlap) {
-        ctx.fillStyle = '#000000';
+        const gap = fontSize * 0.6;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
-        ctx.fillText(displayName, 0, info.drawH / 2 + margin);
+        ctx.strokeStyle = '#FFFFFF';
+        ctx.lineWidth = Math.max(2, fontSize * 0.25);
+        ctx.lineJoin = 'round';
+        ctx.strokeText(displayName, 0, info.drawH / 2 + gap);
+        ctx.fillStyle = '#000000';
+        ctx.fillText(displayName, 0, info.drawH / 2 + gap);
       } else {
         ctx.fillStyle = '#000000';
         ctx.textAlign = 'right';

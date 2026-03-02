@@ -2423,10 +2423,15 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         const displayName = design.name.replace(/\.[^/.]+$/, '');
         const overlap = checkNameOverlap(design.imageInfo.image, !!design.transform.flipX, !!design.transform.flipY);
         if (overlap) {
-          ctx.fillStyle = '#000000';
+          const gap = fontSize * 0.6;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'top';
-          ctx.fillText(displayName, 0, rect.height / 2 + margin);
+          ctx.strokeStyle = '#FFFFFF';
+          ctx.lineWidth = Math.max(2, fontSize * 0.25);
+          ctx.lineJoin = 'round';
+          ctx.strokeText(displayName, 0, rect.height / 2 + gap);
+          ctx.fillStyle = '#000000';
+          ctx.fillText(displayName, 0, rect.height / 2 + gap);
         } else {
           ctx.fillStyle = '#000000';
           ctx.textAlign = 'right';
@@ -2721,10 +2726,15 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         const displayName = selDesign.name.replace(/\.[^/.]+$/, '');
         const overlap = checkNameOverlap(imageInfo.image, !!t.flipX, !!t.flipY);
         if (overlap) {
-          ctx.fillStyle = '#000000';
+          const gap = fontSize * 0.6;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'top';
-          ctx.fillText(displayName, 0, rect.height / 2 + margin);
+          ctx.strokeStyle = '#FFFFFF';
+          ctx.lineWidth = Math.max(2, fontSize * 0.25);
+          ctx.lineJoin = 'round';
+          ctx.strokeText(displayName, 0, rect.height / 2 + gap);
+          ctx.fillStyle = '#000000';
+          ctx.fillText(displayName, 0, rect.height / 2 + gap);
         } else {
           ctx.fillStyle = '#000000';
           ctx.textAlign = 'right';
