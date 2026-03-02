@@ -3073,10 +3073,10 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
               <button
                 onClick={handleRotate90}
                 disabled={!selectedDesignId}
-                className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
+                className="w-8 h-8 lg:w-7 lg:h-7 rounded border border-gray-300 bg-white hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center shadow-sm"
                 title={t("editor.rotate")}
               >
-                <RotateCw className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+                <RotateCw className="w-4 h-4" />
               </button>
               <div className="grid grid-cols-4 gap-0.5 lg:contents">
                 <button
