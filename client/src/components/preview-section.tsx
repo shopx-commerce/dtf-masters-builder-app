@@ -3178,11 +3178,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                     {t("preview.reset")}
                   </Button>
                 )}
-                <div className="flex items-center gap-0.5 flex-shrink-0 items-center">
+                <div className="flex items-center gap-0 flex-shrink-0 items-center">
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 h-8 w-8 sm:h-6 sm:w-6 p-0 hover:bg-gray-200 rounded flex items-center justify-center"
+                    className="min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 h-8 w-8 sm:h-7 sm:w-7 p-0 hover:bg-gray-200 rounded flex items-center justify-center"
                     onClick={() => {
                       const newZ = Math.max(zoom / ZOOM_BUTTON_FACTOR, minZoomRef.current);
                       const clamped = clampPanValue(panX, panY, newZ);
@@ -3195,15 +3195,15 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                     }}
                     title={t("preview.zoomOut")}
                   >
-                    <ZoomOut className="h-3 w-3 text-gray-600" />
+                    <ZoomOut className="h-4 w-4 text-gray-600" />
                   </Button>
-                  <span className="text-[11px] text-gray-600 min-w-[36px] text-center font-medium tabular-nums">
+                  <span className="text-[11px] text-gray-600 min-w-[32px] text-center font-medium tabular-nums px-0.5">
                     {Math.round(zoom * 100)}%
                   </span>
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 h-8 w-8 sm:h-6 sm:w-6 p-0 hover:bg-gray-200 rounded flex items-center justify-center"
+                    className="min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 h-8 w-8 sm:h-7 sm:w-7 p-0 hover:bg-gray-200 rounded flex items-center justify-center"
                     onClick={() => {
                       const newZ = Math.min(zoom * ZOOM_BUTTON_FACTOR, zoomMax);
                       const clamped = clampPanValue(panX, panY, newZ);
@@ -3216,7 +3216,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                     }}
                     title={t("preview.zoomIn")}
                   >
-                    <ZoomIn className="h-3 w-3 text-gray-600" />
+                    <ZoomIn className="h-4 w-4 text-gray-600" />
                   </Button>
                 </div>
                 <div className="w-px h-3.5 bg-gray-300" />
