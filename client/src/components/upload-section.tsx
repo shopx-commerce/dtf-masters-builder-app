@@ -62,7 +62,7 @@ export default function UploadSection({ onImageUpload, onBatchStart, imageInfo }
           toast({
             title: t("toast.solidBg"),
             description: t("toast.solidBgDesc"),
-            variant: "destructive",
+            variant: "warning",
           });
         }
       }

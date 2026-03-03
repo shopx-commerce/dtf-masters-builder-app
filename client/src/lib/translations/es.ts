@@ -117,7 +117,7 @@ export const es: Record<string, string> = {
   "toast.unsupportedFormat": "Formato no compatible",
   "toast.unsupportedFormatDesc": "Por favor sube un archivo PNG, JPEG, WebP o PDF.",
   "toast.solidBg": "Fondo sólido detectado",
-  "toast.solidBgDesc": "Esta imagen no tiene fondo transparente. Para mejores resultados, elimina el fondo primero.",
+  "toast.solidBgDesc": "Sin fondo transparente. Elimina el fondo para mejores resultados.",
   "toast.failedLoad": "Error al cargar imagen",
   "toast.failedLoadDesc": "Por favor intenta con otro archivo.",
   "toast.copied": "Se copió {count} diseño",
