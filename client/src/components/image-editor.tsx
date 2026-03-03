@@ -1263,7 +1263,15 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         const p = bestResult.find(r => r.id === d.id);
         if (!p) return d;
         const finalRotation = p.rotation % 360;
-        const newTransform = { ...d.transform, nx: p.nx, ny: p.ny, rotation: finalRotation };
+        const stampExtra = getStampExtra(d);
+        let adjustedNx = p.nx;
+        let adjustedNy = p.ny;
+        if (stampExtra > 0) {
+          const rad = (finalRotation * Math.PI) / 180;
+          adjustedNx -= (stampExtra / 2) * Math.sin(rad) / abW;
+          adjustedNy -= (stampExtra / 2) * Math.cos(rad) / abH;
+        }
+        const newTransform = { ...d.transform, nx: adjustedNx, ny: adjustedNy, rotation: finalRotation };
         const { nx, ny } = clampDesignToArtboard({ ...d, transform: newTransform }, abW, abH);
         return { ...d, transform: { ...newTransform, nx, ny } };
       }));
