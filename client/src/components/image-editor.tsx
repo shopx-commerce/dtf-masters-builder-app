@@ -22,7 +22,7 @@ import { useHistory, type HistorySnapshot } from "@/hooks/use-history";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useLanguage } from "@/lib/i18n";
 import { formatDimensions, formatLength, useMetric, cmToInches, getUnitSuffix } from "@/lib/format-length";
-import { Trash2, Copy, ChevronDown, ChevronUp, Undo2, Redo2, RotateCw, ArrowUpLeft, ArrowUpRight, ArrowDownLeft, ArrowDownRight, LayoutGrid, Layers, Loader2, Plus, Droplets, Link, Unlink, FlipHorizontal2, FlipVertical2, MousePointerClick, XCircle, Stamp, Check, X, ScanSearch } from "lucide-react";
+import { Trash2, Copy, ChevronDown, ChevronUp, Undo2, Redo2, RotateCw, ArrowUpLeft, ArrowUpRight, ArrowDownLeft, ArrowDownRight, LayoutGrid, Layers, Loader2, Plus, Minus, Droplets, Link, Unlink, FlipHorizontal2, FlipVertical2, MousePointerClick, XCircle, Stamp, Check, X, ScanSearch } from "lucide-react";
 
 export type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
 import type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
@@ -2860,24 +2860,21 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                         </p>
                       </div>
                       <div className="flex items-center gap-0.5 flex-shrink-0">
-                        {count > 1 && (
-                          <>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); handleRemoveOneCopy(row.baseName, row.sizeKey); }}
-                              className="p-0 rounded hover:bg-gray-200 text-gray-600 hover:text-gray-700 transition-colors"
-                              title={t("editor.removeOne")}
-                            >
-                              <ChevronDown className="w-3 h-3" />
-                            </button>
-                            <span className="text-[10px] text-cyan-400 font-medium min-w-[18px] text-center">x{count}</span>
-                          </>
-                        )}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleRemoveOneCopy(row.baseName, row.sizeKey); }}
+                          disabled={count <= 1}
+                          className={`w-4 h-4 rounded-full flex items-center justify-center transition-colors ${count > 1 ? 'bg-gray-200 hover:bg-red-100 text-gray-600 hover:text-red-600' : 'bg-gray-100 text-gray-300 cursor-not-allowed'}`}
+                          title={t("editor.removeOne")}
+                        >
+                          <Minus className="w-2.5 h-2.5" strokeWidth={3} />
+                        </button>
+                        <span className="text-[10px] text-cyan-400 font-semibold min-w-[18px] text-center tabular-nums">x{count}</span>
                         <button
                           onClick={(e) => { e.stopPropagation(); handleDuplicateById(first.id); }}
-                          className="p-0 rounded hover:bg-gray-200 text-gray-600 hover:text-gray-700 transition-colors"
+                          className="w-4 h-4 rounded-full bg-gray-200 hover:bg-cyan-100 text-gray-600 hover:text-cyan-600 flex items-center justify-center transition-colors"
                           title={t("editor.addOneMore")}
                         >
-                          <ChevronUp className="w-3 h-3" />
+                          <Plus className="w-2.5 h-2.5" strokeWidth={3} />
                         </button>
                       </div>
                       <button
