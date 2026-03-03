@@ -803,19 +803,33 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           artboardWidth, artboardHeight,
           d.widthInches, d.heightInches,
         );
-        let effHeight = rect.height;
+        let stampPx = 0;
         if (d.printFileName) {
           const stampInches = 0.1 + d.heightInches * d.transform.s * 0.05;
-          effHeight += (stampInches / artboardHeight) * sh;
+          stampPx = (stampInches / artboardHeight) * sh;
         }
         const cx = rect.x + rect.width / 2;
-        const cy = rect.y + rect.height / 2 + (effHeight - rect.height) / 2;
-        const rad = Math.abs(d.transform.rotation * Math.PI / 180);
-        const cos = Math.abs(Math.cos(rad));
-        const sin = Math.abs(Math.sin(rad));
-        const rotW = rect.width * cos + effHeight * sin;
-        const rotH = rect.width * sin + effHeight * cos;
-        designRects.push({ id: d.id, left: cx - rotW / 2, top: cy - rotH / 2, right: cx + rotW / 2, bottom: cy + rotH / 2, design: d, rect });
+        const cy = rect.y + rect.height / 2;
+        const rad = d.transform.rotation * Math.PI / 180;
+        const cosA = Math.cos(rad);
+        const sinA = Math.sin(rad);
+        const hw = rect.width / 2, hh = rect.height / 2;
+        const corners = [
+          { x: -hw, y: -hh },
+          { x:  hw, y: -hh },
+          { x:  hw, y:  hh + stampPx },
+          { x: -hw, y:  hh + stampPx },
+        ];
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (const c of corners) {
+          const rx = c.x * cosA - c.y * sinA;
+          const ry = c.x * sinA + c.y * cosA;
+          if (rx < minX) minX = rx;
+          if (rx > maxX) maxX = rx;
+          if (ry < minY) minY = ry;
+          if (ry > maxY) maxY = ry;
+        }
+        designRects.push({ id: d.id, left: cx + minX, top: cy + minY, right: cx + maxX, bottom: cy + maxY, design: d, rect });
       }
 
       const outOfBounds = new Set<string>();

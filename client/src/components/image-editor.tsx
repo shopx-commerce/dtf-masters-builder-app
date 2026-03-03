@@ -196,10 +196,41 @@ function crc32(data: Uint8Array): number {
   return (c ^ 0xFFFFFFFF) >>> 0;
 }
 
+function getStampExtra(d: { heightInches: number; transform: ImageTransform; printFileName?: boolean }): number {
+  if (!d.printFileName) return 0;
+  return 0.1 + d.heightInches * d.transform.s * 0.05;
+}
+
 function getEffectiveHeight(d: { heightInches: number; transform: ImageTransform; printFileName?: boolean }): number {
-  let h = d.heightInches * d.transform.s;
-  if (d.printFileName) h += 0.1 + d.heightInches * d.transform.s * 0.05;
-  return h;
+  return d.heightInches * d.transform.s + getStampExtra(d);
+}
+
+function getRotatedBounds(
+  d: { widthInches: number; heightInches: number; transform: ImageTransform; printFileName?: boolean },
+): { minX: number; maxX: number; minY: number; maxY: number } {
+  const t = d.transform;
+  const w = d.widthInches * t.s;
+  const h = d.heightInches * t.s;
+  const stamp = getStampExtra(d);
+  const rad = (t.rotation * Math.PI) / 180;
+  const cosA = Math.cos(rad);
+  const sinA = Math.sin(rad);
+  const corners = [
+    { x: -w / 2, y: -h / 2 },
+    { x:  w / 2, y: -h / 2 },
+    { x:  w / 2, y:  h / 2 + stamp },
+    { x: -w / 2, y:  h / 2 + stamp },
+  ];
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const c of corners) {
+    const rx = c.x * cosA - c.y * sinA;
+    const ry = c.x * sinA + c.y * cosA;
+    if (rx < minX) minX = rx;
+    if (rx > maxX) maxX = rx;
+    if (ry < minY) minY = ry;
+    if (ry > maxY) maxY = ry;
+  }
+  return { minX, maxX, minY, maxY };
 }
 
 function clampDesignToArtboard(
@@ -207,16 +238,11 @@ function clampDesignToArtboard(
   abW: number, abH: number,
 ): { nx: number; ny: number } {
   const t = d.transform;
-  const rad = (t.rotation * Math.PI) / 180;
-  const cos = Math.abs(Math.cos(rad));
-  const sin = Math.abs(Math.sin(rad));
-  const effH = getEffectiveHeight(d);
-  const halfW = (d.widthInches * t.s * cos + effH * sin) / 2;
-  const halfH = (d.widthInches * t.s * sin + effH * cos) / 2;
-  const minNx = halfW / abW;
-  const maxNx = 1 - halfW / abW;
-  const minNy = halfH / abH;
-  const maxNy = 1 - halfH / abH;
+  const { minX, maxX, minY, maxY } = getRotatedBounds(d);
+  const minNx = -minX / abW;
+  const maxNx = 1 - maxX / abW;
+  const minNy = -minY / abH;
+  const maxNy = 1 - maxY / abH;
   let nx = t.nx;
   let ny = t.ny;
   if (minNx <= maxNx) {
@@ -1216,15 +1242,10 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     const fixedRects: Array<{ x: number; y: number; w: number; h: number }> | undefined = arrangeSelection
       ? currentDesigns.filter(d => !selectedDesignIds.has(d.id)).map(d => {
           const t = d.transform;
-          const rad = ((t.rotation ?? 0) * Math.PI) / 180;
-          const cos = Math.abs(Math.cos(rad));
-          const sin = Math.abs(Math.sin(rad));
-          const effH = getEffectiveHeight(d);
-          const w = d.widthInches * t.s * cos + effH * sin;
-          const h = d.widthInches * t.s * sin + effH * cos;
+          const bounds = getRotatedBounds(d);
           const cx = t.nx * usableW;
           const cy = t.ny * usableH;
-          return { x: cx - w / 2, y: cy - h / 2, w, h };
+          return { x: cx + bounds.minX, y: cy + bounds.minY, w: bounds.maxX - bounds.minX, h: bounds.maxY - bounds.minY };
         })
       : undefined;
 
@@ -1535,13 +1556,10 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     if (designs.length === 0) return null;
     let minY = Infinity, maxY = -Infinity;
     for (const d of designs) {
-      const rad = ((d.transform.rotation ?? 0) * Math.PI) / 180;
-      const cos = Math.abs(Math.cos(rad)), sin = Math.abs(Math.sin(rad));
-      const effH = getEffectiveHeight(d);
-      const halfH = (d.widthInches * d.transform.s * sin + effH * cos) / 2;
+      const bounds = getRotatedBounds(d);
       const cy = d.transform.ny * artboardHeight;
-      minY = Math.min(minY, cy - halfH);
-      maxY = Math.max(maxY, cy + halfH);
+      minY = Math.min(minY, cy + bounds.minY);
+      maxY = Math.max(maxY, cy + bounds.maxY);
     }
     const requiredH = maxY - minY + (designGap ?? 0.25) * 2;
     return GANGSHEET_HEIGHTS.find(h => h >= requiredH) ?? null;
@@ -1788,11 +1806,10 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       baseNy = (scaledH / 2) / effectiveAbH;
     } else {
       const occupied: { left: number; top: number; right: number; bottom: number }[] = existingDesigns.map(d => {
-        const dw = d.widthInches * d.transform.s;
-        const dh = getEffectiveHeight(d);
         const cx = d.transform.nx * currentAbW;
         const cy = d.transform.ny * effectiveAbH;
-        return { left: cx - dw / 2, top: cy - dh / 2, right: cx + dw / 2, bottom: cy + dh / 2 };
+        const bounds = getRotatedBounds(d);
+        return { left: cx + bounds.minX, top: cy + bounds.minY, right: cx + bounds.maxX, bottom: cy + bounds.maxY };
       });
 
       let placed = false;
