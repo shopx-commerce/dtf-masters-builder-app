@@ -724,39 +724,57 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         if (clampedS !== t.s) clamped = { ...t, s: clampedS };
       }
 
+      const selDesign = designs.find(d => d.id === selectedDesignId);
+      const hasPrintStamp = selDesign?.printFileName ?? false;
+      const scaledH = hi * clamped.s;
+      const stampExtra = hasPrintStamp ? 0.1 + scaledH * 0.05 : 0;
+      const stampExtraPx = (stampExtra / artboardHeight) * canvas.height;
+
       const rect = computeLayerRect(iw, ih, clamped, canvas.width, canvas.height, artboardWidth, artboardHeight, wi, hi);
       const rad = (clamped.rotation * Math.PI) / 180;
-      const cos = Math.abs(Math.cos(rad));
-      const sin = Math.abs(Math.sin(rad));
-      const rotW = rect.width * cos + rect.height * sin;
-      const rotH = rect.width * sin + rect.height * cos;
+      const cosA = Math.cos(rad);
+      const sinA = Math.sin(rad);
+      const hw = rect.width / 2;
+      const hh = rect.height / 2;
+      const corners = [
+        { x: -hw, y: -hh },
+        { x:  hw, y: -hh },
+        { x:  hw, y:  hh + stampExtraPx },
+        { x: -hw, y:  hh + stampExtraPx },
+      ];
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (const c of corners) {
+        const rx = c.x * cosA - c.y * sinA;
+        const ry = c.x * sinA + c.y * cosA;
+        if (rx < minX) minX = rx;
+        if (rx > maxX) maxX = rx;
+        if (ry < minY) minY = ry;
+        if (ry > maxY) maxY = ry;
+      }
 
       const cx = clamped.nx * canvas.width;
       const cy = clamped.ny * canvas.height;
-      const halfW = rotW / 2;
-      const halfH = rotH / 2;
 
       let newCx = cx;
       let newCy = cy;
 
-      // If the design fits within the artboard, clamp normally.
-      // If it's too large, allow positioning anywhere within the artboard
-      // center range so the user can still drag it.
-      if (rotW <= canvas.width) {
-        if (cx - halfW < 0) newCx = halfW;
-        if (cx + halfW > canvas.width) newCx = canvas.width - halfW;
+      const totalW = maxX - minX;
+      const totalH = maxY - minY;
+      if (totalW <= canvas.width) {
+        if (cx + minX < 0) newCx = -minX;
+        if (cx + maxX > canvas.width) newCx = canvas.width - maxX;
       } else {
-        newCx = Math.max(canvas.width - halfW, Math.min(halfW, cx));
+        newCx = Math.max(canvas.width - maxX, Math.min(-minX, cx));
       }
-      if (rotH <= canvas.height) {
-        if (cy - halfH < 0) newCy = halfH;
-        if (cy + halfH > canvas.height) newCy = canvas.height - halfH;
+      if (totalH <= canvas.height) {
+        if (cy + minY < 0) newCy = -minY;
+        if (cy + maxY > canvas.height) newCy = canvas.height - maxY;
       } else {
-        newCy = Math.max(canvas.height - halfH, Math.min(halfH, cy));
+        newCy = Math.max(canvas.height - maxY, Math.min(-minY, cy));
       }
 
       return { ...clamped, nx: newCx / canvas.width, ny: newCy / canvas.height };
-    }, [imageInfo, artboardWidth, artboardHeight, resizeSettings.widthInches, resizeSettings.heightInches, getMaxScaleForArtboard]);
+    }, [imageInfo, artboardWidth, artboardHeight, resizeSettings.widthInches, resizeSettings.heightInches, getMaxScaleForArtboard, designs, selectedDesignId]);
 
     const overlappingDesignsRef = useRef(overlappingDesigns);
     overlappingDesignsRef.current = overlappingDesigns;
@@ -1411,17 +1429,26 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         transformRef.current = newTransform;
         onTransformChangeRef.current?.(newTransform);
 
-        // Bottom-edge expand detection
         if (canvas && onExpandArtboard) {
           const selDesign = designs.find(d => d.id === selectedDesignId);
           if (selDesign) {
             const wi = selDesign.widthInches * newTransform.s;
             const hi = selDesign.heightInches * newTransform.s;
+            const stampEx = selDesign.printFileName ? 0.1 + hi * 0.05 : 0;
             const rad = (newTransform.rotation * Math.PI) / 180;
-            const cosR = Math.abs(Math.cos(rad));
-            const sinR = Math.abs(Math.sin(rad));
-            const rotH = wi * sinR + hi * cosR;
-            const bottomEdge = newTransform.ny + (rotH / 2) / artboardHeight;
+            const cosA = Math.cos(rad);
+            const sinA = Math.sin(rad);
+            const hw2 = wi / 2, hh2 = hi / 2;
+            const stampCorners = [
+              { x: -hw2, y: -hh2 }, { x: hw2, y: -hh2 },
+              { x: hw2, y: hh2 + stampEx }, { x: -hw2, y: hh2 + stampEx },
+            ];
+            let maxRy = -Infinity;
+            for (const c of stampCorners) {
+              const ry = c.x * sinA + c.y * cosA;
+              if (ry > maxRy) maxRy = ry;
+            }
+            const bottomEdge = newTransform.ny + maxRy / artboardHeight;
 
             const expandThreshold = 1 - 2 / artboardHeight;
             if (bottomEdge >= expandThreshold) {
