@@ -1722,12 +1722,9 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
 
   const applyImageDirectly = useCallback((newImageInfo: ImageInfo, widthInches: number, heightInches: number, alphaThresholded?: boolean) => {
     saveSnapshot();
-    const currentDesignCount = designsRef.current.length;
-    const isFirstDesign = currentDesignCount === 0;
-    const offset = currentDesignCount * 0.05;
-
     const currentAbH = artboardHeightRef.current;
     const currentAbW = artboardWidthRef.current;
+    const currentDesignCount = designsRef.current.length;
     let effectiveAbH = currentAbH;
     const widthScale = Math.min(1, currentAbW / widthInches);
     const fittedHeight = heightInches * widthScale;
@@ -1779,15 +1776,11 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       });
     }
 
-    let baseNx = 0.5;
-    let baseNy = 0.5;
-    const previewCanvas = canvasRef.current as any;
-    if (!isFirstDesign && previewCanvas?.getViewportCenterNormalized) {
-      const vc = previewCanvas.getViewportCenterNormalized();
-      baseNx = vc.nx;
-      baseNy = vc.ny;
-    }
-    const newTransform = { nx: Math.min(baseNx + offset, 0.95), ny: Math.min(baseNy + offset, 0.95), s: initialS, rotation: 0 };
+    const scaledW = widthInches * initialS;
+    const scaledH = heightInches * initialS;
+    const baseNx = (scaledW / 2) / currentAbW;
+    const baseNy = (scaledH / 2) / effectiveAbH;
+    const newTransform = { nx: Math.min(baseNx, 0.95), ny: Math.min(baseNy, 0.95), s: initialS, rotation: 0 };
 
     setImageInfo(newImageInfo);
     setDesignTransform(newTransform);
