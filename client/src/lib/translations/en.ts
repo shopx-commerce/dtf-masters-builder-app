@@ -61,6 +61,7 @@ export const en: Record<string, string> = {
   "editor.alignBL": "Align Bottom Left",
   "editor.alignBR": "Align Bottom Right",
   "editor.duplicate": "Duplicate (Ctrl+D)",
+  "editor.duplicateArrange": "Duplicate & Arrange",
   "editor.delete": "Delete (Del)",
   "editor.cleanAlpha": "Pixel Clean",
   "editor.cleanAlphaTitle": "Remove Semi Transparencies from selected design(s)",

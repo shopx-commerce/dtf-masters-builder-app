@@ -245,6 +245,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
   const [artboardWidth, setArtboardWidth] = useState(profile.artboardWidth);
   const [artboardHeight, setArtboardHeight] = useState(profile.gangsheetHeights[0] ?? 12);
   const [designGap, setDesignGap] = useState<number | undefined>(0.25);
+  const [duplicateCount, setDuplicateCount] = useState(1);
   const [designTransform, setDesignTransform] = useState<ImageTransform>({ nx: 0.5, ny: 0.5, s: 1, rotation: 0 });
   const [designs, setDesigns] = useState<DesignItem[]>([]);
   const [selectedDesignId, setSelectedDesignId] = useState<string | null>(null);
@@ -813,6 +814,29 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     saveSnapshot();
     setDesigns(prev => [...prev, newDesign]);
     setSelectedDesignId(newId);
+  }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight]);
+
+  const handleDuplicateAndArrange = useCallback((count: number) => {
+    if (!selectedDesignId || count < 1) return;
+    const design = designs.find(d => d.id === selectedDesignId);
+    if (!design) return;
+    const baseName = design.name.replace(/ copy( \d+)?$/, '');
+    const newDesigns: DesignItem[] = [];
+    for (let i = 0; i < count; i++) {
+      const newId = crypto.randomUUID();
+      const offsetT = { ...design.transform, nx: design.transform.nx + 0.03 * (i + 1), ny: design.transform.ny };
+      const { nx, ny } = clampDesignToArtboard({ ...design, transform: offsetT }, artboardWidth, artboardHeight);
+      newDesigns.push({
+        ...design,
+        id: newId,
+        name: baseName,
+        transform: { ...design.transform, nx, ny },
+        printFileName: false,
+      });
+    }
+    saveSnapshot();
+    setDesigns(prev => [...prev, ...newDesigns]);
+    setSelectedDesignId(newDesigns[newDesigns.length - 1].id);
     requestAnimationFrame(() => {
       handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true });
     });
@@ -858,7 +882,6 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     saveSnapshot();
     setDesigns(prev => [...prev, newDesign]);
     setSelectedDesignId(newId);
-    setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true }), 0);
   }, [designs, saveSnapshot, artboardWidth, artboardHeight]);
 
   const handleRemoveOneCopy = useCallback((baseName: string, sizeKey: string) => {
@@ -1787,6 +1810,9 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     };
     setDesigns(prev => [...prev, newDesignItem]);
     setSelectedDesignId(newDesignId);
+    requestAnimationFrame(() => {
+      handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true });
+    });
   }, [saveSnapshot, toast]);
 
   const handleFallbackImage = useCallback(async (
@@ -2918,6 +2944,29 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                     <Copy className="w-3 h-3" />
                     {t("editor.duplicate").replace(/ \(.*/, '')}
                   </button>
+                  <input
+                    type="number"
+                    min={1}
+                    max={99}
+                    value={duplicateCount}
+                    onChange={(e) => setDuplicateCount(Math.max(1, Math.min(99, parseInt(e.target.value) || 1)))}
+                    disabled={!selectedDesignId}
+                    className="w-10 h-[28px] lg:h-[24px] text-center text-[11px] border border-gray-300 rounded bg-white outline-none focus:border-cyan-500 disabled:opacity-30 disabled:pointer-events-none"
+                    title="Number of copies"
+                  />
+                  <button
+                    onClick={() => handleDuplicateAndArrange(duplicateCount)}
+                    disabled={!selectedDesignId}
+                    className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
+                      selectedDesignId
+                        ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
+                        : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+                    }`}
+                    title={t("editor.duplicateArrange")}
+                  >
+                    <Copy className="w-3 h-3" />
+                    {t("editor.duplicateArrange")}
+                  </button>
                 </div>
               )}
             </div>
@@ -3020,19 +3069,44 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                   </span>
                 </div>
                 {isMobile && (
-                  <button
-                    onClick={handleDuplicateDesign}
-                    disabled={!selectedDesignId}
-                    className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] ml-auto ${
-                      selectedDesignId
-                        ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#7C3AED] border border-[#CBD5E1] shadow-none'
-                        : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
-                    }`}
-                    title={t("editor.duplicate")}
-                  >
-                    <Copy className="w-3 h-3" />
-                    {t("editor.duplicate").replace(/ \(.*/, '')}
-                  </button>
+                  <div className="flex items-center gap-1 ml-auto">
+                    <button
+                      onClick={handleDuplicateDesign}
+                      disabled={!selectedDesignId}
+                      className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] ${
+                        selectedDesignId
+                          ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#7C3AED] border border-[#CBD5E1] shadow-none'
+                          : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+                      }`}
+                      title={t("editor.duplicate")}
+                    >
+                      <Copy className="w-3 h-3" />
+                      {t("editor.duplicate").replace(/ \(.*/, '')}
+                    </button>
+                    <input
+                      type="number"
+                      min={1}
+                      max={99}
+                      value={duplicateCount}
+                      onChange={(e) => setDuplicateCount(Math.max(1, Math.min(99, parseInt(e.target.value) || 1)))}
+                      disabled={!selectedDesignId}
+                      className="w-10 h-[32px] text-center text-[11px] border border-gray-300 rounded bg-white outline-none focus:border-cyan-500 disabled:opacity-30 disabled:pointer-events-none"
+                      title="Number of copies"
+                    />
+                    <button
+                      onClick={() => handleDuplicateAndArrange(duplicateCount)}
+                      disabled={!selectedDesignId}
+                      className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[10px] font-medium shadow-sm min-h-[36px] ${
+                        selectedDesignId
+                          ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
+                          : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+                      }`}
+                      title={t("editor.duplicateArrange")}
+                    >
+                      <Copy className="w-3 h-3" />
+                      {t("editor.duplicateArrange")}
+                    </button>
+                  </div>
                 )}
               </>
             )}
@@ -3186,6 +3260,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         >
           {([
             { icon: Copy, label: t("editor.duplicate").replace(/ \(.*/, ''), shortcut: 'Ctrl+D', action: () => { handleDuplicateDesign(); setContextMenu(null); }, disabled: false },
+            { icon: Copy, label: t("editor.duplicateArrange") + ` (${duplicateCount})`, shortcut: '', action: () => { handleDuplicateAndArrange(duplicateCount); setContextMenu(null); }, disabled: false },
             { icon: Trash2, label: t("editor.delete").replace(/ \(.*/, ''), shortcut: 'Del', action: () => { if (selectedDesignIds.size > 1) handleDeleteMulti(selectedDesignIds); else handleDeleteDesign(contextMenu.designId); setContextMenu(null); }, disabled: false },
             null,
             { icon: RotateCw, label: t("editor.rotate").replace(/ \(.*/, ''), shortcut: 'R', action: () => { handleRotate90(); setContextMenu(null); }, disabled: false },

@@ -61,6 +61,7 @@ export const fr: Record<string, string> = {
   "editor.alignBL": "Aligner Bas Gauche",
   "editor.alignBR": "Aligner Bas Droite",
   "editor.duplicate": "Dupliquer (Ctrl+D)",
+  "editor.duplicateArrange": "Dupliquer et Organiser",
   "editor.delete": "Supprimer (Suppr)",
   "editor.cleanAlpha": "Nettoyage Pixel",
   "editor.cleanAlphaTitle": "Supprimer les semi-transparences des designs sélectionnés",

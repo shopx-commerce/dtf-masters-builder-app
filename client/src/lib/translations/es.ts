@@ -61,6 +61,7 @@ export const es: Record<string, string> = {
   "editor.alignBL": "Alinear Abajo Izquierda",
   "editor.alignBR": "Alinear Abajo Derecha",
   "editor.duplicate": "Duplicar (Ctrl+D)",
+  "editor.duplicateArrange": "Duplicar y Organizar",
   "editor.delete": "Eliminar (Del)",
   "editor.cleanAlpha": "Limpieza Píxel",
   "editor.cleanAlphaTitle": "Eliminar semi-transparencias de los diseños seleccionados",
