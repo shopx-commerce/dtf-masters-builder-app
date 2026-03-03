@@ -1778,8 +1778,63 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
 
     const scaledW = widthInches * initialS;
     const scaledH = heightInches * initialS;
-    const baseNx = (scaledW / 2) / currentAbW;
-    const baseNy = (scaledH / 2) / effectiveAbH;
+    const gap = 0.25;
+
+    let baseNx: number;
+    let baseNy: number;
+    const existingDesigns = designsRef.current;
+    if (existingDesigns.length === 0) {
+      baseNx = (scaledW / 2) / currentAbW;
+      baseNy = (scaledH / 2) / effectiveAbH;
+    } else {
+      const occupied: { left: number; top: number; right: number; bottom: number }[] = existingDesigns.map(d => {
+        const dw = d.widthInches * d.transform.s;
+        const dh = getEffectiveHeight(d);
+        const cx = d.transform.nx * currentAbW;
+        const cy = d.transform.ny * effectiveAbH;
+        return { left: cx - dw / 2, top: cy - dh / 2, right: cx + dw / 2, bottom: cy + dh / 2 };
+      });
+
+      let placed = false;
+      const sortedRows: number[] = [0, ...occupied.map(r => r.bottom + gap)].sort((a, b) => a - b);
+      const uniqueRows = [...new Set(sortedRows.map(v => Math.round(v * 100) / 100))];
+
+      for (const tryY of uniqueRows) {
+        const candidateTop = tryY;
+        const candidateBottom = tryY + scaledH;
+        if (candidateBottom > effectiveAbH + 0.01) continue;
+
+        const sortedCols: number[] = [0, ...occupied.map(r => r.right + gap)].sort((a, b) => a - b);
+        const uniqueCols = [...new Set(sortedCols.map(v => Math.round(v * 100) / 100))];
+
+        for (const tryX of uniqueCols) {
+          const candidateLeft = tryX;
+          const candidateRight = tryX + scaledW;
+          if (candidateRight > currentAbW + 0.01) continue;
+
+          const overlaps = occupied.some(r =>
+            candidateLeft < r.right + gap &&
+            candidateRight > r.left - gap &&
+            candidateTop < r.bottom + gap &&
+            candidateBottom > r.top - gap
+          );
+          if (!overlaps) {
+            baseNx = (candidateLeft + scaledW / 2) / currentAbW;
+            baseNy = (candidateTop + scaledH / 2) / effectiveAbH;
+            placed = true;
+            break;
+          }
+        }
+        if (placed) break;
+      }
+
+      if (!placed) {
+        const maxBottom = Math.max(...occupied.map(r => r.bottom));
+        baseNx = (scaledW / 2) / currentAbW;
+        baseNy = (maxBottom + gap + scaledH / 2) / effectiveAbH;
+      }
+    }
+
     const newTransform = { nx: Math.min(baseNx, 0.95), ny: Math.min(baseNy, 0.95), s: initialS, rotation: 0 };
 
     setImageInfo(newImageInfo);
@@ -1803,9 +1858,6 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     };
     setDesigns(prev => [...prev, newDesignItem]);
     setSelectedDesignId(newDesignId);
-    requestAnimationFrame(() => {
-      handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true });
-    });
   }, [saveSnapshot, toast]);
 
   const handleFallbackImage = useCallback(async (
