@@ -600,14 +600,6 @@ export function extractColorsFromImageAsync(image: HTMLImageElement, maxColors: 
       if (!worker) { resolve(extractDominantColors(imageData, maxColors)); return; }
 
       const buffer = imageData.data.buffer.slice(0);
-      const timeout = setTimeout(() => {
-        try {
-          resolve(extractDominantColors(ctx.getImageData(0, 0, w, h), maxColors));
-        } catch {
-          resolve(extractDominantColors(imageData, maxColors));
-        }
-      }, 10000);
-
       const handler = (e: MessageEvent) => {
         if (e.data.type === 'result') {
           clearTimeout(timeout);
@@ -615,6 +607,14 @@ export function extractColorsFromImageAsync(image: HTMLImageElement, maxColors: 
           resolve(e.data.colors);
         }
       };
+      const timeout = setTimeout(() => {
+        worker.removeEventListener('message', handler);
+        try {
+          resolve(extractDominantColors(ctx.getImageData(0, 0, w, h), maxColors));
+        } catch {
+          resolve(extractDominantColors(imageData, maxColors));
+        }
+      }, 10000);
       worker.addEventListener('message', handler);
       worker.postMessage({ type: 'extract', pixelBuffer: buffer, width: w, height: h, maxColors, minPercentage: 0.1 }, [buffer]);
     } catch (e) {

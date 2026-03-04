@@ -374,7 +374,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const transformRef = useRef<ImageTransform>(designTransform || {nx: 0.5, ny: 0.5, s: 1, rotation: 0});
     const onTransformChangeRef = useRef(onTransformChange);
     onTransformChangeRef.current = onTransformChange;
-    const handleInteractionMoveRef = useRef<((cx: number, cy: number) => void) | null>(null);
+    const handleInteractionMoveRef = useRef<((cx: number, cy: number, alt?: boolean) => void) | null>(null);
     const handleInteractionEndRef = useRef<(() => void) | null>(null);
 
     const autoPanRafRef = useRef<number | null>(null);
@@ -399,6 +399,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const multiGroupCenterBufferRef = useRef<{x: number; y: number}>({x: 0, y: 0});
 
     const overlapCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const canvasRectCacheRef = useRef<DOMRect | null>(null);
+    const moveRafRef = useRef<number | null>(null);
+    const pendingMoveRef = useRef<{ cx: number; cy: number; alt?: boolean } | null>(null);
 
     const bottomGlowRef = useRef(0);
     const expandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -688,7 +692,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const canvasToLocal = useCallback((clientX: number, clientY: number) => {
       const canvas = canvasRef.current;
       if (!canvas) return { x: 0, y: 0 };
-      const canvasRect = canvas.getBoundingClientRect();
+      const canvasRect = canvasRectCacheRef.current || canvas.getBoundingClientRect();
       const x = ((clientX - canvasRect.left) / canvasRect.width) * canvas.width;
       const y = ((clientY - canvasRect.top) / canvasRect.height) * canvas.height;
       return { x, y };
@@ -957,17 +961,21 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       function runMainThreadOverlap() {
         try {
         const needed = Array.from(neededSet);
+        const mtScale = 0.5;
+        const mtw = Math.max(30, Math.round(sw * mtScale));
+        const mth = Math.max(15, Math.round(sh * mtScale));
         const alphaBuffers = new Map<number, Uint8ClampedArray>();
+        const offscreen = document.createElement('canvas');
+        offscreen.width = mtw;
+        offscreen.height = mth;
+        const octx = offscreen.getContext('2d', { willReadFrequently: true });
+        if (!octx) return;
         for (const idx of needed) {
           const d = designRects[idx].design;
-          const offscreen = document.createElement('canvas');
-          offscreen.width = sw;
-          offscreen.height = sh;
-          const octx = offscreen.getContext('2d');
-          if (!octx) continue;
+          octx.clearRect(0, 0, mtw, mth);
           const rect = computeLayerRect(
             d.imageInfo.image.width, d.imageInfo.image.height,
-            d.transform, sw, sh,
+            d.transform, mtw, mth,
             artboardWidth, artboardHeight,
             d.widthInches, d.heightInches,
           );
@@ -980,12 +988,12 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
             octx.drawImage(d.imageInfo.image, -rect.width / 2, -rect.height / 2, rect.width, rect.height);
             if (d.printFileName) {
               const stampInches = 0.1 + d.heightInches * d.transform.s * 0.05;
-              const stampPx = (stampInches / artboardHeight) * sh;
+              const stampPx = (stampInches / artboardHeight) * mth;
               octx.fillStyle = 'rgba(0,0,0,1)';
               octx.fillRect(-rect.width / 2, rect.height / 2, rect.width, stampPx);
             }
             octx.restore();
-            alphaBuffers.set(idx, octx.getImageData(0, 0, sw, sh).data);
+            alphaBuffers.set(idx, new Uint8ClampedArray(octx.getImageData(0, 0, mtw, mth).data));
           } catch { octx.restore(); continue; }
         }
 
@@ -997,11 +1005,6 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           let found = false;
           for (let p = 3; p < a.length; p += 16) {
             if (a[p] > 20 && b[p] > 20) { found = true; break; }
-          }
-          if (!found) {
-            for (let p = 3; p < a.length; p += 4) {
-              if (a[p] > 20 && b[p] > 20) { found = true; break; }
-            }
           }
           if (found) {
             overlapping.add(designRects[i].id);
@@ -1306,7 +1309,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           altDragDuplicatedRef.current = true;
           onDuplicateSelected?.();
         }
-        const canvasRect = canvas.getBoundingClientRect();
+        if (!canvasRectCacheRef.current) canvasRectCacheRef.current = canvas.getBoundingClientRect();
+        const canvasRect = canvasRectCacheRef.current;
         const dx = clientX - multiDragStartRef.current.x;
         const dy = clientY - multiDragStartRef.current.y;
         const dnx = dx / canvasRect.width;
@@ -1371,7 +1375,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           altDragDuplicatedRef.current = true;
           onDuplicateSelected?.();
         }
-        const canvasRect = canvas.getBoundingClientRect();
+        if (!canvasRectCacheRef.current) canvasRectCacheRef.current = canvas.getBoundingClientRect();
+        const canvasRect = canvasRectCacheRef.current;
         const dx = clientX - dragStartMouseRef.current.x;
         const dy = clientY - dragStartMouseRef.current.y;
         const dnx = dx / canvasRect.width;
@@ -1427,7 +1432,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
         const newTransform = clampTransformToArtboard(unclamped);
         transformRef.current = newTransform;
-        onTransformChangeRef.current?.(newTransform);
+        renderRef.current?.();
 
         if (canvas && onExpandArtboard) {
           const selDesign = designs.find(d => d.id === selectedDesignId);
@@ -1478,7 +1483,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         const unclamped = { ...transformRef.current, s: newS };
         const newTransform = clampTransformToArtboard(unclamped, { clampScale: true });
         transformRef.current = newTransform;
-        onTransformChangeRef.current?.(newTransform);
+        renderRef.current?.();
       } else if (isRotatingRef.current) {
         const local = canvasToLocal(clientX, clientY);
         const rc = rotateStartCanvasCenterRef.current;
@@ -1492,16 +1497,18 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         const rotated = { ...transformRef.current, rotation: Math.round(newRot) };
         const newTransform = clampTransformToArtboard(rotated);
         transformRef.current = newTransform;
-        onTransformChangeRef.current?.(newTransform);
+        renderRef.current?.();
       }
     }, [onTransformChange, canvasToLocal, clampTransformToArtboard, getMaxScaleForArtboard, toast, onMultiDragDelta, onMultiResizeDelta, onMultiRotateDelta, onDuplicateSelected, startBottomGlow, stopBottomGlow, startAutoPan, designs, selectedDesignId, artboardHeight]);
     handleInteractionMoveRef.current = handleInteractionMove;
 
     useEffect(() => {
       if (scrollDragRef.current || isPanningRef.current) return;
+      if (isDraggingRef.current || isResizingRef.current || isRotatingRef.current || isMultiDragRef.current || isMultiResizeRef.current || isMultiRotateRef.current) return;
       if (overlapCheckTimerRef.current) clearTimeout(overlapCheckTimerRef.current);
       overlapCheckTimerRef.current = setTimeout(() => {
         if (scrollDragRef.current || isPanningRef.current) return;
+        if (isDraggingRef.current || isResizingRef.current || isRotatingRef.current || isMultiDragRef.current || isMultiResizeRef.current || isMultiRotateRef.current) return;
         checkPixelOverlap();
       }, 150);
       return () => { if (overlapCheckTimerRef.current) clearTimeout(overlapCheckTimerRef.current); };
@@ -1509,6 +1516,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
     const handleInteractionEnd = useCallback(() => {
       stopAutoPan();
+      if (moveRafRef.current != null) { cancelAnimationFrame(moveRafRef.current); moveRafRef.current = null; }
+      const pm = pendingMoveRef.current;
+      pendingMoveRef.current = null;
+      if (pm) handleInteractionMoveRef.current?.(pm.cx, pm.cy, pm.alt);
+      canvasRectCacheRef.current = null;
 
       if (isMarqueeRef.current) {
         isMarqueeRef.current = false;
@@ -1572,6 +1584,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       altKeyAtDragStartRef.current = false;
       snapGuidesRef.current = [];
       stopBottomGlow();
+      if (wasInteracting) onTransformChangeRef.current?.(transformRef.current);
       if (canvasAreaRef.current) canvasAreaRef.current.style.cursor = getIdleCursor();
       checkPixelOverlap();
       if (wasInteracting) onInteractionEnd?.();
@@ -1856,11 +1869,19 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         const rawPx = panStartRef.current.px + dx / zoom;
         const rawPy = panStartRef.current.py + dy / zoom;
         const clamped = clampPanValue(rawPx, rawPy, zoom);
-        setPanX(clamped.x);
-        setPanY(clamped.y);
+        queuePanStateCommit(clamped.x, clamped.y);
         return;
       }
-      handleInteractionMove(e.touches[0].clientX, e.touches[0].clientY);
+      pendingMoveRef.current = { cx: e.touches[0].clientX, cy: e.touches[0].clientY };
+      if (moveRafRef.current == null) {
+        moveRafRef.current = requestAnimationFrame(() => {
+          moveRafRef.current = null;
+          const pm = pendingMoveRef.current;
+          if (!pm) return;
+          pendingMoveRef.current = null;
+          handleInteractionMove(pm.cx, pm.cy);
+        });
+      }
     }, [handleInteractionMove, zoom, clampPanValue]);
 
     const handleTouchEnd = useCallback(() => {
@@ -2080,11 +2101,22 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           const vh = el ? el.clientHeight : dims.height;
           const maxPanX = Math.max(0, dims.width / 2 - vw / (2 * z));
           const maxPanY = Math.max(0, dims.height / 2 - vh / (2 * z));
-          setPanX(Math.max(-maxPanX, Math.min(maxPanX, rawPx)));
-          setPanY(Math.max(-maxPanY, Math.min(maxPanY, rawPy)));
+          queuePanStateCommit(
+            Math.max(-maxPanX, Math.min(maxPanX, rawPx)),
+            Math.max(-maxPanY, Math.min(maxPanY, rawPy)),
+          );
           return;
         }
-        handleInteractionMoveRef.current?.(e.clientX, e.clientY, e.altKey);
+        pendingMoveRef.current = { cx: e.clientX, cy: e.clientY, alt: e.altKey };
+        if (moveRafRef.current == null) {
+          moveRafRef.current = requestAnimationFrame(() => {
+            moveRafRef.current = null;
+            const pm = pendingMoveRef.current;
+            if (!pm) return;
+            pendingMoveRef.current = null;
+            handleInteractionMoveRef.current?.(pm.cx, pm.cy, pm.alt);
+          });
+        }
       };
       const onGlobalUp = () => {
         const active = isPanningRef.current || isDraggingRef.current || isResizingRef.current || isRotatingRef.current || isMultiDragRef.current || isMultiResizeRef.current || isMultiRotateRef.current || isMarqueeRef.current;
@@ -2259,9 +2291,13 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         requestAnimationFrame(() => { minZoomRef.current = getMinZoom(); });
       };
       updateSize();
-      const observer = new ResizeObserver(updateSize);
+      let resizeRafId: number | null = null;
+      const observer = new ResizeObserver(() => {
+        if (resizeRafId != null) return;
+        resizeRafId = requestAnimationFrame(() => { resizeRafId = null; updateSize(); });
+      });
       observer.observe(wrapper);
-      return () => observer.disconnect();
+      return () => { observer.disconnect(); if (resizeRafId != null) cancelAnimationFrame(resizeRafId); };
     }, [artboardWidth, artboardHeight]);
     
     useImperativeHandle(ref, () => {
@@ -2705,7 +2741,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const drawImageWithResizePreview = (ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number) => {
       if (!imageInfo) return;
 
-      const t = designTransform || { nx: 0.5, ny: 0.5, s: 1, rotation: 0 };
+      const t = transformRef.current;
       const rect = computeLayerRect(
         imageInfo.image.width, imageInfo.image.height,
         t,

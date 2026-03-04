@@ -148,14 +148,14 @@ export default function UploadSection({ onImageUpload, onBatchStart, imageInfo }
         `}
         style={isEmptyState ? {
           background: currentColor.bg,
-          boxShadow: `0 0 50px ${currentColor.glow}, 0 0 100px ${currentColor.glow}, 0 8px 32px rgba(0,0,0,0.2)`,
+          boxShadow: `0 0 30px ${currentColor.glow}, 0 8px 24px rgba(0,0,0,0.15)`,
           transition: 'background 1.5s ease-in-out, box-shadow 1.5s ease-in-out',
         } : undefined}
       >
         <div className={`flex items-center ${isEmptyState ? 'flex-col' : 'gap-1.5'}`}>
           {isEmptyState && (
             <>
-              <div className="w-20 h-20 rounded-2xl bg-white/30 backdrop-blur-sm shadow-inner flex items-center justify-center mb-5 border border-white/40">
+              <div className="w-20 h-20 rounded-2xl bg-white/30 shadow-inner flex items-center justify-center mb-5 border border-white/40">
                 <Upload className="w-10 h-10 text-white drop-shadow-lg" />
               </div>
               <p className="font-bold text-white text-2xl mb-1 drop-shadow-sm tracking-wide">
