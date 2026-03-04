@@ -3127,14 +3127,15 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                       effectiveDPI < 198
                         ? 'text-amber-600 bg-amber-100 border border-amber-400'
                         : effectiveDPI < 277
-                          ? 'text-amber-600 bg-amber-100 border border-amber-400'
-                          : 'text-emerald-600 bg-emerald-100 border border-emerald-700'
+                          ? 'text-green-700 bg-green-100 border border-green-500'
+                          : 'bg-black border border-green-400'
                     }`}
+                    style={effectiveDPI >= 277 ? { color: '#39FF14' } : undefined}
                     title={t("editor.effectiveRes", { dpi: effectiveDPI })}
                   >
                     <span>{effectiveDPI} DPI</span>
                     <span className="text-[8px] font-medium opacity-90 hidden sm:inline">
-                      {effectiveDPI < 198 ? 'Low Res' : effectiveDPI < 277 ? 'Okay to print' : 'Excellent'}
+                      {effectiveDPI < 198 ? 'Low Res' : effectiveDPI < 277 ? 'Medium' : 'Excellent'}
                     </span>
                   </span>
                 </div>
