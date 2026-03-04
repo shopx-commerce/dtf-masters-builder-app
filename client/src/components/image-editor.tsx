@@ -822,24 +822,27 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     return false;
   }, [designs, artboardWidth, artboardHeight]);
 
-  const handleDuplicateDesign = useCallback(() => {
-    if (!selectedDesignId) return;
+  const handleDuplicateDesign = useCallback((count: number = 1) => {
+    if (!selectedDesignId || count < 1) return;
     const design = designs.find(d => d.id === selectedDesignId);
     if (!design) return;
-    const newId = crypto.randomUUID();
     const baseName = design.name.replace(/ copy( \d+)?$/, '');
-    const offsetT = { ...design.transform, nx: design.transform.nx + 0.03, ny: design.transform.ny };
-    const { nx, ny } = clampDesignToArtboard({ ...design, transform: offsetT }, artboardWidth, artboardHeight);
-    const newDesign: DesignItem = {
-      ...design,
-      id: newId,
-      name: baseName,
-      transform: { ...design.transform, nx, ny },
-      printFileName: false,
-    };
+    const newDesigns: DesignItem[] = [];
+    for (let i = 0; i < count; i++) {
+      const newId = crypto.randomUUID();
+      const offsetT = { ...design.transform, nx: design.transform.nx + 0.03 * (i + 1), ny: design.transform.ny };
+      const { nx, ny } = clampDesignToArtboard({ ...design, transform: offsetT }, artboardWidth, artboardHeight);
+      newDesigns.push({
+        ...design,
+        id: newId,
+        name: baseName,
+        transform: { ...design.transform, nx, ny },
+        printFileName: false,
+      });
+    }
     saveSnapshot();
-    setDesigns(prev => [...prev, newDesign]);
-    setSelectedDesignId(newId);
+    setDesigns(prev => [...prev, ...newDesigns]);
+    setSelectedDesignId(newDesigns[newDesigns.length - 1].id);
   }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight]);
 
   const handleDuplicateAndArrange = useCallback((count: number) => {
@@ -2999,7 +3002,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
               {!isMobile && (
                 <div className="flex items-center gap-1">
                   <button
-                    onClick={handleDuplicateDesign}
+                    onClick={() => handleDuplicateDesign(duplicateCount)}
                     disabled={!selectedDesignId}
                     className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
                       selectedDesignId
@@ -3138,7 +3141,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                 {isMobile && (
                   <div className="flex items-center gap-1 ml-auto">
                     <button
-                      onClick={handleDuplicateDesign}
+                      onClick={() => handleDuplicateDesign(duplicateCount)}
                       disabled={!selectedDesignId}
                       className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] ${
                         selectedDesignId
@@ -3326,7 +3329,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
           onClick={(e) => e.stopPropagation()}
         >
           {([
-            { icon: Copy, label: t("editor.duplicate").replace(/ \(.*/, ''), shortcut: 'Ctrl+D', action: () => { handleDuplicateDesign(); setContextMenu(null); }, disabled: false },
+            { icon: Copy, label: t("editor.duplicate").replace(/ \(.*/, '') + ` (${duplicateCount})`, shortcut: 'Ctrl+D', action: () => { handleDuplicateDesign(duplicateCount); setContextMenu(null); }, disabled: false },
             { icon: Copy, label: t("editor.duplicateArrange") + ` (${duplicateCount})`, shortcut: '', action: () => { handleDuplicateAndArrange(duplicateCount); setContextMenu(null); }, disabled: false },
             { icon: Trash2, label: t("editor.delete").replace(/ \(.*/, ''), shortcut: 'Del', action: () => { if (selectedDesignIds.size > 1) handleDeleteMulti(selectedDesignIds); else handleDeleteDesign(contextMenu.designId); setContextMenu(null); }, disabled: false },
             null,
