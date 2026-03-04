@@ -2673,7 +2673,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       >
         {isDragOver && (
           <div className="absolute inset-0 z-50 bg-blue-500/10 border-2 border-dashed border-blue-500 rounded-lg flex items-center justify-center pointer-events-none">
-            <div className="bg-white/90 backdrop-blur-sm rounded-xl px-8 py-6 shadow-lg text-center">
+            <div className="bg-white/95 rounded-xl px-8 py-6 shadow-lg text-center">
               <Plus className="w-10 h-10 text-blue-500 mx-auto mb-2" />
               <p className="text-blue-600 font-semibold text-lg">Drop files to add designs</p>
               <p className="text-gray-500 text-sm mt-1">PNG, JPG, WebP, or PDF</p>
@@ -2721,15 +2721,15 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       onDrop={handleDrop}
     >
       {isDragOver && (
-        <div className="absolute inset-0 z-50 bg-blue-500/10 border-2 border-dashed border-blue-500 rounded-lg flex items-center justify-center pointer-events-none">
-          <div className="bg-white/90 backdrop-blur-sm rounded-xl px-8 py-6 shadow-lg text-center">
-            <Plus className="w-10 h-10 text-blue-500 mx-auto mb-2" />
-            <p className="text-blue-600 font-semibold text-lg">Drop files to add designs</p>
-            <p className="text-gray-500 text-sm mt-1">PNG, JPG, WebP, or PDF</p>
+          <div className="absolute inset-0 z-50 bg-blue-500/10 border-2 border-dashed border-blue-500 rounded-lg flex items-center justify-center pointer-events-none">
+            <div className="bg-white/95 rounded-xl px-8 py-6 shadow-lg text-center">
+              <Plus className="w-10 h-10 text-blue-500 mx-auto mb-2" />
+              <p className="text-blue-600 font-semibold text-lg">Drop files to add designs</p>
+              <p className="text-gray-500 text-sm mt-1">PNG, JPG, WebP, or PDF</p>
+            </div>
           </div>
-        </div>
-      )}
-      <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
+        )}
+        <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
       {/* Left sidebar - Layers + Settings */}
       <div className="flex-shrink-0 w-full lg:w-[320px] xl:w-[340px] border-r border-gray-200 bg-white overflow-y-auto overflow-x-hidden">
         <div className="p-2.5 space-y-2">

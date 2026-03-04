@@ -36,6 +36,9 @@ export default function CropModal({
   const [crop, setCrop] = useState({ x: 0, y: 0, w: imgW, h: imgH });
   const [dragging, setDragging] = useState<string | null>(null);
   const dragStartRef = useRef<{ x: number; y: number; crop: typeof crop } | null>(null);
+  const cropRafRef = useRef<number | null>(null);
+  const pendingCropMoveRef = useRef<{ x: number; y: number } | null>(null);
+  const containerRectCacheRef = useRef<DOMRect | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -45,12 +48,17 @@ export default function CropModal({
 
   useEffect(() => {
     if (!open || !containerRef.current) return;
+    let rafId: number | null = null;
     const ro = new ResizeObserver((entries) => {
-      const el = entries[0]?.target as HTMLDivElement;
-      if (el) setContainerSize({ w: el.clientWidth, h: el.clientHeight });
+      if (rafId != null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        const el = entries[0]?.target as HTMLDivElement;
+        if (el) setContainerSize({ w: el.clientWidth, h: el.clientHeight });
+      });
     });
     ro.observe(containerRef.current);
-    return () => ro.disconnect();
+    return () => { ro.disconnect(); if (rafId != null) cancelAnimationFrame(rafId); };
   }, [open]);
 
   const scale = Math.min(
@@ -65,7 +73,7 @@ export default function CropModal({
 
   const toImgCoords = useCallback(
     (clientX: number, clientY: number) => {
-      const rect = containerRef.current?.getBoundingClientRect();
+      const rect = containerRectCacheRef.current || containerRef.current?.getBoundingClientRect();
       if (!rect) return { x: 0, y: 0 };
       const x = ((clientX - rect.left - offsetX) / dispW) * imgW;
       const y = ((clientY - rect.top - offsetY) / dispH) * imgH;
@@ -85,10 +93,11 @@ export default function CropModal({
 
   useEffect(() => {
     if (!dragging) return;
-    const onMove = (e: PointerEvent) => {
+    containerRectCacheRef.current = containerRef.current?.getBoundingClientRect() ?? null;
+    const processCropMove = (clientX: number, clientY: number) => {
       if (!dragStartRef.current) return;
       const start = dragStartRef.current;
-      const curr = toImgCoords(e.clientX, e.clientY);
+      const curr = toImgCoords(clientX, clientY);
       const startImg = toImgCoords(start.x, start.y);
       const dx = curr.x - startImg.x;
       const dy = curr.y - startImg.y;
@@ -150,7 +159,24 @@ export default function CropModal({
         setCrop({ x: c.x, y: c.y, w: Math.max(MIN, c.w + dx), h: c.h });
       }
     };
+    const onMove = (e: PointerEvent) => {
+      pendingCropMoveRef.current = { x: e.clientX, y: e.clientY };
+      if (cropRafRef.current == null) {
+        cropRafRef.current = requestAnimationFrame(() => {
+          cropRafRef.current = null;
+          const pm = pendingCropMoveRef.current;
+          if (!pm) return;
+          pendingCropMoveRef.current = null;
+          processCropMove(pm.x, pm.y);
+        });
+      }
+    };
     const onUp = () => {
+      if (cropRafRef.current != null) { cancelAnimationFrame(cropRafRef.current); cropRafRef.current = null; }
+      const pm = pendingCropMoveRef.current;
+      pendingCropMoveRef.current = null;
+      if (pm) processCropMove(pm.x, pm.y);
+      containerRectCacheRef.current = null;
       setDragging(null);
       dragStartRef.current = null;
     };
@@ -159,6 +185,7 @@ export default function CropModal({
     return () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      if (cropRafRef.current != null) cancelAnimationFrame(cropRafRef.current);
     };
   }, [dragging, imgW, imgH, toImgCoords]);
 
