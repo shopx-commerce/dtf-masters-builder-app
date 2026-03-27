@@ -3,7 +3,7 @@ import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 
 const app = express();
-// Keep request limits conservative; file uploads should use multipart/streaming paths.
+// Keep request limits conservative; file uploads should use multipart/streaming paths.  
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: false, limit: '5mb' }));
 
