@@ -1910,24 +1910,6 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       setPanY(0);
     }, [previewDims.height, previewDims.width]);
 
-    // Fit Width: zoom so the full artboard width fills the viewport, pan to top
-    const fitWidth = useCallback(() => {
-      const el = canvasAreaRef.current;
-      if (!el) return;
-      const availW = el.clientWidth - 24;
-      const vh = el.clientHeight;
-      const widthZoom = availW / Math.max(1, previewDims.width);
-      const newZoom = Math.max(minZoomRef.current, Math.min(zoomMaxRef.current, Math.round(widthZoom * 20) / 20));
-      // Pan so artboard top aligns with viewport top:
-      // (-h/2 + panY) * zoom = -vh/2  →  panY = h/2 - vh/(2*zoom)
-      const topPanY = previewDims.height / 2 - vh / (2 * newZoom);
-      const maxPanY = Math.max(0, previewDims.height / 2 - vh / (2 * newZoom));
-      const clampedPanY = Math.max(-maxPanY, Math.min(maxPanY, topPanY));
-      setZoom(newZoom);
-      setPanX(0);
-      setPanY(clampedPanY);
-    }, [previewDims.width, previewDims.height]);
-
     // Reset view to fit the full gangsheet in view
     const resetView = useCallback(() => {
       fitToView();
@@ -2161,19 +2143,17 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       };
     }, []);
 
-    const prevArtboardHeightRef = useRef(artboardHeight);
+    const prevArtboardSigRef = useRef<string | null>(null);
     useEffect(() => {
-      if (prevArtboardHeightRef.current !== artboardHeight) {
-        prevArtboardHeightRef.current = artboardHeight;
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          if (artboardHeight > artboardWidth * 2) {
-            fitWidth();
-          } else {
-            fitToView();
-          }
-        }));
-      }
-    }, [artboardHeight, artboardWidth, fitToView, fitWidth]);
+      const sig = `${artboardWidth},${artboardHeight}`;
+      if (prevArtboardSigRef.current === sig) return;
+      prevArtboardSigRef.current = sig;
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          fitToView();
+        }),
+      );
+    }, [artboardWidth, artboardHeight, fitToView]);
 
     useEffect(() => {
       const el = canvasAreaRef.current;
@@ -2496,7 +2476,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     }, [artboardWidth, artboardHeight]);
 
     useEffect(() => {
-      if (!canvasRef.current || (!imageInfo && designs.length === 0)) return;
+      if (!canvasRef.current) return;
 
       const doRender = () => {
       try {
@@ -2942,10 +2922,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           className="flex-1 min-h-0 flex items-center justify-center bg-gray-100 p-3 relative overflow-hidden cursor-default"
           style={{ userSelect: 'none', touchAction: 'none' }}
         >
-          <div className="relative" style={{ paddingBottom: Math.abs(zoom - 1) < 0.03 ? 16 : 0, paddingRight: Math.abs(zoom - 1) < 0.03 ? 14 : 0 }}>
+          <div className="relative" style={{ paddingBottom: 16, paddingRight: 14 }}>
             <div 
               ref={containerRef}
-              className={`relative flex items-center justify-center ${Math.abs(zoom - 1) < 0.03 ? 'rounded-lg border border-gray-300' : ''}`}
+              className="relative flex items-center justify-center"
               style={{ 
                 width: previewDims.width,
                 height: previewDims.height,
@@ -2979,16 +2959,12 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
 
             </div>
-            {Math.abs(zoom - 1) < 0.03 && (
-              <div className="absolute bottom-0 left-0 right-3.5 flex justify-center pointer-events-none">
-                <span className={`text-gray-600 font-medium tracking-wide ${lang === 'en' ? 'text-[10px]' : 'text-[9px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
-              </div>
-            )}
-            {Math.abs(zoom - 1) < 0.03 && (
-              <div className="absolute right-0 top-0 bottom-4 flex items-center pointer-events-none">
-                <span className={`text-gray-600 font-medium tracking-wide ${lang === 'en' ? 'text-[10px]' : 'text-[9px]'}`} style={{ writingMode: 'vertical-rl' }}>{formatLength(artboardHeight, lang)}{lang === "en" ? '"' : ""}</span>
-              </div>
-            )}
+            <div className="absolute bottom-0 left-0 right-3.5 flex justify-center pointer-events-none">
+              <span className={`text-gray-600 font-medium tracking-wide ${lang === 'en' ? 'text-[10px]' : 'text-[9px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
+            </div>
+            <div className="absolute right-0 top-0 bottom-4 flex items-center pointer-events-none">
+              <span className={`text-gray-600 font-medium tracking-wide ${lang === 'en' ? 'text-[10px]' : 'text-[9px]'}`} style={{ writingMode: 'vertical-rl' }}>{formatLength(artboardHeight, lang)}{lang === "en" ? '"' : ""}</span>
+            </div>
           </div>
           {/* Horizontal scrollbar */}
           {(() => {

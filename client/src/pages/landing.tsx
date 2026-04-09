@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Link, useLocation } from "wouter";
 import { ALL_PROFILES, type ProfileConfig } from "@/lib/profiles";
 import { IconHotPeel, IconFluorescent, IconUvDtf, IconSpecialtyColdPeel } from "@/components/profile-icons";
@@ -173,8 +173,37 @@ function ProfileCard({ profile }: { profile: ProfileConfig }) {
   );
 }
 
+const BUILDER_PATHS = new Set(["uv-dtf", "hot-peel", "fluorescent", "specialty-dtf"]);
+
+function shopifyLandingRedirect(): boolean {
+  if (typeof window === "undefined") return false;
+  const p = new URLSearchParams(window.location.search);
+  const ctx = p.get("ctx");
+  const shop = p.get("shop");
+  const variant = p.get("variant") || p.get("variant_id");
+  return !!(ctx || (shop && variant));
+}
+
 export default function Landing() {
   const { t } = useLanguage();
+  const [, setLocation] = useLocation();
+  const needsShopifyRedirect = useMemo(shopifyLandingRedirect, []);
+
+  useEffect(() => {
+    if (!needsShopifyRedirect) return;
+    const params = new URLSearchParams(window.location.search);
+    const builder = (params.get("builder") || params.get("profile") || "uv-dtf").replace(/^\//, "");
+    const path = BUILDER_PATHS.has(builder) ? `/${builder}` : "/uv-dtf";
+    setLocation(`${path}?${params.toString()}`);
+  }, [needsShopifyRedirect, setLocation]);
+
+  if (needsShopifyRedirect) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">

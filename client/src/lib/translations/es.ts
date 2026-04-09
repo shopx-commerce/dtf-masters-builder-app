@@ -34,6 +34,7 @@ export const es: Record<string, string> = {
   "landing.specialty.press": "325°F • 15s • pelar completamente en frío",
 
   "editor.back": "Volver",
+  "editor.noProductSelected": "Ningún producto seleccionado",
   "editor.tips": "¿Tienes sugerencias o ideas para mejorar la app? ¡Envíalas!",
   "editor.layers": "Capas",
   "editor.addDesigns": "Agregar Diseños",

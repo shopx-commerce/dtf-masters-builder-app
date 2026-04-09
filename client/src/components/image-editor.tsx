@@ -254,7 +254,7 @@ function clampDesignToArtboard(
   return { nx, ny };
 }
 
-export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFILE }: { onDesignUploaded?: () => void; profile?: ProfileConfig } = {}) {
+export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFILE, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, variantId: initialVariantId, shopDomain, embedFromShopify }: { onDesignUploaded?: () => void; profile?: ProfileConfig; initialWidth?: number; initialHeight?: number; initialGangsheetHeights?: number[]; initialQuantity?: number; shopifyVariants?: Array<{ id: string; title: string; price: string | null; height: number | null }>; variantId?: string | null; shopDomain?: string | null; embedFromShopify?: boolean } = {}) {
   const { toast } = useToast();
   const { t, lang } = useLanguage();
   const isMobile = useIsMobile();
@@ -268,8 +268,12 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
   const [isProcessing, setIsProcessing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [artboardWidth, setArtboardWidth] = useState(profile.artboardWidth);
-  const [artboardHeight, setArtboardHeight] = useState(profile.gangsheetHeights[0] ?? 12);
+  const [artboardWidth, setArtboardWidth] = useState(initialWidth ?? profile.artboardWidth);
+  const [artboardHeight, setArtboardHeight] = useState(initialHeight ?? profile.gangsheetHeights[0] ?? 12);
+  const [quantity, setQuantity] = useState(initialQuantity ?? 1);
+  useEffect(() => {
+    if (initialQuantity != null && initialQuantity >= 1) setQuantity(initialQuantity);
+  }, [initialQuantity]);
   const [designGap, setDesignGap] = useState<number | undefined>(0.25);
   const [duplicateCount, setDuplicateCount] = useState(1);
   const [designTransform, setDesignTransform] = useState<ImageTransform>({ nx: 0.5, ny: 0.5, s: 1, rotation: 0 });
@@ -1561,7 +1565,12 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     setArtboardHeight(newHeight);
   }, [designs, artboardWidth, artboardHeight, saveSnapshot]);
 
-  const GANGSHEET_HEIGHTS = profile.gangsheetHeights;
+  const GANGSHEET_HEIGHTS = useMemo(() => {
+    if (initialGangsheetHeights && initialGangsheetHeights.length > 0) return initialGangsheetHeights;
+    const base = profile.gangsheetHeights;
+    if (!initialHeight || base.includes(initialHeight)) return base;
+    return [...base, initialHeight].sort((a, b) => a - b);
+  }, [profile.gangsheetHeights, initialHeight, initialGangsheetHeights]);
   const MAX_ARTBOARD_HEIGHT = GANGSHEET_HEIGHTS[GANGSHEET_HEIGHTS.length - 1];
   const recommendedArtboardHeight = useMemo(() => {
     if (designs.length === 0) return null;
@@ -2117,12 +2126,12 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
   }, [applyImageDirectly]);
 
   const handleBatchStart = useCallback((fileCount: number) => {
-    const targetHeight = Math.min(48, profile.gangsheetHeights[profile.gangsheetHeights.length - 1]);
-    const validHeight = profile.gangsheetHeights.reduce((best, h) => h <= targetHeight && h > best ? h : best, profile.gangsheetHeights[0]);
+    const targetHeight = Math.min(48, GANGSHEET_HEIGHTS[GANGSHEET_HEIGHTS.length - 1]);
+    const validHeight = GANGSHEET_HEIGHTS.reduce((best, h) => h <= targetHeight && h > best ? h : best, GANGSHEET_HEIGHTS[0]);
     if (fileCount > 1 && artboardHeightRef.current < validHeight) {
       setArtboardHeight(validHeight);
     }
-  }, [profile.gangsheetHeights]);
+  }, [GANGSHEET_HEIGHTS]);
 
   const handleFileUploadUnified = useCallback(async (file: File, image: HTMLImageElement | null) => {
     const ext = file.name.toLowerCase();
@@ -2202,8 +2211,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     const files = e.target.files ? Array.from(e.target.files) : [];
     e.target.value = '';
     if (files.length > 1) {
-      const targetHeight = Math.min(48, profile.gangsheetHeights[profile.gangsheetHeights.length - 1]);
-      const validHeight = profile.gangsheetHeights.reduce((best, h) => h <= targetHeight && h > best ? h : best, profile.gangsheetHeights[0]);
+      const targetHeight = Math.min(48, GANGSHEET_HEIGHTS[GANGSHEET_HEIGHTS.length - 1]);
+      const validHeight = GANGSHEET_HEIGHTS.reduce((best, h) => h <= targetHeight && h > best ? h : best, GANGSHEET_HEIGHTS[0]);
       if (artboardHeightRef.current < validHeight) {
         setArtboardHeight(validHeight);
       }
@@ -2211,7 +2220,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     for (const file of files) {
       await processSidebarFile(file);
     }
-  }, [processSidebarFile, profile.gangsheetHeights]);
+  }, [processSidebarFile, GANGSHEET_HEIGHTS]);
 
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounterRef = useRef(0);
@@ -2248,8 +2257,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     const files = Array.from(e.dataTransfer.files);
     if (files.length === 0) return;
     if (files.length > 1) {
-      const targetHeight = Math.min(48, profile.gangsheetHeights[profile.gangsheetHeights.length - 1]);
-      const validHeight = profile.gangsheetHeights.reduce((best, h) => h <= targetHeight && h > best ? h : best, profile.gangsheetHeights[0]);
+      const targetHeight = Math.min(48, GANGSHEET_HEIGHTS[GANGSHEET_HEIGHTS.length - 1]);
+      const validHeight = GANGSHEET_HEIGHTS.reduce((best, h) => h <= targetHeight && h > best ? h : best, GANGSHEET_HEIGHTS[0]);
       if (artboardHeightRef.current < validHeight) {
         setArtboardHeight(validHeight);
       }
@@ -2662,7 +2671,70 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     }
   }, [imageInfo, designs, artboardWidth, artboardHeight, toast]);
 
-  if (!activeImageInfo) {
+  const handleAddToCart = useCallback(async () => {
+    if (designs.length === 0) {
+      toast({ title: "No designs", description: "Add at least one design before adding to cart.", variant: "destructive" });
+      return;
+    }
+    setIsProcessing(true);
+    try {
+      const exportDpi = 72;
+      const outW = Math.round(artboardWidth * exportDpi);
+      const outH = Math.round(artboardHeight * exportDpi);
+      const previewCanvas = document.createElement('canvas');
+      previewCanvas.width = outW;
+      previewCanvas.height = outH;
+      const ctx = previewCanvas.getContext('2d');
+      if (!ctx) throw new Error('Canvas not supported');
+      ctx.clearRect(0, 0, outW, outH);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, outW, outH);
+      for (const design of designs) {
+        const img = design.imageInfo.image;
+        const drawW = Math.max(1, Math.round(design.widthInches * design.transform.s * exportDpi));
+        const drawH = Math.max(1, Math.round(design.heightInches * design.transform.s * exportDpi));
+        const centerX = design.transform.nx * outW;
+        const centerY = design.transform.ny * outH;
+        ctx.save();
+        ctx.translate(centerX, centerY);
+        ctx.rotate((design.transform.rotation * Math.PI) / 180);
+        ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
+        ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
+        ctx.restore();
+      }
+      const dataUrl = previewCanvas.toDataURL('image/png');
+      const base64 = dataUrl.split(',')[1];
+      previewCanvas.width = 0;
+      previewCanvas.height = 0;
+
+      const selectedVariant = shopifyVariants?.find((v) => v.height != null && Math.abs(v.height - artboardHeight) < 0.01);
+      const vid = selectedVariant?.id || initialVariantId || '';
+      const vidDigits = vid.replace(/\D/g, '');
+
+      if (!vidDigits) throw new Error('No variant ID available');
+      if (!shopDomain) throw new Error('Shop domain missing — open the builder from the storefront product page.');
+
+      toast({ title: "Adding to cart...", description: "Uploading preview to Shopify…" });
+
+      const message = {
+        type: 'dtf-builder-add-to-cart',
+        variantId: vidDigits,
+        quantity: quantity,
+        gangsheetSize: artboardWidth + '" x ' + artboardHeight + '"',
+        shop: shopDomain || '',
+        imageBase64: base64,
+        filename: 'gangsheet-' + Date.now() + '.png',
+      };
+      window.parent.postMessage(message, '*');
+    } catch (error) {
+      console.error('Add to cart failed:', error);
+      toast({ title: "Failed", description: error instanceof Error ? error.message : "Could not add to cart", variant: "destructive" });
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [designs, artboardWidth, artboardHeight, quantity, shopifyVariants, initialVariantId, shopDomain, toast]);
+
+  if (!activeImageInfo && !embedFromShopify) {
     return (
       <div
         className="h-full flex items-center justify-center bg-gray-50 relative"
@@ -2752,6 +2824,11 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
             onSpotPreviewChange={setSpotPreviewData}
             fluorPanelContainer={fluorPanelContainer}
             copySpotSelectionsRef={copySpotSelectionsRef}
+            quantity={quantity}
+            onQuantityChange={setQuantity}
+            shopifyVariants={shopifyVariants}
+            onAddToCart={handleAddToCart}
+            hasVariantId={!!(initialVariantId || shopifyVariants?.length)}
           />
 
           {/* Fluorescent panel portal target */}
@@ -2943,6 +3020,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
               onImageUpload={handleFileUploadUnified}
               onBatchStart={handleBatchStart}
               imageInfo={activeImageInfo}
+              embedCompact={embedFromShopify}
             />
             {isUploading && (
               <div className="flex items-center gap-1.5 text-cyan-400">

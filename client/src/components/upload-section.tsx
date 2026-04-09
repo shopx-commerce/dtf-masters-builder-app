@@ -19,9 +19,11 @@ interface UploadSectionProps {
   onBatchStart?: (fileCount: number) => void;
   imageInfo?: ImageInfo | null;
   resizeSettings?: ResizeSettings | null;
+  /** Shopify embed: always use compact toolbar button, never the full “Make a Gangsheet” hero */
+  embedCompact?: boolean;
 }
 
-export default function UploadSection({ onImageUpload, onBatchStart, imageInfo }: UploadSectionProps) {
+export default function UploadSection({ onImageUpload, onBatchStart, imageInfo, embedCompact = false }: UploadSectionProps) {
   const { toast } = useToast();
   const { t, lang } = useLanguage();
   const metric = useMetric(lang);
@@ -119,41 +121,41 @@ export default function UploadSection({ onImageUpload, onBatchStart, imageInfo }
     e.target.value = '';
   }, [handleFileUpload, onBatchStart]);
 
-  const isEmptyState = !imageInfo;
+  const showHero = !imageInfo && !embedCompact;
 
   const [colorIndex, setColorIndex] = useState(0);
 
   useEffect(() => {
-    if (!isEmptyState) return;
+    if (!showHero) return;
     const interval = setInterval(() => {
       setColorIndex(prev => (prev + 1) % GRADIENT_COLORS.length);
     }, 2000);
     return () => clearInterval(interval);
-  }, [isEmptyState]);
+  }, [showHero]);
 
   const currentColor = GRADIENT_COLORS[colorIndex];
 
   return (
-    <div className={isEmptyState ? 'w-full' : 'flex-shrink-0'}>
+    <div className={showHero ? 'w-full' : 'flex-shrink-0'}>
       <div 
         onDrop={handleDrop}
         onDragOver={handleDragOver}
         onClick={() => fileInputRef.current?.click()}
         className={`
           text-center cursor-pointer
-          ${isEmptyState 
+          ${showHero 
             ? 'rounded-2xl p-10 hover:scale-[1.02] transform transition-transform duration-300' 
             : 'rounded-md bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-400 hover:to-blue-400 px-5 py-1 shadow-md shadow-cyan-500/20 hover:shadow-cyan-400/30'
           }
         `}
-        style={isEmptyState ? {
+        style={showHero ? {
           background: currentColor.bg,
           boxShadow: `0 0 30px ${currentColor.glow}, 0 8px 24px rgba(0,0,0,0.15)`,
           transition: 'background 1.5s ease-in-out, box-shadow 1.5s ease-in-out',
         } : undefined}
       >
-        <div className={`flex items-center ${isEmptyState ? 'flex-col' : 'gap-1.5'}`}>
-          {isEmptyState && (
+        <div className={`flex items-center ${showHero ? 'flex-col' : 'gap-1.5'}`}>
+          {showHero && (
             <>
               <div className="w-20 h-20 rounded-2xl bg-white/30 shadow-inner flex items-center justify-center mb-5 border border-white/40">
                 <Upload className="w-10 h-10 text-white drop-shadow-lg" />
@@ -166,10 +168,10 @@ export default function UploadSection({ onImageUpload, onBatchStart, imageInfo }
               </p>
             </>
           )}
-          {!isEmptyState && (
+          {!showHero && (
             <Upload className="w-3.5 h-3.5 text-white" />
           )}
-          {!isEmptyState && (
+          {!showHero && (
             <p className={`font-medium text-white whitespace-nowrap ${metric ? 'text-[10px]' : 'text-[11px]'}`}>
               {t("editor.addDesigns")}
             </p>
@@ -185,7 +187,7 @@ export default function UploadSection({ onImageUpload, onBatchStart, imageInfo }
         />
       </div>
 
-      {isEmptyState && (
+      {showHero && (
         <p className="text-center mt-4 text-sm font-medium text-gray-600">
           {t("upload.poweredBy")} <span className="text-cyan-600 font-semibold">ANYNEST APP</span>
         </p>

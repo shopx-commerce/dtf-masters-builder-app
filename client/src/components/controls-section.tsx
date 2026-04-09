@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ResizeSettings, ImageInfo } from "./image-editor";
-import { Download, Layers, FileCheck, Palette, Eye, EyeOff, ChevronDown, Info } from "lucide-react";
+import { Download, Layers, FileCheck, Palette, Eye, EyeOff, ChevronDown, Info, Minus, Plus, ShoppingCart } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
 import { formatLength } from "@/lib/format-length";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -45,9 +45,14 @@ interface ControlsSectionProps {
   onSpotPreviewChange?: (data: SpotPreviewData) => void;
   fluorPanelContainer?: HTMLDivElement | null;
   copySpotSelectionsRef?: React.MutableRefObject<((fromId: string, toIds: string[]) => void) | null>;
+  quantity?: number;
+  onQuantityChange?: (qty: number) => void;
+  shopifyVariants?: Array<{ id: string; title: string; price: string | null; height: number | null }>;
+  onAddToCart?: () => void;
+  hasVariantId?: boolean;
 }
 
-const DEFAULT_HEIGHTS = [12, 18, 24, 35, 40, 45, 48, 50, 55, 60, 65, 70, 80, 85, 95, 110, 120, 130, 140, 150];
+const DEFAULT_HEIGHTS: number[] = [];
 
 export default function ControlsSection({
   onDownload,
@@ -66,10 +71,26 @@ export default function ControlsSection({
   onSpotPreviewChange,
   fluorPanelContainer,
   copySpotSelectionsRef,
+  quantity = 1,
+  onQuantityChange,
+  shopifyVariants,
+  onAddToCart,
+  hasVariantId = false,
 }: ControlsSectionProps) {
   const { t, lang } = useLanguage();
   const isMobile = useIsMobile();
   const canDownload = !!imageInfo || designCount > 0;
+
+  const selectedVariantPrice = useMemo(() => {
+    if (!shopifyVariants?.length) return null;
+    if (artboardHeight != null) {
+      const h = Number(artboardHeight);
+      const byHeight = shopifyVariants.find((v) => v.height != null && Math.abs(v.height - h) < 0.01);
+      if (byHeight?.price) return byHeight.price;
+    }
+    const withPrice = shopifyVariants.find((v) => v.price != null);
+    return withPrice?.price ?? null;
+  }, [shopifyVariants, artboardHeight]);
 
   const [showSpotColors, setShowSpotColors] = useState(false);
   const [showFluorInfo, setShowFluorInfo] = useState(false);
@@ -289,6 +310,54 @@ export default function ControlsSection({
         </div>
       </div>
 
+      {selectedVariantPrice != null && (
+        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+          <div className="flex items-center gap-2 px-3 py-1.5">
+            <div className="w-6 h-6 rounded-md bg-emerald-500/10 flex items-center justify-center flex-shrink-0">
+              <span className="text-xs font-bold text-emerald-600">$</span>
+            </div>
+            <span className="text-xs font-medium text-gray-900 flex-shrink-0">Price</span>
+            <span className="ml-auto text-sm font-semibold text-emerald-600">${selectedVariantPrice}</span>
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="flex items-center gap-2 px-3 py-1.5">
+          <div className="w-6 h-6 rounded-md bg-cyan-500/10 flex items-center justify-center flex-shrink-0">
+            <Layers className="w-3.5 h-3.5 text-cyan-600" />
+          </div>
+          <span className="text-xs font-medium text-gray-900 flex-shrink-0">Quantity</span>
+          <div className="flex items-center gap-1 ml-auto">
+            <button
+              type="button"
+              className="w-7 h-7 flex items-center justify-center rounded-md bg-gray-100 border border-gray-200 text-gray-600 hover:bg-gray-200 transition-colors disabled:opacity-40"
+              disabled={quantity <= 1}
+              onClick={() => onQuantityChange?.(Math.max(1, quantity - 1))}
+            >
+              <Minus className="w-3 h-3" />
+            </button>
+            <input
+              type="number"
+              min={1}
+              value={quantity}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                if (!isNaN(v) && v >= 1) onQuantityChange?.(v);
+              }}
+              className="w-12 h-7 text-center text-xs font-semibold text-gray-900 bg-gray-100 border border-gray-200 rounded-md [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+            />
+            <button
+              type="button"
+              className="w-7 h-7 flex items-center justify-center rounded-md bg-gray-100 border border-gray-200 text-gray-600 hover:bg-gray-200 transition-colors"
+              onClick={() => onQuantityChange?.(quantity + 1)}
+            >
+              <Plus className="w-3 h-3" />
+            </button>
+          </div>
+        </div>
+      </div>
+
       {enableFluorescent && imageInfo && fluorPanelContainer && createPortal(
         <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
           <button
@@ -454,24 +523,45 @@ export default function ControlsSection({
             <span className="text-gray-600">·</span>
             <span className={`tabular-nums ${lang !== 'en' ? 'text-[10px]' : ''}`}>{formatLength(artboardWidth, lang)}{lang === 'en' ? '"' : ''} × {formatLength(artboardHeight, lang)}{lang === 'en' ? '"' : ''}</span>
           </div>
-          <Button
-            onClick={handleDownloadClick}
-            disabled={isProcessing || !canDownload}
-            title={dlTitle}
-            className="flex-1 h-10 bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 text-white rounded-lg shadow-lg shadow-cyan-500/25 font-medium disabled:opacity-50"
-          >
-            {isProcessing ? (
-              <>
-                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
-                {t("editor.processing")}
-              </>
-            ) : (
-              <>
-                <Download className="w-5 h-5 mr-2" />
-                {dlLabel}
-              </>
-            )}
-          </Button>
+          {hasVariantId && onAddToCart ? (
+            <Button
+              onClick={onAddToCart}
+              disabled={isProcessing || !canDownload}
+              title={!canDownload ? t("controls.uploadFirst") : isProcessing ? t("editor.processing") : "Add to Cart"}
+              className="flex-1 h-10 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white rounded-lg shadow-lg shadow-emerald-500/25 font-medium disabled:opacity-50"
+            >
+              {isProcessing ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
+                  {t("editor.processing")}
+                </>
+              ) : (
+                <>
+                  <ShoppingCart className="w-5 h-5 mr-2" />
+                  Add to Cart
+                </>
+              )}
+            </Button>
+          ) : (
+            <Button
+              onClick={handleDownloadClick}
+              disabled={isProcessing || !canDownload}
+              title={dlTitle}
+              className="flex-1 h-10 bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 text-white rounded-lg shadow-lg shadow-cyan-500/25 font-medium disabled:opacity-50"
+            >
+              {isProcessing ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
+                  {t("editor.processing")}
+                </>
+              ) : (
+                <>
+                  <Download className="w-5 h-5 mr-2" />
+                  {dlLabel}
+                </>
+              )}
+            </Button>
+          )}
         </div>,
         downloadContainer
       )}
