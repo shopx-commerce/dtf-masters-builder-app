@@ -266,6 +266,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     outputDPI: 300,
   });
   const [isProcessing, setIsProcessing] = useState(false);
+  /** True after Add to Cart until parent finishes upload/redirect (avoid double-submit). */
+  const [isAddingToCart, setIsAddingToCart] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [artboardWidth, setArtboardWidth] = useState(initialWidth ?? profile.artboardWidth);
@@ -2676,6 +2678,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       toast({ title: "No designs", description: "Add at least one design before adding to cart.", variant: "destructive" });
       return;
     }
+    setIsAddingToCart(true);
     setIsProcessing(true);
     try {
       const exportDpi = 72;
@@ -2714,8 +2717,6 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       if (!vidDigits) throw new Error('No variant ID available');
       if (!shopDomain) throw new Error('Shop domain missing — open the builder from the storefront product page.');
 
-      toast({ title: "Adding to cart...", description: "Uploading preview to Shopify…" });
-
       const message = {
         type: 'dtf-builder-add-to-cart',
         variantId: vidDigits,
@@ -2726,10 +2727,11 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         filename: 'gangsheet-' + Date.now() + '.png',
       };
       window.parent.postMessage(message, '*');
+      // Keep loading state until parent redirects (upload runs in parent). Do not clear in finally.
     } catch (error) {
       console.error('Add to cart failed:', error);
       toast({ title: "Failed", description: error instanceof Error ? error.message : "Could not add to cart", variant: "destructive" });
-    } finally {
+      setIsAddingToCart(false);
       setIsProcessing(false);
     }
   }, [designs, artboardWidth, artboardHeight, quantity, shopifyVariants, initialVariantId, shopDomain, toast]);
@@ -2829,6 +2831,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
             shopifyVariants={shopifyVariants}
             onAddToCart={handleAddToCart}
             hasVariantId={!!(initialVariantId || shopifyVariants?.length)}
+            isAddingToCart={isAddingToCart}
           />
 
           {/* Fluorescent panel portal target */}
@@ -3452,8 +3455,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         ) : null;
       })()}
 
-      {/* Processing Modal */}
-      {isProcessing && (
+      {/* Processing Modal (downloads only — add-to-cart uses the bottom button state) */}
+      {isProcessing && !isAddingToCart && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 max-w-sm mx-4">
             <div className="flex items-center space-x-3">

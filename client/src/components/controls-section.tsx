@@ -50,6 +50,7 @@ interface ControlsSectionProps {
   shopifyVariants?: Array<{ id: string; title: string; price: string | null; height: number | null }>;
   onAddToCart?: () => void;
   hasVariantId?: boolean;
+  isAddingToCart?: boolean;
 }
 
 const DEFAULT_HEIGHTS: number[] = [];
@@ -76,6 +77,7 @@ export default function ControlsSection({
   shopifyVariants,
   onAddToCart,
   hasVariantId = false,
+  isAddingToCart = false,
 }: ControlsSectionProps) {
   const { t, lang } = useLanguage();
   const isMobile = useIsMobile();
@@ -527,10 +529,23 @@ export default function ControlsSection({
             <Button
               onClick={onAddToCart}
               disabled={isProcessing || !canDownload}
-              title={!canDownload ? t("controls.uploadFirst") : isProcessing ? t("editor.processing") : "Add to Cart"}
+              title={
+                !canDownload
+                  ? t("controls.uploadFirst")
+                  : isAddingToCart
+                    ? t("controls.addingToCart")
+                    : isProcessing
+                      ? t("editor.processing")
+                      : t("controls.addToCart")
+              }
               className="flex-1 h-10 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white rounded-lg shadow-lg shadow-emerald-500/25 font-medium disabled:opacity-50"
             >
-              {isProcessing ? (
+              {isAddingToCart ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
+                  {t("controls.addingToCart")}
+                </>
+              ) : isProcessing ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
                   {t("editor.processing")}
@@ -538,7 +553,7 @@ export default function ControlsSection({
               ) : (
                 <>
                   <ShoppingCart className="w-5 h-5 mr-2" />
-                  Add to Cart
+                  {t("controls.addToCart")}
                 </>
               )}
             </Button>
