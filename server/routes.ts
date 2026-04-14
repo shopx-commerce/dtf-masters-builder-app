@@ -521,8 +521,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const metadata = await sharp(req.file.buffer).metadata();
-      // Sharp reports pHYs / TIFF DPI when present. Cap at 300 so bogus/extra-high
-      // metadata does not shrink placements; untagged files default to 72 (web PNGs).
       const rawDensity = metadata.density;
       const density =
         rawDensity != null && rawDensity > 0 ? Math.min(rawDensity, 300) : 72;

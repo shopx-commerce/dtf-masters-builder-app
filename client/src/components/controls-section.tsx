@@ -280,41 +280,47 @@ export default function ControlsSection({
 
   return (
     <div className="space-y-4">
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <div className="flex items-center gap-2 px-3 py-1.5">
+      <div className="bg-white rounded-lg border border-gray-200 overflow-visible">
+        <div className="flex items-center gap-2 px-3 py-1.5 pr-4">
           <div className="w-6 h-6 rounded-md bg-cyan-500/10 flex items-center justify-center flex-shrink-0">
             <Layers className="w-3.5 h-3.5 text-cyan-600" />
           </div>
-          <span className="text-xs font-medium text-gray-900 flex-shrink-0">{t("controls.gangsheetSize")}</span>
-          <div className="flex items-center gap-1.5 ml-auto">
-            <span className={`font-semibold text-gray-700 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
-            <span className={`text-gray-600 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>×</span>
+          <span className="text-xs font-medium text-gray-900 flex-shrink-0 min-w-0 truncate">{t("controls.gangsheetSize")}</span>
+          <div className="flex items-center gap-1 ml-auto shrink-0 max-w-[min(12rem,46%)]">
+            <span className={`font-semibold text-gray-700 tabular-nums shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
+            <span className={`text-gray-600 shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>×</span>
             <Select
               value={String(artboardHeight)}
               onValueChange={(v) => onArtboardHeightChange?.(parseFloat(v))}
             >
               <SelectTrigger
-                className={`h-7 min-w-[5.25rem] max-w-[7rem] shrink-0 px-2 font-semibold text-gray-900 bg-gray-100 border-gray-200 tabular-nums ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}
+                className={`h-7 w-[4.5rem] shrink-0 pl-2 pr-1.5 gap-0.5 font-semibold text-gray-900 bg-gray-100 border-gray-200 tabular-nums [&>span]:min-w-0 [&>span]:truncate [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}
               >
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent>
-                {gangsheetHeights.map((h) => (
-                  <SelectItem key={h} value={String(h)}>
-                    <span className="flex items-center justify-between gap-3 w-full">
-                      <span className={lang !== 'en' ? 'text-[10px]' : ''}>{formatLength(h, lang)}{lang === "en" ? '"' : ""}</span>
-                      {recommendedArtboardHeight === h && (
-                        <span className="text-[10px] text-blue-600 font-medium">
-                          {t("controls.currentBounds")}
-                        </span>
-                      )}
-                    </span>
-                  </SelectItem>
-                ))}
+              <SelectContent className="z-[100]" position="popper" sideOffset={4}>
+                {gangsheetHeights.map((h) => {
+                  const label = `${formatLength(h, lang)}${lang === "en" ? '"' : ""}`;
+                  return (
+                    <SelectItem
+                      key={h}
+                      value={String(h)}
+                      textValue={label}
+                      className={`tabular-nums ${lang !== 'en' ? 'text-[10px]' : 'text-xs'}`}
+                    >
+                      {label}
+                    </SelectItem>
+                  );
+                })}
               </SelectContent>
             </Select>
           </div>
         </div>
+        {recommendedArtboardHeight != null && recommendedArtboardHeight === artboardHeight && (
+          <div className="px-3 pb-2 pt-0 text-[10px] text-blue-600 font-medium leading-snug border-t border-blue-100/60 bg-blue-50/40">
+            {t("controls.currentBounds")}
+          </div>
+        )}
       </div>
 
       {selectedVariantPrice != null && (

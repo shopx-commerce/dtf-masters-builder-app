@@ -4,7 +4,16 @@ import UploadSection from "./upload-section";
 import PreviewSection from "./preview-section";
 import ControlsSection, { type SpotPreviewData } from "./controls-section";
 import CropModal from "./crop-modal";
-import { cropImageToContent, cropImageToContentAsync, hasCleanAlpha } from "@/lib/image-crop";
+import { cropImageToContent, cropImageToContentAsync, hasCleanAlpha, isOpaqueRasterUpload } from "@/lib/image-crop";
+
+function inchesFromPixelsPair(pw: number, ph: number, dpi: number): { widthInches: number; heightInches: number } {
+  const wIn = pw / dpi;
+  const hIn = wIn * (ph / pw);
+  return {
+    widthInches: Math.max(0.01, parseFloat(wIn.toFixed(4))),
+    heightInches: Math.max(0.01, parseFloat(hIn.toFixed(4))),
+  };
+}
 
 function imageHasCleanAlpha(img: HTMLImageElement): boolean {
   const c = document.createElement('canvas');
@@ -1554,9 +1563,6 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     }
 
     saveSnapshot();
-    // Keep normalized positions (nx, ny) as-is when only the sheet size changes, then
-    // clamp so designs stay inside the artboard. Remapping absolute inches changed
-    // relative layout whenever height changed and felt like a reorder to users.
     setDesigns(prev => prev.map(d => {
       const { nx, ny } = clampDesignToArtboard(d, newWidth, newHeight);
       return { ...d, transform: { ...d.transform, nx, ny } };
@@ -1926,8 +1932,11 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       }
       setIsUploading(false);
       
-      const widthInches = Math.max(0.01, parseFloat((finalImage.width / dpi).toFixed(2)));
-      const heightInches = Math.max(0.01, parseFloat((finalImage.height / dpi).toFixed(2)));
+      const { widthInches, heightInches } = inchesFromPixelsPair(
+        finalImage.naturalWidth || finalImage.width,
+        finalImage.naturalHeight || finalImage.height,
+        dpi,
+      );
 
       const newImageInfo: ImageInfo = {
         file,
@@ -1997,7 +2006,18 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         }
       }
       if (!croppedCanvas) {
-        croppedCanvas = await cropImageToContentAsync(image);
+        if (isOpaqueRasterUpload(image)) {
+          const fullCanvas = document.createElement('canvas');
+          fullCanvas.width = image.width;
+          fullCanvas.height = image.height;
+          const fctx = fullCanvas.getContext('2d');
+          if (fctx) {
+            fctx.drawImage(image, 0, 0);
+            croppedCanvas = fullCanvas;
+          }
+        } else {
+          croppedCanvas = await cropImageToContentAsync(image);
+        }
       }
       if (!croppedCanvas) {
         console.error("Failed to crop image, using original");
@@ -2067,8 +2087,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       }
 
       setUploadProgress(95);
-      const widthInches = Math.max(0.01, parseFloat((intrinsicW / dpi).toFixed(2)));
-      const heightInches = Math.max(0.01, parseFloat((intrinsicH / dpi).toFixed(2)));
+      const { widthInches, heightInches } = inchesFromPixelsPair(intrinsicW, intrinsicH, dpi);
       const bw = croppedImg.naturalWidth || croppedImg.width;
       const bh = croppedImg.naturalHeight || croppedImg.height;
       const newImageInfo: ImageInfo = { file, image: croppedImg, originalWidth: bw, originalHeight: bh, dpi };
@@ -2122,8 +2141,11 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       originalPdfData,
     };
     
-    const widthInches = Math.max(0.01, parseFloat((image.width / dpi).toFixed(2)));
-    const heightInches = Math.max(0.01, parseFloat((image.height / dpi).toFixed(2)));
+    const { widthInches, heightInches } = inchesFromPixelsPair(
+      image.naturalWidth || image.width,
+      image.naturalHeight || image.height,
+      dpi,
+    );
 
     applyImageDirectly(newImageInfo, widthInches, heightInches);
   }, [applyImageDirectly]);
