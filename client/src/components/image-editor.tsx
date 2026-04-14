@@ -15,6 +15,16 @@ function inchesFromPixelsPair(pw: number, ph: number, dpi: number): { widthInche
   };
 }
 
+const RASTER_DPI_FALLBACK = 144;
+
+function normalizeRasterDpiForInches(dpi: number, image: HTMLImageElement): number {
+  const w = image.naturalWidth || image.width;
+  const h = image.naturalHeight || image.height;
+  const longEdge = Math.max(w, h);
+  if (dpi >= 290 && longEdge > 0 && longEdge <= 2200) return RASTER_DPI_FALLBACK;
+  return dpi;
+}
+
 function imageHasCleanAlpha(img: HTMLImageElement): boolean {
   const c = document.createElement('canvas');
   c.width = img.width;
@@ -139,13 +149,13 @@ async function fetchImageDpi(file: File): Promise<number> {
     const form = new FormData();
     form.append('image', file);
     const res = await fetch('/api/image-info', { method: 'POST', body: form });
-    if (!res.ok) return 300;
+    if (!res.ok) return RASTER_DPI_FALLBACK;
     const data = await res.json();
     const d = Number(data.density);
-    if (!Number.isFinite(d) || d <= 0) return 300;
+    if (!Number.isFinite(d) || d <= 0) return RASTER_DPI_FALLBACK;
     return Math.min(d, 300);
   } catch {
-    return 300;
+    return RASTER_DPI_FALLBACK;
   }
 }
 
@@ -1909,8 +1919,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     image: HTMLImageElement,
     opts?: { dpi?: number; skipCrop?: boolean }
   ) => {
-    const dpi = opts?.dpi ?? (await fetchImageDpi(file).catch((err) => { console.warn('[fetchImageDpi] failed, using 300:', err); return 300; }));
-    
+    const dpiRaw = opts?.dpi ?? (await fetchImageDpi(file).catch((err) => { console.warn('[fetchImageDpi] failed:', err); return RASTER_DPI_FALLBACK; }));
+
     let croppedCanvas: HTMLCanvasElement | null = null;
     if (opts?.skipCrop) {
       const fullCanvas = document.createElement("canvas");
@@ -1931,7 +1941,9 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         document.activeElement.blur();
       }
       setIsUploading(false);
-      
+
+      const dpi = normalizeRasterDpiForInches(dpiRaw, finalImage);
+
       const { widthInches, heightInches } = inchesFromPixelsPair(
         finalImage.naturalWidth || finalImage.width,
         finalImage.naturalHeight || finalImage.height,
@@ -1986,7 +1998,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       await new Promise(r => setTimeout(r, 0));
       setUploadProgress(25);
       
-      const dpi = await fetchImageDpi(file).catch((err) => { console.warn('[fetchImageDpi] failed, using 300:', err); return 300; });
+      const dpiRaw = await fetchImageDpi(file).catch((err) => { console.warn('[fetchImageDpi] failed:', err); return RASTER_DPI_FALLBACK; });
+      const dpi = normalizeRasterDpiForInches(dpiRaw, image);
       const imgWidthInches = image.width / dpi;
       const imgHeightInches = image.height / dpi;
       const ARTBOARD_MATCH_TOLERANCE = 0.05;
@@ -2111,7 +2124,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         setIsUploading(false);
         setUploadProgress(0);
         try {
-          const dpiFallback = await fetchImageDpi(file).catch((err) => { console.warn('[fetchImageDpi] failed, using 300:', err); return 300; });
+          const dpiFallbackRaw = await fetchImageDpi(file).catch((err) => { console.warn('[fetchImageDpi] failed:', err); return RASTER_DPI_FALLBACK; });
+          const dpiFallback = normalizeRasterDpiForInches(dpiFallbackRaw, image);
           const wIn = image.width / dpiFallback;
           const hIn = image.height / dpiFallback;
           const match = Math.abs(wIn - artboardWidth) / Math.max(artboardWidth, 0.1) <= 0.05 &&
