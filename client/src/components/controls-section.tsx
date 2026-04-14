@@ -34,6 +34,7 @@ interface ControlsSectionProps {
   imageInfo: ImageInfo | null;
   artboardWidth?: number;
   artboardHeight?: number;
+  onArtboardWidthChange?: (width: number) => void;
   onArtboardHeightChange?: (height: number) => void;
   downloadContainer?: HTMLDivElement | null;
   designCount?: number;
@@ -55,6 +56,7 @@ export default function ControlsSection({
   imageInfo,
   artboardWidth = 24.5,
   artboardHeight = 12,
+  onArtboardWidthChange,
   onArtboardHeightChange,
   downloadContainer,
   designCount = 0,
@@ -70,6 +72,13 @@ export default function ControlsSection({
   const { t, lang } = useLanguage();
   const isMobile = useIsMobile();
   const canDownload = !!imageInfo || designCount > 0;
+
+  const [widthInputValue, setWidthInputValue] = useState(String(artboardWidth));
+  const [editingWidth, setEditingWidth] = useState(false);
+
+  useEffect(() => {
+    if (!editingWidth) setWidthInputValue(String(artboardWidth));
+  }, [artboardWidth, editingWidth]);
 
   const [showSpotColors, setShowSpotColors] = useState(false);
   const [showFluorInfo, setShowFluorInfo] = useState(false);
@@ -264,7 +273,31 @@ export default function ControlsSection({
           </div>
           <span className="text-xs font-medium text-gray-900 flex-shrink-0">{t("controls.gangsheetSize")}</span>
           <div className="flex items-center gap-1.5 ml-auto">
-            <span className={`font-semibold text-gray-700 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
+            <input
+              type="number"
+              min="1"
+              max="120"
+              step="0.5"
+              value={widthInputValue}
+              onChange={(e) => { setEditingWidth(true); setWidthInputValue(e.target.value); }}
+              onBlur={(e) => {
+                setEditingWidth(false);
+                const v = parseFloat(e.target.value);
+                if (!isNaN(v) && v > 0) onArtboardWidthChange?.(v);
+                else setWidthInputValue(String(artboardWidth));
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  setEditingWidth(false);
+                  const v = parseFloat(widthInputValue);
+                  if (!isNaN(v) && v > 0) onArtboardWidthChange?.(v);
+                  else setWidthInputValue(String(artboardWidth));
+                  (e.target as HTMLInputElement).blur();
+                }
+              }}
+              className={`h-7 font-semibold text-gray-900 bg-gray-100 border border-gray-200 rounded px-1 text-center focus:outline-none focus:border-cyan-400 ${lang === 'en' ? 'w-[56px] text-xs' : 'w-[64px] text-[10px]'}`}
+            />
+            {lang === 'en' && <span className="text-[10px] text-gray-500">"</span>}
             <span className={`text-gray-600 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>×</span>
             <Select value={String(artboardHeight)} onValueChange={(v) => onArtboardHeightChange?.(parseInt(v))}>
               <SelectTrigger className={`h-7 font-semibold text-gray-900 bg-gray-100 border-gray-200 ${lang === 'en' ? 'w-[68px] text-xs' : 'w-[80px] text-[10px]'}`}>

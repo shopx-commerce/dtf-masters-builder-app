@@ -2741,6 +2741,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
             imageInfo={activeImageInfo}
             artboardWidth={artboardWidth}
             artboardHeight={artboardHeight}
+            onArtboardWidthChange={(w) => handleArtboardResize(w, artboardHeight)}
             onArtboardHeightChange={(h) => handleArtboardResize(artboardWidth, h)}
             downloadContainer={downloadContainer}
             designCount={designs.length}
