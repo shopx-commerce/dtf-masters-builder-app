@@ -132,7 +132,9 @@ async function fetchImageDpi(file: File): Promise<number> {
     const res = await fetch('/api/image-info', { method: 'POST', body: form });
     if (!res.ok) return 300;
     const data = await res.json();
-    return data.density || 300;
+    const d = Number(data.density);
+    if (!Number.isFinite(d) || d <= 0) return 300;
+    return Math.min(d, 300);
   } catch {
     return 300;
   }
@@ -1552,20 +1554,17 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     }
 
     saveSnapshot();
-    const oldW = artboardWidth;
-    const oldH = artboardHeight;
-
+    // Keep normalized positions (nx, ny) as-is when only the sheet size changes, then
+    // clamp so designs stay inside the artboard. Remapping absolute inches changed
+    // relative layout whenever height changed and felt like a reorder to users.
     setDesigns(prev => prev.map(d => {
-      const absCx = d.transform.nx * oldW;
-      const absCy = d.transform.ny * oldH;
-      const newTransform = { ...d.transform, nx: absCx / newWidth, ny: absCy / newHeight };
-      const { nx, ny } = clampDesignToArtboard({ ...d, transform: newTransform }, newWidth, newHeight);
-      return { ...d, transform: { ...newTransform, nx, ny } };
+      const { nx, ny } = clampDesignToArtboard(d, newWidth, newHeight);
+      return { ...d, transform: { ...d.transform, nx, ny } };
     }));
 
     setArtboardWidth(newWidth);
     setArtboardHeight(newHeight);
-  }, [designs, artboardWidth, artboardHeight, saveSnapshot]);
+  }, [designs.length, saveSnapshot]);
 
   const GANGSHEET_HEIGHTS = useMemo(() => {
     if (initialGangsheetHeights && initialGangsheetHeights.length > 0) return initialGangsheetHeights;
@@ -2036,17 +2035,17 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         document.activeElement.blur();
       }
 
-      const physicalWidth = croppedImg.width;
-      const physicalHeight = croppedImg.height;
-      let storedWidth = croppedImg.width;
-      let storedHeight = croppedImg.height;
-      const maxDim = Math.max(physicalWidth, physicalHeight);
+      const intrinsicW = croppedImg.naturalWidth || croppedImg.width;
+      const intrinsicH = croppedImg.naturalHeight || croppedImg.height;
+      let storedWidth = intrinsicW;
+      let storedHeight = intrinsicH;
+      const maxDim = Math.max(intrinsicW, intrinsicH);
 
       if (maxDim > MAX_STORED_DIMENSION) {
         setUploadProgress(75);
         const scale = MAX_STORED_DIMENSION / maxDim;
-        storedWidth = Math.round(physicalWidth * scale);
-        storedHeight = Math.round(physicalHeight * scale);
+        storedWidth = Math.round(intrinsicW * scale);
+        storedHeight = Math.round(intrinsicH * scale);
         const downsampleCanvas = document.createElement('canvas');
         downsampleCanvas.width = storedWidth;
         downsampleCanvas.height = storedHeight;
@@ -2068,9 +2067,11 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       }
 
       setUploadProgress(95);
-      const widthInches = Math.max(0.01, parseFloat((physicalWidth / dpi).toFixed(2)));
-      const heightInches = Math.max(0.01, parseFloat((physicalHeight / dpi).toFixed(2)));
-      const newImageInfo: ImageInfo = { file, image: croppedImg, originalWidth: physicalWidth, originalHeight: physicalHeight, dpi };
+      const widthInches = Math.max(0.01, parseFloat((intrinsicW / dpi).toFixed(2)));
+      const heightInches = Math.max(0.01, parseFloat((intrinsicH / dpi).toFixed(2)));
+      const bw = croppedImg.naturalWidth || croppedImg.width;
+      const bh = croppedImg.naturalHeight || croppedImg.height;
+      const newImageInfo: ImageInfo = { file, image: croppedImg, originalWidth: bw, originalHeight: bh, dpi };
       applyImageDirectly(newImageInfo, widthInches, heightInches, imageHasCleanAlpha(croppedImg));
       if (matchesArtboard) {
         toast({ title: t("toast.gangsheetDetected"), description: t("toast.gangsheetDetectedDesc") });
@@ -2078,7 +2079,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       setUploadProgress(100);
       setTimeout(() => { setIsUploading(false); setUploadProgress(0); }, 300);
 
-      const effectiveDPI = Math.min(physicalWidth / widthInches, physicalHeight / heightInches);
+      const effectiveDPI = Math.min(intrinsicW / widthInches, intrinsicH / heightInches);
       if (effectiveDPI < 278) {
         toast({
           title: t("toast.lowRes"),

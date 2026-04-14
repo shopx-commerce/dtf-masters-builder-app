@@ -289,8 +289,13 @@ export default function ControlsSection({
           <div className="flex items-center gap-1.5 ml-auto">
             <span className={`font-semibold text-gray-700 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
             <span className={`text-gray-600 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>×</span>
-            <Select value={String(artboardHeight)} onValueChange={(v) => onArtboardHeightChange?.(parseInt(v))}>
-              <SelectTrigger className={`h-7 font-semibold text-gray-900 bg-gray-100 border-gray-200 ${lang === 'en' ? 'w-[68px] text-xs' : 'w-[80px] text-[10px]'}`}>
+            <Select
+              value={String(artboardHeight)}
+              onValueChange={(v) => onArtboardHeightChange?.(parseFloat(v))}
+            >
+              <SelectTrigger
+                className={`h-7 min-w-[5.25rem] max-w-[7rem] shrink-0 px-2 font-semibold text-gray-900 bg-gray-100 border-gray-200 tabular-nums ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
