@@ -3003,7 +3003,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
               {!isMobile && (
                 <div className="flex items-center gap-1">
                   <button
-                    onClick={() => handleDuplicateDesign(duplicateCount)}
+                    onClick={() => { handleDuplicateDesign(duplicateCount); setDuplicateCount(1); }}
                     disabled={!selectedDesignId}
                     className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
                       selectedDesignId
@@ -3018,15 +3018,15 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                   <input
                     type="number"
                     min={1}
-                    max={99}
+                    max={200}
                     value={duplicateCount}
-                    onChange={(e) => setDuplicateCount(Math.max(1, Math.min(99, parseInt(e.target.value) || 1)))}
+                    onChange={(e) => setDuplicateCount(Math.max(1, Math.min(200, parseInt(e.target.value) || 1)))}
                     disabled={!selectedDesignId}
                     className="w-10 h-[28px] lg:h-[24px] text-center text-[11px] border border-gray-300 rounded bg-white outline-none focus:border-cyan-500 disabled:opacity-30 disabled:pointer-events-none"
                     title="Number of copies"
                   />
                   <button
-                    onClick={() => handleDuplicateAndArrange(duplicateCount)}
+                    onClick={() => { handleDuplicateAndArrange(duplicateCount); setDuplicateCount(1); }}
                     disabled={!selectedDesignId}
                     className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
                       selectedDesignId
@@ -3143,7 +3143,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                 {isMobile && (
                   <div className="flex items-center gap-1 ml-auto">
                     <button
-                      onClick={() => handleDuplicateDesign(duplicateCount)}
+                      onClick={() => { handleDuplicateDesign(duplicateCount); setDuplicateCount(1); }}
                       disabled={!selectedDesignId}
                       className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] ${
                         selectedDesignId
@@ -3158,15 +3158,15 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                     <input
                       type="number"
                       min={1}
-                      max={99}
+                      max={200}
                       value={duplicateCount}
-                      onChange={(e) => setDuplicateCount(Math.max(1, Math.min(99, parseInt(e.target.value) || 1)))}
+                      onChange={(e) => setDuplicateCount(Math.max(1, Math.min(200, parseInt(e.target.value) || 1)))}
                       disabled={!selectedDesignId}
                       className="w-10 h-[32px] text-center text-[11px] border border-gray-300 rounded bg-white outline-none focus:border-cyan-500 disabled:opacity-30 disabled:pointer-events-none"
                       title="Number of copies"
                     />
                     <button
-                      onClick={() => handleDuplicateAndArrange(duplicateCount)}
+                      onClick={() => { handleDuplicateAndArrange(duplicateCount); setDuplicateCount(1); }}
                       disabled={!selectedDesignId}
                       className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[10px] font-medium shadow-sm min-h-[36px] ${
                         selectedDesignId
@@ -3331,8 +3331,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
           onClick={(e) => e.stopPropagation()}
         >
           {([
-            { icon: Copy, label: t("editor.duplicate").replace(/ \(.*/, '') + ` (${duplicateCount})`, shortcut: 'Ctrl+D', action: () => { handleDuplicateDesign(duplicateCount); setContextMenu(null); }, disabled: false },
-            { icon: Copy, label: t("editor.duplicateArrange") + ` (${duplicateCount})`, shortcut: '', action: () => { handleDuplicateAndArrange(duplicateCount); setContextMenu(null); }, disabled: false },
+            { icon: Copy, label: t("editor.duplicate").replace(/ \(.*/, '') + ` (${duplicateCount})`, shortcut: 'Ctrl+D', action: () => { handleDuplicateDesign(duplicateCount); setDuplicateCount(1); setContextMenu(null); }, disabled: false },
+            { icon: Copy, label: t("editor.duplicateArrange") + ` (${duplicateCount})`, shortcut: '', action: () => { handleDuplicateAndArrange(duplicateCount); setDuplicateCount(1); setContextMenu(null); }, disabled: false },
             { icon: Trash2, label: t("editor.delete").replace(/ \(.*/, ''), shortcut: 'Del', action: () => { if (selectedDesignIds.size > 1) handleDeleteMulti(selectedDesignIds); else handleDeleteDesign(contextMenu.designId); setContextMenu(null); }, disabled: false },
             null,
             { icon: RotateCw, label: t("editor.rotate").replace(/ \(.*/, ''), shortcut: 'R', action: () => { handleRotate90(); setContextMenu(null); }, disabled: false },
