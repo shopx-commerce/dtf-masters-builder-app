@@ -1573,14 +1573,20 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     }
 
     saveSnapshot();
+    const oldW = artboardWidth;
+    const oldH = artboardHeight;
+
     setDesigns(prev => prev.map(d => {
-      const { nx, ny } = clampDesignToArtboard(d, newWidth, newHeight);
-      return { ...d, transform: { ...d.transform, nx, ny } };
+      const absCx = d.transform.nx * oldW;
+      const absCy = d.transform.ny * oldH;
+      const newTransform = { ...d.transform, nx: absCx / newWidth, ny: absCy / newHeight };
+      const { nx, ny } = clampDesignToArtboard({ ...d, transform: newTransform }, newWidth, newHeight);
+      return { ...d, transform: { ...newTransform, nx, ny } };
     }));
 
     setArtboardWidth(newWidth);
     setArtboardHeight(newHeight);
-  }, [designs.length, saveSnapshot]);
+  }, [designs.length, saveSnapshot, artboardWidth, artboardHeight]);
 
   const GANGSHEET_HEIGHTS = useMemo(() => {
     if (initialGangsheetHeights && initialGangsheetHeights.length > 0) return initialGangsheetHeights;
