@@ -319,7 +319,7 @@ export default function ControlsSection({
       </div>
 
       {isMobile && selectedVariantPrice != null && (
-        <p className="text-xs text-gray-900 px-0.5 py-0.5 tabular-nums">
+        <p className="text-xs text-gray-900 px-0.5 py-0.5 tabular-nums min-w-0 break-words leading-snug">
           <span className="font-medium">Price:</span>{' '}
           <span className="font-bold">{formatVariantPriceForDisplay(selectedVariantPrice)}</span>
         </p>

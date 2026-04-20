@@ -17,11 +17,9 @@ export function getSelectedVariantPrice(
   return withPrice?.price ?? null;
 }
 
-/** Plain-text display: "$29.34 USD" (appends USD when the API string has no currency code). */
+/** Plain-text display: "$29.34" (symbol only; strips trailing currency words from API strings). */
 export function formatVariantPriceForDisplay(raw: string): string {
-  const t = raw.trim();
+  const t = raw.trim().replace(/\s+(USD|EUR|GBP|CAD|AUD)\s*$/i, '').trim();
   if (!t) return '';
-  const withDollar = t.startsWith('$') ? t : `$${t}`;
-  if (/\b(USD|EUR|GBP|CAD|AUD)\b/i.test(withDollar)) return withDollar;
-  return `${withDollar} USD`;
+  return t.startsWith('$') ? t : `$${t}`;
 }

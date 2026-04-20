@@ -3067,7 +3067,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         {/* Top bar: three rows on mobile, wraps on desktop when metric to avoid overlap */}
         <div className="flex-shrink-0 flex flex-col lg:flex-row lg:flex-wrap lg:items-center gap-1.5 lg:gap-2 bg-white border-b border-gray-200 px-2 py-1 lg:px-3 lg:py-1.5">
           {/* Row 1: Upload, file info, Auto-Arrange, Undo/Redo/Dup/Del */}
-          <div className="flex items-center gap-1.5 lg:gap-2 min-w-0 flex-wrap lg:flex-nowrap flex-shrink-0">
+          <div className="flex items-center gap-1.5 lg:gap-2 min-w-0 flex-wrap flex-shrink-0">
             <UploadSection 
               onImageUpload={handleFileUploadUnified}
               onBatchStart={handleBatchStart}
@@ -3170,7 +3170,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                 </div>
               )}
             </div>
-            <div className="flex items-center gap-0.5 flex-shrink-0 flex-wrap lg:flex-nowrap">
+            <div className="flex min-w-0 items-center justify-end gap-0.5 flex-wrap">
               <button
                 onClick={handleUndo}
                 disabled={!canUndo()}
@@ -3205,10 +3205,12 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
               {!isMobile && selectedVariantPrice != null && (
                 <>
                   <div className="w-px h-4 bg-gray-200 mx-0.5 flex-shrink-0" aria-hidden />
-                  <span className="text-[11px] lg:text-xs text-gray-900 tabular-nums flex-shrink-0 max-w-[min(100%,14rem)] truncate" title={formatVariantPriceForDisplay(selectedVariantPrice)}>
-                    <span className="font-medium">Price:</span>{' '}
-                    <span className="font-bold">{formatVariantPriceForDisplay(selectedVariantPrice)}</span>
-                  </span>
+                  <div className="min-w-0 max-w-full flex flex-wrap items-baseline justify-end gap-x-1 gap-y-0.5 text-right text-[11px] lg:text-xs text-gray-900 tabular-nums leading-snug">
+                    <span className="font-medium shrink-0">Price:</span>
+                    <span className="font-bold break-words [overflow-wrap:anywhere] min-w-0">
+                      {formatVariantPriceForDisplay(selectedVariantPrice)}
+                    </span>
+                  </div>
                 </>
               )}
               {isMobile && (
