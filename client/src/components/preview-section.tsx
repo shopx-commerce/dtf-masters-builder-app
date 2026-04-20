@@ -1,4 +1,4 @@
-import { useEffect, useRef, forwardRef, useImperativeHandle, useState, useCallback, useMemo } from "react";
+import { useEffect, useLayoutEffect, useRef, forwardRef, useImperativeHandle, useState, useCallback, useMemo } from "react";
 import { ZoomIn, ZoomOut, RotateCcw, ScanSearch, Focus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/lib/i18n";
@@ -26,6 +26,27 @@ function getResizeCursor(handleId: string, rotationDeg: number): string {
   if (angle >= 202.5 && angle < 247.5) return 'sw-resize';
   if (angle >= 247.5 && angle < 292.5) return 'w-resize';
   return 'nw-resize';
+}
+
+/** CSS pixel size of the preview “paper” from the gray viewport and artboard aspect (same math as resize handler). */
+function computePreviewDimensions(
+  availW: number,
+  availH: number,
+  artboardWidth: number,
+  artboardHeight: number,
+): { w: number; h: number } | null {
+  if (availW <= 0 || availH <= 0 || artboardHeight <= 0) return null;
+  const artboardAspect = artboardWidth / artboardHeight;
+  let w: number;
+  let h: number;
+  if (availW / availH > artboardAspect) {
+    h = Math.round(Math.max(200, availH));
+    w = Math.round(h * artboardAspect);
+  } else {
+    w = Math.round(Math.max(200, availW));
+    h = Math.round(w / artboardAspect);
+  }
+  return { w, h };
 }
 
 interface PreviewSectionProps {
@@ -101,9 +122,12 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const canvasAreaRef = useRef<HTMLDivElement>(null);
     const dpiScaleRef = useRef(BASE_DPI_SCALE);
     const lastImageRef = useRef<string | null>(null);
-    const [previewDims, setPreviewDims] = useState({ width: 360, height: 360 });
+    /** Start at 0×0 so we never paint a wrong aspect (e.g. 360×360) before the first measure — that was the visible “snap”. */
+    const [previewDims, setPreviewDims] = useState({ width: 0, height: 0 });
     const previewDimsRef = useRef(previewDims);
     previewDimsRef.current = previewDims;
+    /** Skip noisy sub-pixel changes from ResizeObserver / mobile toolbar. */
+    const lastStablePreviewDimsRef = useRef<{ w: number; h: number } | null>(null);
     const spotPulseRef = useRef(1);
     const spotAnimFrameRef = useRef<number | null>(null);
     const spotOverlayCacheRef = useRef<{ key: string; canvas: HTMLCanvasElement } | null>(null);
@@ -122,6 +146,28 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const fitScale = Math.min(availW / dims.width, availH / dims.height);
       return Math.max(ZOOM_MIN_ABSOLUTE, Math.round(fitScale * 20) / 20);
     }, []);
+
+    const syncPreviewSizeFromWrapper = useCallback(() => {
+      const wrapper = canvasAreaRef.current;
+      if (!wrapper) return;
+      const availW = wrapper.clientWidth - 48;
+      const availH = wrapper.clientHeight - 48;
+      const computed = computePreviewDimensions(availW, availH, artboardWidth, artboardHeight);
+      if (!computed) return;
+      const { w, h } = computed;
+      const prev = lastStablePreviewDimsRef.current;
+      if (prev && Math.abs(w - prev.w) < 3 && Math.abs(h - prev.h) < 3) return;
+      lastStablePreviewDimsRef.current = { w, h };
+      const fitWidthZoom = availW / Math.max(1, w);
+      const baseDPI = fitWidthZoom > 1.5 ? Math.ceil(fitWidthZoom * 1.25) : BASE_DPI_SCALE;
+      dpiScaleRef.current = Math.max(BASE_DPI_SCALE, baseDPI);
+      previewDimsRef.current = { width: w, height: h };
+      setPreviewDims({ width: w, height: h });
+      requestAnimationFrame(() => {
+        minZoomRef.current = getMinZoom();
+      });
+    }, [artboardWidth, artboardHeight, getMinZoom]);
+
     const minZoomRef = useRef(1);
 
     // True when artboard width overflows viewport (left-click panning takes priority over design interaction)
@@ -2225,61 +2271,64 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         if (wheelTimeoutRef.current) clearTimeout(wheelTimeoutRef.current);
       };
     }, []);
-    
-    // Reset zoom only on the very first design (empty → 1 design transition)
-    const hasEverHadDesignRef = useRef(false);
+
     useEffect(() => {
       if (!imageInfo) {
         lastImageRef.current = null;
         return;
       }
-      
+
       const imageKey = `${imageInfo.image.src}-${imageInfo.image.width}-${imageInfo.image.height}`;
       if (lastImageRef.current === imageKey) return;
       lastImageRef.current = imageKey;
+    }, [imageInfo]);
 
-      if (!hasEverHadDesignRef.current) {
-        hasEverHadDesignRef.current = true;
-        requestAnimationFrame(() => fitToView());
-      }
-    }, [imageInfo, fitToView]);
+    // Synchronous measure before browser paint — avoids one frame at the wrong aspect (the old 360×360 placeholder snap).
+    useLayoutEffect(() => {
+      lastStablePreviewDimsRef.current = null;
+      syncPreviewSizeFromWrapper();
+    }, [syncPreviewSizeFromWrapper]);
 
     useEffect(() => {
       const wrapper = canvasAreaRef.current;
       if (!wrapper) return;
-      const updateSize = () => {
-        const availW = wrapper.clientWidth - 48;
-        const availH = wrapper.clientHeight - 48;
-        if (availW <= 0 || availH <= 0) return;
-        const artboardAspect = artboardWidth / artboardHeight;
-        let w: number, h: number;
-        if (availW / availH > artboardAspect) {
-          h = Math.round(Math.max(200, availH));
-          w = Math.round(h * artboardAspect);
-        } else {
-          w = Math.round(Math.max(200, availW));
-          h = Math.round(w / artboardAspect);
-        }
 
-        const fitWidthZoom = availW / Math.max(1, w);
-        const baseDPI = fitWidthZoom > 1.5
-          ? Math.ceil(fitWidthZoom * 1.25)
-          : BASE_DPI_SCALE;
-        dpiScaleRef.current = Math.max(BASE_DPI_SCALE, baseDPI);
+      const isNarrowViewport = () =>
+        typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches;
 
-        setPreviewDims({ width: w, height: h });
-        requestAnimationFrame(() => { minZoomRef.current = getMinZoom(); });
-      };
-      updateSize();
+      syncPreviewSizeFromWrapper();
+
       let resizeRafId: number | null = null;
-      const observer = new ResizeObserver(() => {
+      let mobileDebounceId: ReturnType<typeof setTimeout> | null = null;
+
+      const scheduleResize = () => {
+        if (isNarrowViewport()) {
+          if (mobileDebounceId != null) clearTimeout(mobileDebounceId);
+          mobileDebounceId = setTimeout(() => {
+            mobileDebounceId = null;
+            syncPreviewSizeFromWrapper();
+          }, 120);
+          return;
+        }
         if (resizeRafId != null) return;
-        resizeRafId = requestAnimationFrame(() => { resizeRafId = null; updateSize(); });
+        resizeRafId = requestAnimationFrame(() => {
+          resizeRafId = null;
+          syncPreviewSizeFromWrapper();
+        });
+      };
+
+      const observer = new ResizeObserver(() => {
+        scheduleResize();
       });
       observer.observe(wrapper);
-      return () => { observer.disconnect(); if (resizeRafId != null) cancelAnimationFrame(resizeRafId); };
-    }, [artboardWidth, artboardHeight]);
-    
+
+      return () => {
+        observer.disconnect();
+        if (resizeRafId != null) cancelAnimationFrame(resizeRafId);
+        if (mobileDebounceId != null) clearTimeout(mobileDebounceId);
+      };
+    }, [syncPreviewSizeFromWrapper]);
+
     useImperativeHandle(ref, () => {
       const canvas = canvasRef.current;
       if (!canvas) return null as any;
@@ -2484,6 +2533,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       if (!canvas) return;
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
+      if (previewDims.width <= 0 || previewDims.height <= 0) return;
 
       const maxBufferArea = 8_000_000;
       const effectiveDPI = Math.max(BASE_DPI_SCALE, dpiScaleRef.current * zoomDpiTier);
@@ -2922,6 +2972,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           className="flex-1 min-h-0 flex items-center justify-center bg-gray-100 p-3 relative overflow-hidden cursor-default"
           style={{ userSelect: 'none', touchAction: 'none' }}
         >
+          {previewDims.width > 0 && previewDims.height > 0 ? (
+          <>
           <div className="relative" style={{ paddingBottom: 16, paddingRight: 14 }}>
             <div 
               ref={containerRef}
@@ -2941,8 +2993,6 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                   border: '3px solid #ffffff',
                   outline: '2px solid #000000',
                   boxSizing: 'content-box',
-                  maxWidth: '100%',
-                  maxHeight: '100%',
                   transform: `scale(${zoom}) translate(${panX}px, ${panY}px)`,
                   transformOrigin: 'center',
                   willChange: 'transform',
@@ -3186,6 +3236,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
               {dragPerfText}
             </div>
           )}
+          </>
+          ) : null}
         </div>
 
         {/* Bottom toolbar */}
