@@ -2341,23 +2341,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const wrapper = canvasAreaRef.current;
       if (!wrapper) return;
 
-      const isNarrowViewport = () =>
-        typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches;
-
       syncPreviewSizeFromWrapper();
 
       let resizeRafId: number | null = null;
-      let mobileDebounceId: ReturnType<typeof setTimeout> | null = null;
-
       const scheduleResize = () => {
-        if (isNarrowViewport()) {
-          if (mobileDebounceId != null) clearTimeout(mobileDebounceId);
-          mobileDebounceId = setTimeout(() => {
-            mobileDebounceId = null;
-            syncPreviewSizeFromWrapper();
-          }, 120);
-          return;
-        }
         if (resizeRafId != null) return;
         resizeRafId = requestAnimationFrame(() => {
           resizeRafId = null;
@@ -2370,10 +2357,37 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       });
       observer.observe(wrapper);
 
+      const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+      const onVisualViewport = () => {
+        scheduleResize();
+      };
+      if (vv) {
+        vv.addEventListener('resize', onVisualViewport);
+      }
+
+      // Mobile: first layout pass often reports a smaller usable rect; the next frame(s) match after
+      // chrome/safe-area settle. Double-rAF remeasures soon without the old 120ms delay (which caused
+      // a visible “small sheet then grows” step).
+      let stableOuterRaf: number | null = null;
+      let stableInnerRaf: number | null = null;
+      const narrow =
+        typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches;
+      if (narrow) {
+        stableOuterRaf = requestAnimationFrame(() => {
+          stableInnerRaf = requestAnimationFrame(() => {
+            syncPreviewSizeFromWrapper();
+          });
+        });
+      }
+
       return () => {
         observer.disconnect();
         if (resizeRafId != null) cancelAnimationFrame(resizeRafId);
-        if (mobileDebounceId != null) clearTimeout(mobileDebounceId);
+        if (vv) {
+          vv.removeEventListener('resize', onVisualViewport);
+        }
+        if (stableOuterRaf != null) cancelAnimationFrame(stableOuterRaf);
+        if (stableInnerRaf != null) cancelAnimationFrame(stableInnerRaf);
       };
     }, [syncPreviewSizeFromWrapper]);
 
