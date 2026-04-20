@@ -7,6 +7,7 @@ import { Download, Layers, FileCheck, Palette, Eye, EyeOff, ChevronDown, Info, M
 import { useLanguage } from "@/lib/i18n";
 import { formatLength } from "@/lib/format-length";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { formatVariantPriceForDisplay, getSelectedVariantPrice } from "@/lib/variant-price";
 
 export interface SpotPreviewData {
   enabled: boolean;
@@ -83,16 +84,10 @@ export default function ControlsSection({
   const isMobile = useIsMobile();
   const canDownload = !!imageInfo || designCount > 0;
 
-  const selectedVariantPrice = useMemo(() => {
-    if (!shopifyVariants?.length) return null;
-    if (artboardHeight != null) {
-      const h = Number(artboardHeight);
-      const byHeight = shopifyVariants.find((v) => v.height != null && Math.abs(v.height - h) < 0.01);
-      if (byHeight?.price) return byHeight.price;
-    }
-    const withPrice = shopifyVariants.find((v) => v.price != null);
-    return withPrice?.price ?? null;
-  }, [shopifyVariants, artboardHeight]);
+  const selectedVariantPrice = useMemo(
+    () => getSelectedVariantPrice(shopifyVariants, artboardHeight),
+    [shopifyVariants, artboardHeight]
+  );
 
   const [showSpotColors, setShowSpotColors] = useState(false);
   const [showFluorInfo, setShowFluorInfo] = useState(false);
@@ -323,16 +318,11 @@ export default function ControlsSection({
         )}
       </div>
 
-      {selectedVariantPrice != null && (
-        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-          <div className="flex items-center gap-2 px-3 py-1.5">
-            <div className="w-6 h-6 rounded-md bg-emerald-500/10 flex items-center justify-center flex-shrink-0">
-              <span className="text-xs font-bold text-emerald-600">$</span>
-            </div>
-            <span className="text-xs font-medium text-gray-900 flex-shrink-0">Price</span>
-            <span className="ml-auto text-sm font-semibold text-emerald-600">${selectedVariantPrice}</span>
-          </div>
-        </div>
+      {isMobile && selectedVariantPrice != null && (
+        <p className="text-xs text-gray-900 px-0.5 py-0.5 tabular-nums">
+          <span className="font-medium">Price:</span>{' '}
+          <span className="font-bold">{formatVariantPriceForDisplay(selectedVariantPrice)}</span>
+        </p>
       )}
 
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">

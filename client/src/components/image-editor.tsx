@@ -41,6 +41,7 @@ import { useHistory, type HistorySnapshot } from "@/hooks/use-history";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useLanguage } from "@/lib/i18n";
 import { formatDimensions, formatLength, useMetric, cmToInches, getUnitSuffix } from "@/lib/format-length";
+import { formatVariantPriceForDisplay, getSelectedVariantPrice } from "@/lib/variant-price";
 import { Trash2, Copy, ChevronDown, ChevronUp, Undo2, Redo2, RotateCw, ArrowUpLeft, ArrowUpRight, ArrowDownLeft, ArrowDownRight, LayoutGrid, Layers, Loader2, Plus, Minus, Droplets, Link, Unlink, FlipHorizontal2, FlipVertical2, MousePointerClick, XCircle, Stamp, Check, X, ScanSearch } from "lucide-react";
 
 export type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
@@ -431,6 +432,11 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     widthInches: activeWidthInches,
     heightInches: activeHeightInches,
   }), [resizeSettings, activeWidthInches, activeHeightInches]);
+
+  const selectedVariantPrice = useMemo(
+    () => getSelectedVariantPrice(shopifyVariants, artboardHeight),
+    [shopifyVariants, artboardHeight]
+  );
 
   const effectiveDPI = useMemo(() => {
     if (!activeImageInfo) return 300;
@@ -3196,6 +3202,15 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
               >
                 <Trash2 className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
               </button>
+              {!isMobile && selectedVariantPrice != null && (
+                <>
+                  <div className="w-px h-4 bg-gray-200 mx-0.5 flex-shrink-0" aria-hidden />
+                  <span className="text-[11px] lg:text-xs text-gray-900 tabular-nums flex-shrink-0 max-w-[min(100%,14rem)] truncate" title={formatVariantPriceForDisplay(selectedVariantPrice)}>
+                    <span className="font-medium">Price:</span>{' '}
+                    <span className="font-bold">{formatVariantPriceForDisplay(selectedVariantPrice)}</span>
+                  </span>
+                </>
+              )}
               {isMobile && (
                 <button
                   onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2 })}
