@@ -49,6 +49,10 @@ function computePreviewDimensions(
   return { w, h };
 }
 
+function isNarrowViewport(): boolean {
+  return typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches;
+}
+
 interface PreviewSectionProps {
   imageInfo: ImageInfo | null;
   resizeSettings: ResizeSettings;
@@ -2299,8 +2303,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       lastImageRef.current = imageKey;
     }, [imageInfo]);
 
-    // Synchronous measure before browser paint — avoids one frame at the wrong aspect (the old 360×360 placeholder snap).
+    // Desktop: measure before paint. Mobile: skip — the preview flex area often has a *smaller* height on the first
+    // layout pass (parent column, safe-area, pb-16), then grows a frame later → “small sheet then jumps bigger”.
+    // First mobile measure runs in useEffect after a short rAF chain instead.
     useLayoutEffect(() => {
+      if (isNarrowViewport()) return;
       lastStablePreviewDimsRef.current = null;
       syncPreviewSizeFromWrapper();
     }, [syncPreviewSizeFromWrapper]);
@@ -2341,8 +2348,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const wrapper = canvasAreaRef.current;
       if (!wrapper) return;
 
-      syncPreviewSizeFromWrapper();
-
+      let cancelled = false;
       let resizeRafId: number | null = null;
       const scheduleResize = () => {
         if (resizeRafId != null) return;
@@ -2355,39 +2361,45 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const observer = new ResizeObserver(() => {
         scheduleResize();
       });
-      observer.observe(wrapper);
 
       const vv = typeof window !== 'undefined' ? window.visualViewport : null;
       const onVisualViewport = () => {
         scheduleResize();
       };
-      if (vv) {
-        vv.addEventListener('resize', onVisualViewport);
-      }
 
-      // Mobile: first layout pass often reports a smaller usable rect; the next frame(s) match after
-      // chrome/safe-area settle. Double-rAF remeasures soon without the old 120ms delay (which caused
-      // a visible “small sheet then grows” step).
-      let stableOuterRaf: number | null = null;
-      let stableInnerRaf: number | null = null;
-      const narrow =
-        typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches;
+      const narrow = isNarrowViewport();
+      let bootstrapOuterRaf: number | null = null;
+
+      const attachResizeListeners = () => {
+        observer.observe(wrapper);
+        if (vv) vv.addEventListener('resize', onVisualViewport);
+      };
+
       if (narrow) {
-        stableOuterRaf = requestAnimationFrame(() => {
-          stableInnerRaf = requestAnimationFrame(() => {
-            syncPreviewSizeFromWrapper();
+        // Wait until flex + insets + parent padding have settled; avoid RO firing first with a too-small height.
+        bootstrapOuterRaf = requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              if (cancelled) return;
+              lastStablePreviewDimsRef.current = null;
+              syncPreviewSizeFromWrapper();
+              attachResizeListeners();
+            });
           });
         });
+      } else {
+        syncPreviewSizeFromWrapper();
+        attachResizeListeners();
       }
 
       return () => {
+        cancelled = true;
         observer.disconnect();
         if (resizeRafId != null) cancelAnimationFrame(resizeRafId);
         if (vv) {
           vv.removeEventListener('resize', onVisualViewport);
         }
-        if (stableOuterRaf != null) cancelAnimationFrame(stableOuterRaf);
-        if (stableInnerRaf != null) cancelAnimationFrame(stableInnerRaf);
+        if (bootstrapOuterRaf != null) cancelAnimationFrame(bootstrapOuterRaf);
       };
     }, [syncPreviewSizeFromWrapper]);
 
