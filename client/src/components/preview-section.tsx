@@ -128,22 +128,26 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     previewDimsRef.current = previewDims;
     /** Skip noisy sub-pixel changes from ResizeObserver / mobile toolbar. */
     const lastStablePreviewDimsRef = useRef<{ w: number; h: number } | null>(null);
+    /** Only auto–fit zoom when preview size or artboard actually changes (not on every parent re-render). */
+    const lastViewportFitSigRef = useRef<string>('');
     const spotPulseRef = useRef(1);
     const spotAnimFrameRef = useRef<number | null>(null);
     const spotOverlayCacheRef = useRef<{ key: string; canvas: HTMLCanvasElement } | null>(null);
     const createSpotOverlayCanvasRef = useRef<((source?: HTMLImageElement | HTMLCanvasElement) => HTMLCanvasElement | null) | null>(null);
 
+    /** Minimum zoom = fit entire sheet in the gray preview viewport (canvas area), never using the paper box (same as previewDims — that wrongly kept zoom ~1 and looked “zoomed in”). */
     const getMinZoom = useCallback(() => {
-      const container = containerRef.current;
-      if (!container) return ZOOM_MIN_ABSOLUTE;
+      const area = canvasAreaRef.current;
       const dims = previewDimsRef.current;
+      if (!area || dims.width <= 0 || dims.height <= 0) return ZOOM_MIN_ABSOLUTE;
       const padFraction = 0.03;
       const padX = Math.max(4, Math.round(dims.width * padFraction));
       const padY = Math.max(4, Math.round(dims.height * padFraction));
-      const availW = container.clientWidth - padX * 2;
-      const availH = container.clientHeight - padY * 2;
-      if (availW <= 0 || availH <= 0 || dims.width <= 0 || dims.height <= 0) return ZOOM_MIN_ABSOLUTE;
-      const fitScale = Math.min(availW / dims.width, availH / dims.height);
+      const availW = area.clientWidth - padX * 2;
+      const availH = area.clientHeight - padY * 2;
+      if (availW <= 0 || availH <= 0) return ZOOM_MIN_ABSOLUTE;
+      const raw = Math.min(availW / dims.width, availH / dims.height);
+      const fitScale = Math.min(1, raw);
       return Math.max(ZOOM_MIN_ABSOLUTE, Math.round(fitScale * 20) / 20);
     }, []);
 
@@ -163,10 +167,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       dpiScaleRef.current = Math.max(BASE_DPI_SCALE, baseDPI);
       previewDimsRef.current = { width: w, height: h };
       setPreviewDims({ width: w, height: h });
-      requestAnimationFrame(() => {
-        minZoomRef.current = getMinZoom();
-      });
-    }, [artboardWidth, artboardHeight, getMinZoom]);
+    }, [artboardWidth, artboardHeight]);
 
     const minZoomRef = useRef(1);
 
@@ -1942,19 +1943,34 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       handleInteractionEnd();
     }, [handleInteractionEnd]);
     
-    // Fit to View: calculate zoom to fit canvas within container and reset pan
+    // Fit entire sheet in the gray preview viewport (same behavior as changing sheet size — not the old paper-box math).
     const fitToView = useCallback(() => {
-      if (!containerRef.current) return;
-      const viewPadding = Math.max(4, Math.round(Math.min(previewDims.width, previewDims.height) * 0.03));
-      const containerWidth = containerRef.current.clientWidth - viewPadding * 2;
-      const containerHeight = containerRef.current.clientHeight - viewPadding * 2;
-      const scaleX = containerWidth / previewDims.width;
-      const scaleY = containerHeight / previewDims.height;
-      const fitZoom = Math.min(scaleX, scaleY);
-      setZoom(Math.max(minZoomRef.current, Math.min(zoomMaxRef.current, Math.round(fitZoom * 20) / 20)));
+      const area = canvasAreaRef.current;
+      if (!area) return;
+      const dims = previewDimsRef.current;
+      if (dims.width <= 0 || dims.height <= 0) return;
+      suppressTransitionRef.current = true;
+      const padX = Math.max(4, Math.round(dims.width * 0.03));
+      const padY = Math.max(4, Math.round(dims.height * 0.03));
+      const availW = area.clientWidth - padX * 2;
+      const availH = area.clientHeight - padY * 2;
+      if (availW <= 0 || availH <= 0) {
+        suppressTransitionRef.current = false;
+        return;
+      }
+      const raw = Math.min(availW / dims.width, availH / dims.height);
+      const fitZoom = Math.min(1, raw);
+      const z = Math.max(ZOOM_MIN_ABSOLUTE, Math.min(zoomMaxRef.current, Math.round(fitZoom * 20) / 20));
+      minZoomRef.current = z;
+      setZoom(z);
       setPanX(0);
       setPanY(0);
-    }, [previewDims.height, previewDims.width]);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          suppressTransitionRef.current = false;
+        });
+      });
+    }, []);
 
     // Reset view to fit the full gangsheet in view
     const resetView = useCallback(() => {
@@ -2288,6 +2304,38 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       lastStablePreviewDimsRef.current = null;
       syncPreviewSizeFromWrapper();
     }, [syncPreviewSizeFromWrapper]);
+
+    // Same “minimized” fit as after changing sheet size, but before paint (no zoom-in-then-snap). Does not run on every render.
+    useLayoutEffect(() => {
+      if (previewDims.width <= 0 || previewDims.height <= 0) return;
+      const sig = `${previewDims.width}x${previewDims.height}@${artboardWidth}x${artboardHeight}`;
+      if (lastViewportFitSigRef.current === sig) return;
+      lastViewportFitSigRef.current = sig;
+      const area = canvasAreaRef.current;
+      if (!area) return;
+      suppressTransitionRef.current = true;
+      const dims = previewDimsRef.current;
+      const padX = Math.max(4, Math.round(dims.width * 0.03));
+      const padY = Math.max(4, Math.round(dims.height * 0.03));
+      const availW = area.clientWidth - padX * 2;
+      const availH = area.clientHeight - padY * 2;
+      if (availW <= 0 || availH <= 0) {
+        suppressTransitionRef.current = false;
+        return;
+      }
+      const raw = Math.min(availW / dims.width, availH / dims.height);
+      const fitZoom = Math.min(1, raw);
+      const z = Math.max(ZOOM_MIN_ABSOLUTE, Math.min(zoomMaxRef.current, Math.round(fitZoom * 20) / 20));
+      minZoomRef.current = z;
+      setZoom(z);
+      setPanX(0);
+      setPanY(0);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          suppressTransitionRef.current = false;
+        });
+      });
+    }, [previewDims.width, previewDims.height, artboardWidth, artboardHeight]);
 
     useEffect(() => {
       const wrapper = canvasAreaRef.current;
