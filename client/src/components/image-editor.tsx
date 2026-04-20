@@ -22,7 +22,7 @@ import { useHistory, type HistorySnapshot } from "@/hooks/use-history";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useLanguage } from "@/lib/i18n";
 import { formatDimensions, formatLength, useMetric, cmToInches, getUnitSuffix } from "@/lib/format-length";
-import { Trash2, Copy, ChevronDown, ChevronUp, Undo2, Redo2, RotateCw, ArrowUpLeft, ArrowUpRight, ArrowDownLeft, ArrowDownRight, LayoutGrid, Layers, Loader2, Plus, Minus, Droplets, Link, Unlink, FlipHorizontal2, FlipVertical2, MousePointerClick, XCircle, Stamp, Check, X, ScanSearch } from "lucide-react";
+import { Trash2, Copy, ChevronDown, ChevronUp, ChevronLeft, Undo2, Redo2, RotateCw, ArrowUpLeft, ArrowUpRight, ArrowDownLeft, ArrowDownRight, LayoutGrid, Layers, Loader2, Plus, Minus, Droplets, Link, Unlink, FlipHorizontal2, FlipVertical2, MousePointerClick, XCircle, Stamp, Check, X, ScanSearch } from "lucide-react";
 
 export type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
 import type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
@@ -272,6 +272,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
   const [artboardHeight, setArtboardHeight] = useState(profile.gangsheetHeights[0] ?? 12);
   const [designGap, setDesignGap] = useState<number | undefined>(0.25);
   const [duplicateCount, setDuplicateCount] = useState(1);
+  const [previewDrawerOpen, setPreviewDrawerOpen] = useState(false);
+  const touchStartXRef = useRef<number | null>(null);
   const [designTransform, setDesignTransform] = useState<ImageTransform>({ nx: 0.5, ny: 0.5, s: 1, rotation: 0 });
   const [designs, setDesigns] = useState<DesignItem[]>([]);
   const [selectedDesignId, setSelectedDesignId] = useState<string | null>(null);
@@ -2719,6 +2721,18 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
+      onTouchStart={(e) => { touchStartXRef.current = e.touches[0].clientX; }}
+      onTouchEnd={(e) => {
+        if (touchStartXRef.current === null) return;
+        const dx = e.changedTouches[0].clientX - touchStartXRef.current;
+        const startX = touchStartXRef.current;
+        touchStartXRef.current = null;
+        if (!previewDrawerOpen && startX > window.innerWidth * 0.7 && dx < -40) {
+          setPreviewDrawerOpen(true);
+        } else if (previewDrawerOpen && dx > 60) {
+          setPreviewDrawerOpen(false);
+        }
+      }}
     >
       {isDragOver && (
           <div className="absolute inset-0 z-50 bg-blue-500/10 border-2 border-dashed border-blue-500 rounded-lg flex items-center justify-center pointer-events-none">
@@ -2729,7 +2743,26 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
             </div>
           </div>
         )}
-        <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
+        <div className="flex-1 min-h-0 flex flex-col lg:flex-row relative">
+      {/* Mobile: backdrop when preview drawer is open */}
+      {isMobile && previewDrawerOpen && (
+        <div
+          className="fixed inset-0 bg-black/40 z-40"
+          onClick={() => setPreviewDrawerOpen(false)}
+        />
+      )}
+      {/* Mobile: floating tab to open preview drawer */}
+      {isMobile && !previewDrawerOpen && (
+        <button
+          onClick={() => setPreviewDrawerOpen(true)}
+          className="fixed right-0 top-1/2 -translate-y-1/2 z-40 bg-cyan-500 text-white py-5 px-1 rounded-l-xl shadow-lg flex flex-col items-center gap-1"
+          style={{ writingMode: 'vertical-rl' }}
+          title="Open preview"
+        >
+          <ChevronLeft className="w-4 h-4 rotate-0 mb-0.5" style={{ writingMode: 'horizontal-tb' }} />
+          <span className="text-[10px] font-semibold tracking-wide" style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}>PREVIEW</span>
+        </button>
+      )}
       {/* Left sidebar - Layers + Settings */}
       <div className="flex-shrink-0 w-full lg:w-[320px] xl:w-[340px] border-r border-gray-200 bg-white overflow-y-auto overflow-x-hidden">
         <div className="p-2.5 space-y-2">
@@ -2935,7 +2968,24 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       </div>
 
       {/* Right area - Canvas workspace */}
-      <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden">
+      <div className={
+        isMobile
+          ? `fixed inset-y-0 right-0 w-full z-50 flex flex-col bg-white transition-transform duration-300 ease-in-out ${previewDrawerOpen ? 'translate-x-0' : 'translate-x-full'}`
+          : 'flex-1 min-w-0 flex flex-col h-full overflow-hidden'
+      }>
+        {/* Mobile drawer header */}
+        {isMobile && (
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 bg-white flex-shrink-0">
+            <button
+              onClick={() => setPreviewDrawerOpen(false)}
+              className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-600 transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <span className="font-semibold text-sm text-gray-900">Preview &amp; Canvas</span>
+            <span className="text-[10px] text-gray-500 ml-1">← swipe right to close</span>
+          </div>
+        )}
         {/* Top bar: three rows on mobile, wraps on desktop when metric to avoid overlap */}
         <div className="flex-shrink-0 flex flex-col lg:flex-row lg:flex-wrap lg:items-center gap-1.5 lg:gap-2 bg-white border-b border-gray-200 px-2 py-1 lg:px-3 lg:py-1.5">
           {/* Row 1: Upload, file info, Auto-Arrange, Undo/Redo/Dup/Del */}
