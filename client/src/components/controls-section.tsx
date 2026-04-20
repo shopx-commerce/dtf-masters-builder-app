@@ -319,85 +319,47 @@ export default function ControlsSection({
       </div>
 
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <div className="flex items-center gap-2 px-3 py-1.5 min-w-0">
+        <div className="flex items-center gap-2 px-3 py-1.5">
           <div className="w-6 h-6 rounded-md bg-cyan-500/10 flex items-center justify-center flex-shrink-0">
             <Layers className="w-3.5 h-3.5 text-cyan-600" />
           </div>
-          {isMobile && selectedVariantPrice != null ? (
-            <div className="flex min-w-0 flex-1 items-stretch gap-2">
-              <div className="flex min-w-0 flex-[3] items-center gap-1">
-                <span className="text-xs font-medium text-gray-900 shrink-0">Quantity</span>
-                <div className="flex items-center gap-1 ml-auto min-w-0">
-                  <button
-                    type="button"
-                    className="w-7 h-7 flex items-center justify-center rounded-md bg-gray-100 border border-gray-200 text-gray-600 hover:bg-gray-200 transition-colors disabled:opacity-40 shrink-0"
-                    disabled={quantity <= 1}
-                    onClick={() => onQuantityChange?.(Math.max(1, quantity - 1))}
-                  >
-                    <Minus className="w-3 h-3" />
-                  </button>
-                  <input
-                    type="number"
-                    min={1}
-                    value={quantity}
-                    onChange={(e) => {
-                      const v = parseInt(e.target.value, 10);
-                      if (!isNaN(v) && v >= 1) onQuantityChange?.(v);
-                    }}
-                    className="w-10 min-w-0 h-7 text-center text-xs font-semibold text-gray-900 bg-gray-100 border border-gray-200 rounded-md [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                  />
-                  <button
-                    type="button"
-                    className="w-7 h-7 flex items-center justify-center rounded-md bg-gray-100 border border-gray-200 text-gray-600 hover:bg-gray-200 transition-colors shrink-0"
-                    onClick={() => onQuantityChange?.(quantity + 1)}
-                  >
-                    <Plus className="w-3 h-3" />
-                  </button>
-                </div>
-              </div>
-              <div className="min-w-0 flex-[2] flex flex-col justify-center border-l border-gray-100 pl-2 self-center py-0.5">
-                <p className="text-[10px] text-right text-gray-900 tabular-nums leading-snug">
-                  <span className="font-medium">Price:</span>{' '}
-                  <span className="font-bold break-words [overflow-wrap:anywhere]">
-                    {formatVariantPriceForDisplay(selectedVariantPrice)}
-                  </span>
-                </p>
-              </div>
-            </div>
-          ) : (
-            <>
-              <span className="text-xs font-medium text-gray-900 flex-shrink-0">Quantity</span>
-              <div className="flex items-center gap-1 ml-auto">
-                <button
-                  type="button"
-                  className="w-7 h-7 flex items-center justify-center rounded-md bg-gray-100 border border-gray-200 text-gray-600 hover:bg-gray-200 transition-colors disabled:opacity-40"
-                  disabled={quantity <= 1}
-                  onClick={() => onQuantityChange?.(Math.max(1, quantity - 1))}
-                >
-                  <Minus className="w-3 h-3" />
-                </button>
-                <input
-                  type="number"
-                  min={1}
-                  value={quantity}
-                  onChange={(e) => {
-                    const v = parseInt(e.target.value, 10);
-                    if (!isNaN(v) && v >= 1) onQuantityChange?.(v);
-                  }}
-                  className="w-12 h-7 text-center text-xs font-semibold text-gray-900 bg-gray-100 border border-gray-200 rounded-md [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                />
-                <button
-                  type="button"
-                  className="w-7 h-7 flex items-center justify-center rounded-md bg-gray-100 border border-gray-200 text-gray-600 hover:bg-gray-200 transition-colors"
-                  onClick={() => onQuantityChange?.(quantity + 1)}
-                >
-                  <Plus className="w-3 h-3" />
-                </button>
-              </div>
-            </>
-          )}
+          <span className="text-xs font-medium text-gray-900 flex-shrink-0">Quantity</span>
+          <div className="flex items-center gap-1 ml-auto">
+            <button
+              type="button"
+              className="w-7 h-7 flex items-center justify-center rounded-md bg-gray-100 border border-gray-200 text-gray-600 hover:bg-gray-200 transition-colors disabled:opacity-40"
+              disabled={quantity <= 1}
+              onClick={() => onQuantityChange?.(Math.max(1, quantity - 1))}
+            >
+              <Minus className="w-3 h-3" />
+            </button>
+            <input
+              type="number"
+              min={1}
+              value={quantity}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                if (!isNaN(v) && v >= 1) onQuantityChange?.(v);
+              }}
+              className="w-12 h-7 text-center text-xs font-semibold text-gray-900 bg-gray-100 border border-gray-200 rounded-md [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+            />
+            <button
+              type="button"
+              className="w-7 h-7 flex items-center justify-center rounded-md bg-gray-100 border border-gray-200 text-gray-600 hover:bg-gray-200 transition-colors"
+              onClick={() => onQuantityChange?.(quantity + 1)}
+            >
+              <Plus className="w-3 h-3" />
+            </button>
+          </div>
         </div>
       </div>
+
+      {isMobile && selectedVariantPrice != null && (
+        <p className="text-xs text-gray-900 text-right tabular-nums min-w-0 break-words leading-snug px-0.5">
+          <span className="font-medium">Price:</span>{' '}
+          <span className="font-bold">{formatVariantPriceForDisplay(selectedVariantPrice)}</span>
+        </p>
+      )}
 
       {enableFluorescent && imageInfo && fluorPanelContainer && createPortal(
         <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
