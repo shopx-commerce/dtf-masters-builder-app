@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ResizeSettings, ImageInfo } from "./image-editor";
-import { Download, Layers, FileCheck, Palette, Eye, EyeOff, ChevronDown, Info, Minus, Plus, ShoppingCart } from "lucide-react";
+import { Download, Layers, FileCheck, Palette, Eye, EyeOff, ChevronDown, Info, ShoppingCart } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
 import { formatLength } from "@/lib/format-length";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -73,8 +73,8 @@ export default function ControlsSection({
   onSpotPreviewChange,
   fluorPanelContainer,
   copySpotSelectionsRef,
-  quantity = 1,
-  onQuantityChange,
+  quantity: _quantity = 1,
+  onQuantityChange: _onQuantityChange,
   shopifyVariants,
   onAddToCart,
   hasVariantId = false,
@@ -276,40 +276,79 @@ export default function ControlsSection({
   return (
     <div className="space-y-4">
       <div className="bg-white rounded-lg border border-gray-200 overflow-visible">
-        <div className="flex items-center gap-2 px-3 py-1.5 pr-4">
+        <div className="flex items-center gap-2 px-3 py-1.5 pr-4 min-w-0">
           <div className="w-6 h-6 rounded-md bg-cyan-500/10 flex items-center justify-center flex-shrink-0">
             <Layers className="w-3.5 h-3.5 text-cyan-600" />
           </div>
           <span className="text-xs font-medium text-gray-900 flex-shrink-0 min-w-0 truncate">{t("controls.gangsheetSize")}</span>
-          <div className="flex items-center gap-1 ml-auto shrink-0 max-w-[min(12rem,46%)]">
-            <span className={`font-semibold text-gray-700 tabular-nums shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
-            <span className={`text-gray-600 shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>×</span>
-            <Select
-              value={String(artboardHeight)}
-              onValueChange={(v) => onArtboardHeightChange?.(parseFloat(v))}
-            >
-              <SelectTrigger
-                className={`h-7 w-[4.5rem] shrink-0 pl-2 pr-1.5 gap-0.5 font-semibold text-gray-900 bg-gray-100 border-gray-200 tabular-nums [&>span]:min-w-0 [&>span]:truncate [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}
+          {isMobile ? (
+            <div className="flex min-w-0 flex-1 items-center justify-end gap-1.5">
+              <div className="flex min-w-0 items-center gap-1">
+                <span className={`font-semibold text-gray-700 tabular-nums shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
+                <span className={`text-gray-600 shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>×</span>
+                <Select
+                  value={String(artboardHeight)}
+                  onValueChange={(v) => onArtboardHeightChange?.(parseFloat(v))}
+                >
+                  <SelectTrigger
+                    className={`h-7 w-[4.5rem] shrink-0 pl-2 pr-1.5 gap-0.5 font-semibold text-gray-900 bg-gray-100 border-gray-200 tabular-nums [&>span]:min-w-0 [&>span]:truncate [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="z-[100]" position="popper" sideOffset={4}>
+                    {gangsheetHeights.map((h) => {
+                      const label = `${formatLength(h, lang)}${lang === "en" ? '"' : ""}`;
+                      return (
+                        <SelectItem
+                          key={h}
+                          value={String(h)}
+                          textValue={label}
+                          className={`tabular-nums ${lang !== 'en' ? 'text-[10px]' : 'text-xs'}`}
+                        >
+                          {label}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+              </div>
+              {selectedVariantPrice != null && (
+                <span className="shrink-0 whitespace-nowrap rounded-full border border-emerald-600 bg-white px-2 py-0.5 text-[10px] font-bold leading-none text-emerald-600 tabular-nums">
+                  {formatVariantPriceForDisplay(selectedVariantPrice)}
+                </span>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-1 ml-auto shrink-0 max-w-[min(12rem,46%)]">
+              <span className={`font-semibold text-gray-700 tabular-nums shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
+              <span className={`text-gray-600 shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>×</span>
+              <Select
+                value={String(artboardHeight)}
+                onValueChange={(v) => onArtboardHeightChange?.(parseFloat(v))}
               >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="z-[100]" position="popper" sideOffset={4}>
-                {gangsheetHeights.map((h) => {
-                  const label = `${formatLength(h, lang)}${lang === "en" ? '"' : ""}`;
-                  return (
-                    <SelectItem
-                      key={h}
-                      value={String(h)}
-                      textValue={label}
-                      className={`tabular-nums ${lang !== 'en' ? 'text-[10px]' : 'text-xs'}`}
-                    >
-                      {label}
-                    </SelectItem>
-                  );
-                })}
-              </SelectContent>
-            </Select>
-          </div>
+                <SelectTrigger
+                  className={`h-7 w-[4.5rem] shrink-0 pl-2 pr-1.5 gap-0.5 font-semibold text-gray-900 bg-gray-100 border-gray-200 tabular-nums [&>span]:min-w-0 [&>span]:truncate [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="z-[100]" position="popper" sideOffset={4}>
+                  {gangsheetHeights.map((h) => {
+                    const label = `${formatLength(h, lang)}${lang === "en" ? '"' : ""}`;
+                    return (
+                      <SelectItem
+                        key={h}
+                        value={String(h)}
+                        textValue={label}
+                        className={`tabular-nums ${lang !== 'en' ? 'text-[10px]' : 'text-xs'}`}
+                      >
+                        {label}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
         </div>
         {recommendedArtboardHeight != null && recommendedArtboardHeight === artboardHeight && (
           <div className="px-3 pb-2 pt-0 text-[10px] text-blue-600 font-medium leading-snug border-t border-blue-100/60 bg-blue-50/40">
@@ -317,49 +356,6 @@ export default function ControlsSection({
           </div>
         )}
       </div>
-
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <div className="flex items-center gap-2 px-3 py-1.5">
-          <div className="w-6 h-6 rounded-md bg-cyan-500/10 flex items-center justify-center flex-shrink-0">
-            <Layers className="w-3.5 h-3.5 text-cyan-600" />
-          </div>
-          <span className="text-xs font-medium text-gray-900 flex-shrink-0">Quantity</span>
-          <div className="flex items-center gap-1 ml-auto">
-            <button
-              type="button"
-              className="w-7 h-7 flex items-center justify-center rounded-md bg-gray-100 border border-gray-200 text-gray-600 hover:bg-gray-200 transition-colors disabled:opacity-40"
-              disabled={quantity <= 1}
-              onClick={() => onQuantityChange?.(Math.max(1, quantity - 1))}
-            >
-              <Minus className="w-3 h-3" />
-            </button>
-            <input
-              type="number"
-              min={1}
-              value={quantity}
-              onChange={(e) => {
-                const v = parseInt(e.target.value, 10);
-                if (!isNaN(v) && v >= 1) onQuantityChange?.(v);
-              }}
-              className="w-12 h-7 text-center text-xs font-semibold text-gray-900 bg-gray-100 border border-gray-200 rounded-md [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-            />
-            <button
-              type="button"
-              className="w-7 h-7 flex items-center justify-center rounded-md bg-gray-100 border border-gray-200 text-gray-600 hover:bg-gray-200 transition-colors"
-              onClick={() => onQuantityChange?.(quantity + 1)}
-            >
-              <Plus className="w-3 h-3" />
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {isMobile && selectedVariantPrice != null && (
-        <p className="text-xs text-gray-900 text-right tabular-nums min-w-0 break-words leading-snug px-0.5">
-          <span className="font-medium">Price:</span>{' '}
-          <span className="font-bold">{formatVariantPriceForDisplay(selectedVariantPrice)}</span>
-        </p>
-      )}
 
       {enableFluorescent && imageInfo && fluorPanelContainer && createPortal(
         <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
