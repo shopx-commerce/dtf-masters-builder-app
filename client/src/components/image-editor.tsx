@@ -306,6 +306,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
   const [designs, setDesigns] = useState<DesignItem[]>([]);
   const [selectedDesignId, setSelectedDesignId] = useState<string | null>(null);
   const [selectedDesignIds, setSelectedDesignIds] = useState<Set<string>>(new Set());
+  const [mobilePanel, setMobilePanel] = useState<"controls" | "preview">("controls");
   const [showDesignInfo, setShowDesignInfo] = useState(false);
   const [selectionZoomActive, setSelectionZoomActive] = useState(false);
   const [editingLayerName, setEditingLayerName] = useState<string | null>(null);
@@ -317,6 +318,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [downloadContainer, setDownloadContainer] = useState<HTMLDivElement | null>(null);
+  const swipeStartXRef = useRef<number | null>(null);
+  const swipeStartYRef = useRef<number | null>(null);
   const [spotPreviewData, setSpotPreviewData] = useState<SpotPreviewData>({ enabled: false, colors: [] });
   const [fluorPanelContainer, setFluorPanelContainer] = useState<HTMLDivElement | null>(null);
   const copySpotSelectionsRef = useRef<((fromId: string, toIds: string[]) => void) | null>(null);
@@ -414,6 +417,25 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     const snap = redo(getSnapshot());
     if (snap) applySnapshot(snap);
   }, [redo, getSnapshot, applySnapshot]);
+
+  const handleMobileSwipeStart = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
+    if (!isMobile) return;
+    const touch = e.touches[0];
+    swipeStartXRef.current = touch.clientX;
+    swipeStartYRef.current = touch.clientY;
+  }, [isMobile]);
+
+  const handleMobileSwipeEnd = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
+    if (!isMobile || swipeStartXRef.current == null || swipeStartYRef.current == null) return;
+    const touch = e.changedTouches[0];
+    const dx = touch.clientX - swipeStartXRef.current;
+    const dy = touch.clientY - swipeStartYRef.current;
+    swipeStartXRef.current = null;
+    swipeStartYRef.current = null;
+    if (Math.abs(dx) < 45 || Math.abs(dx) <= Math.abs(dy)) return;
+    if (dx < 0) setMobilePanel("preview");
+    else setMobilePanel("controls");
+  }, [isMobile]);
 
   // Called when a drag/resize/rotate interaction ends on the canvas
   const handleInteractionEnd = useCallback(() => {
@@ -2854,9 +2876,34 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
             </div>
           </div>
         )}
-        <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
+        {isMobile && (
+          <div className="flex-shrink-0 border-b border-gray-200 bg-white px-2 py-1.5">
+            <div className="grid grid-cols-2 gap-1 rounded-md bg-gray-100 p-1">
+              <button
+                type="button"
+                onClick={() => setMobilePanel("controls")}
+                className={`rounded px-2 py-1 text-xs font-medium transition-colors ${mobilePanel === "controls" ? "bg-white text-gray-900 shadow-sm" : "text-gray-600"}`}
+              >
+                Controls
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobilePanel("preview")}
+                className={`rounded px-2 py-1 text-xs font-medium transition-colors ${mobilePanel === "preview" ? "bg-white text-gray-900 shadow-sm" : "text-gray-600"}`}
+              >
+                Preview
+              </button>
+            </div>
+          </div>
+        )}
+        <div
+          className={isMobile ? "flex min-h-0 flex-1 flex-row transition-transform duration-300 ease-out" : "flex-1 min-h-0 flex flex-col lg:flex-row"}
+          style={isMobile ? { transform: mobilePanel === "preview" ? "translateX(-100%)" : "translateX(0)" } : undefined}
+          onTouchStart={handleMobileSwipeStart}
+          onTouchEnd={handleMobileSwipeEnd}
+        >
       {/* Left sidebar - Layers + Settings */}
-      <div className="flex-shrink-0 w-full lg:w-[320px] xl:w-[340px] border-r border-gray-200 bg-white overflow-y-auto overflow-x-hidden">
+      <div className={`flex-shrink-0 w-full lg:w-[320px] xl:w-[340px] border-r border-gray-200 bg-white overflow-x-hidden ${isMobile ? "" : "overflow-y-auto"}`}>
         <div className="p-2.5 space-y-2">
           <ControlsSection
             resizeSettings={activeResizeSettings}
@@ -3065,7 +3112,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       </div>
 
       {/* Right area - Canvas workspace */}
-      <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden">
+      <div className={`min-w-0 flex flex-col ${isMobile ? "w-full flex-shrink-0" : "flex-1 h-full overflow-hidden"}`}>
         {/* Top bar: three rows on mobile, wraps on desktop when metric to avoid overlap */}
         <div className="flex-shrink-0 flex flex-col lg:flex-row lg:flex-wrap lg:items-center gap-1.5 lg:gap-2 bg-white border-b border-gray-200 px-2 py-1 lg:px-3 lg:py-1.5">
           {/* Row 1: Upload, file info, Auto-Arrange, Undo/Redo/Dup/Del */}
