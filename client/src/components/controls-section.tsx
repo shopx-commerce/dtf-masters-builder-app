@@ -278,22 +278,22 @@ export default function ControlsSection({
   return (
     <div className="space-y-4">
       <div className="bg-white rounded-lg border border-gray-200 overflow-visible">
-        <div className="flex items-center gap-2 px-3 py-1.5 pr-4 min-w-0">
-          <div className="w-6 h-6 rounded-md bg-cyan-500/10 flex items-center justify-center flex-shrink-0">
-            <Layers className="w-3.5 h-3.5 text-cyan-600" />
+        <div className="flex items-center gap-1 px-2 py-1 min-w-0 sm:gap-2 sm:px-3 sm:py-1.5 sm:pr-4">
+          <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-cyan-500/10 sm:h-6 sm:w-6">
+            <Layers className="h-3 w-3 text-cyan-600 sm:h-3.5 sm:w-3.5" />
           </div>
-          <span className="text-xs font-medium text-gray-900 flex-shrink-0 min-w-0 truncate">{t("controls.gangsheetSize")}</span>
+          <span className="min-w-0 max-w-[5.25rem] shrink truncate text-[10px] font-medium text-gray-900 sm:max-w-none sm:text-xs">{t("controls.gangsheetSize")}</span>
           {!isLgUp ? (
-            <div className="flex min-w-0 flex-1 flex-col items-end gap-1.5 sm:flex-row sm:items-center sm:justify-end sm:gap-1.5">
-              <div className="flex min-w-0 w-full items-center justify-end gap-1 sm:w-auto sm:max-w-full">
-                <span className={`font-semibold text-gray-700 tabular-nums shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
-                <span className={`text-gray-600 shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>×</span>
+            <div className="flex min-w-0 flex-1 items-center justify-end gap-0.5 sm:gap-1.5">
+              <div className="flex min-w-0 items-center gap-0.5 sm:gap-1">
+                <span className={`shrink-0 font-semibold text-gray-700 tabular-nums ${lang === 'en' ? 'text-[10px] sm:text-xs' : 'text-[10px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
+                <span className={`shrink-0 text-gray-600 ${lang === 'en' ? 'text-[10px] sm:text-xs' : 'text-[10px]'}`}>×</span>
                 <Select
                   value={String(artboardHeight)}
                   onValueChange={(v) => onArtboardHeightChange?.(parseFloat(v))}
                 >
                   <SelectTrigger
-                    className={`h-7 w-[4.5rem] max-[380px]:w-[4rem] shrink-0 pl-2 pr-1.5 gap-0.5 font-semibold text-gray-900 bg-gray-100 border-gray-200 tabular-nums [&>span]:min-w-0 [&>span]:truncate [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}
+                    className={`h-6 w-[3.5rem] shrink-0 gap-0.5 border-gray-200 bg-gray-100 pl-1.5 pr-1 font-semibold tabular-nums text-gray-900 sm:h-7 sm:w-[4.5rem] sm:pl-2 sm:pr-1.5 [&>span]:min-w-0 [&>span]:truncate [&>svg]:h-3 [&>svg]:w-3 [&>svg]:shrink-0 sm:[&>svg]:h-3.5 sm:[&>svg]:w-3.5 ${lang === 'en' ? 'text-[10px] sm:text-xs' : 'text-[10px]'}`}
                   >
                     <SelectValue />
                   </SelectTrigger>
@@ -315,11 +315,9 @@ export default function ControlsSection({
                 </Select>
               </div>
               {selectedVariantPrice != null && (
-                <div className="flex w-full shrink-0 justify-end sm:inline-flex sm:w-auto">
-                  <span className="whitespace-nowrap rounded-full border border-emerald-600 bg-white px-2 py-0.5 text-[10px] font-bold leading-none text-emerald-600 tabular-nums">
-                    {formatVariantPriceForDisplay(selectedVariantPrice)}
-                  </span>
-                </div>
+                <span className="ml-0.5 shrink-0 whitespace-nowrap rounded-full border border-emerald-600 bg-white px-1.5 py-[1px] text-[9px] font-bold leading-tight text-emerald-600 tabular-nums sm:px-2 sm:py-0.5 sm:text-[10px]">
+                  {formatVariantPriceForDisplay(selectedVariantPrice)}
+                </span>
               )}
             </div>
           ) : (
@@ -355,7 +353,7 @@ export default function ControlsSection({
           )}
         </div>
         {recommendedArtboardHeight != null && recommendedArtboardHeight === artboardHeight && (
-          <div className="px-3 pb-2 pt-0 text-[10px] text-blue-600 font-medium leading-snug border-t border-blue-100/60 bg-blue-50/40">
+          <div className="border-t border-blue-100/60 bg-blue-50/40 px-2 pb-1.5 pt-0 text-[10px] font-medium leading-snug text-blue-600 sm:px-3 sm:pb-2">
             {t("controls.currentBounds")}
           </div>
         )}
