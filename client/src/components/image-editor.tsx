@@ -3274,7 +3274,6 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       {/* Left sidebar - Layers + Settings */}
       <div className={`flex-shrink-0 w-full lg:w-[320px] xl:w-[340px] border-r border-gray-200 bg-white overflow-x-hidden ${isMobile ? "" : "overflow-y-auto"}`}>
         <div className="p-2.5 space-y-2">
-          {isMobile && renderActionToolbar()}
           <ControlsSection
             resizeSettings={activeResizeSettings}
             onResizeChange={handleResizeChange}
@@ -3478,6 +3477,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
               )}
             </div>
           )}
+          {isMobile && renderActionToolbar()}
         </div>
       </div>
 
