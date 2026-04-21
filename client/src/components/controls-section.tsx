@@ -284,7 +284,7 @@ export default function ControlsSection({
           </div>
           <span className="min-w-0 max-w-[5.25rem] shrink truncate text-[10px] font-medium text-gray-900 sm:max-w-none sm:text-xs">{t("controls.gangsheetSize")}</span>
           {!isLgUp ? (
-            <div className="flex min-w-0 flex-1 items-center justify-end gap-0.5 sm:gap-1.5">
+            <div className="flex min-w-0 flex-1 items-center justify-start gap-0.5 sm:gap-1.5">
               <div className="flex min-w-0 items-center gap-0.5 sm:gap-1">
                 <span className={`shrink-0 font-semibold text-gray-700 tabular-nums ${lang === 'en' ? 'text-[10px] sm:text-xs' : 'text-[10px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
                 <span className={`shrink-0 text-gray-600 ${lang === 'en' ? 'text-[10px] sm:text-xs' : 'text-[10px]'}`}>×</span>

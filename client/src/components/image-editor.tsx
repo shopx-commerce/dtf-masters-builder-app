@@ -3207,12 +3207,9 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
               {isLgUp && selectedVariantPrice != null && (
                 <>
                   <div className="w-px h-4 bg-gray-200 mx-0.5 flex-shrink-0" aria-hidden />
-                  <div className="min-w-0 max-w-full flex flex-wrap items-baseline justify-end gap-x-1 gap-y-0.5 text-right text-[11px] lg:text-xs text-gray-900 tabular-nums leading-snug">
-                    <span className="font-medium shrink-0">Price:</span>
-                    <span className="font-bold break-words [overflow-wrap:anywhere] min-w-0">
-                      {formatVariantPriceForDisplay(selectedVariantPrice)}
-                    </span>
-                  </div>
+                  <span className="shrink-0 whitespace-nowrap rounded-full border border-emerald-600 bg-white px-2 py-0.5 text-[11px] font-bold leading-none text-emerald-600 tabular-nums lg:text-xs">
+                    {formatVariantPriceForDisplay(selectedVariantPrice)}
+                  </span>
                 </>
               )}
               {isMobile && (
