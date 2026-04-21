@@ -7,6 +7,7 @@ import { Download, Layers, FileCheck, Palette, Eye, EyeOff, ChevronDown, Info, S
 import { useLanguage } from "@/lib/i18n";
 import { formatLength } from "@/lib/format-length";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import { formatVariantPriceForDisplay, getSelectedVariantPrice } from "@/lib/variant-price";
 
 export interface SpotPreviewData {
@@ -82,6 +83,7 @@ export default function ControlsSection({
 }: ControlsSectionProps) {
   const { t, lang } = useLanguage();
   const isMobile = useIsMobile();
+  const isLgUp = useMediaQuery("(min-width: 1024px)");
   const canDownload = !!imageInfo || designCount > 0;
 
   const selectedVariantPrice = useMemo(
@@ -281,9 +283,9 @@ export default function ControlsSection({
             <Layers className="w-3.5 h-3.5 text-cyan-600" />
           </div>
           <span className="text-xs font-medium text-gray-900 flex-shrink-0 min-w-0 truncate">{t("controls.gangsheetSize")}</span>
-          {isMobile ? (
-            <div className="flex min-w-0 flex-1 items-center justify-end gap-1.5">
-              <div className="flex min-w-0 items-center gap-1">
+          {!isLgUp ? (
+            <div className="flex min-w-0 flex-1 flex-col items-end gap-1.5 sm:flex-row sm:items-center sm:justify-end sm:gap-1.5">
+              <div className="flex min-w-0 w-full items-center justify-end gap-1 sm:w-auto sm:max-w-full">
                 <span className={`font-semibold text-gray-700 tabular-nums shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
                 <span className={`text-gray-600 shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>×</span>
                 <Select
@@ -291,7 +293,7 @@ export default function ControlsSection({
                   onValueChange={(v) => onArtboardHeightChange?.(parseFloat(v))}
                 >
                   <SelectTrigger
-                    className={`h-7 w-[4.5rem] shrink-0 pl-2 pr-1.5 gap-0.5 font-semibold text-gray-900 bg-gray-100 border-gray-200 tabular-nums [&>span]:min-w-0 [&>span]:truncate [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}
+                    className={`h-7 w-[4.5rem] max-[380px]:w-[4rem] shrink-0 pl-2 pr-1.5 gap-0.5 font-semibold text-gray-900 bg-gray-100 border-gray-200 tabular-nums [&>span]:min-w-0 [&>span]:truncate [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}
                   >
                     <SelectValue />
                   </SelectTrigger>
@@ -313,9 +315,11 @@ export default function ControlsSection({
                 </Select>
               </div>
               {selectedVariantPrice != null && (
-                <span className="shrink-0 whitespace-nowrap rounded-full border border-emerald-600 bg-white px-2 py-0.5 text-[10px] font-bold leading-none text-emerald-600 tabular-nums">
-                  {formatVariantPriceForDisplay(selectedVariantPrice)}
-                </span>
+                <div className="flex w-full shrink-0 justify-end sm:inline-flex sm:w-auto">
+                  <span className="whitespace-nowrap rounded-full border border-emerald-600 bg-white px-2 py-0.5 text-[10px] font-bold leading-none text-emerald-600 tabular-nums">
+                    {formatVariantPriceForDisplay(selectedVariantPrice)}
+                  </span>
+                </div>
               )}
             </div>
           ) : (

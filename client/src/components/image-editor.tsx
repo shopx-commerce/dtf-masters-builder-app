@@ -39,6 +39,7 @@ import { parsePDF, type ParsedPDFData } from "@/lib/pdf-parser";
 import { useToast } from "@/hooks/use-toast";
 import { useHistory, type HistorySnapshot } from "@/hooks/use-history";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import { useLanguage } from "@/lib/i18n";
 import { formatDimensions, formatLength, useMetric, cmToInches, getUnitSuffix } from "@/lib/format-length";
 import { formatVariantPriceForDisplay, getSelectedVariantPrice } from "@/lib/variant-price";
@@ -280,6 +281,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
   const { toast } = useToast();
   const { t, lang } = useLanguage();
   const isMobile = useIsMobile();
+  const isLgUp = useMediaQuery("(min-width: 1024px)");
   const [imageInfo, setImageInfo] = useState<ImageInfo | null>(null);
   const [resizeSettings, setResizeSettings] = useState<ResizeSettings>({
     widthInches: 5.0,
@@ -3202,7 +3204,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
               >
                 <Trash2 className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
               </button>
-              {!isMobile && selectedVariantPrice != null && (
+              {isLgUp && selectedVariantPrice != null && (
                 <>
                   <div className="w-px h-4 bg-gray-200 mx-0.5 flex-shrink-0" aria-hidden />
                   <div className="min-w-0 max-w-full flex flex-wrap items-baseline justify-end gap-x-1 gap-y-0.5 text-right text-[11px] lg:text-xs text-gray-900 tabular-nums leading-snug">
