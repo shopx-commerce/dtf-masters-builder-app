@@ -151,7 +151,7 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
                 onClick={() => window.dispatchEvent(new CustomEvent("dtf:open-upload"))}
               >
                 <Upload className="w-5 h-5" />
-                {t("editor.addDesign")}
+                {t("editor.addDesigns")}
               </button>
               <h1
                 className="hidden sm:block text-lg font-black tracking-widest truncate max-w-[min(100vw-8rem,28rem)] sm:max-w-xl"

@@ -37,13 +37,15 @@ function computePreviewDimensions(
 ): { w: number; h: number } | null {
   if (availW <= 0 || availH <= 0 || artboardHeight <= 0) return null;
   const artboardAspect = artboardWidth / artboardHeight;
+  // On narrow mobile preview + side panel layouts, a hard 200px minimum can overflow.
+  const minEdge = isNarrowViewport() ? 120 : 200;
   let w: number;
   let h: number;
   if (availW / availH > artboardAspect) {
-    h = Math.round(Math.max(200, availH));
+    h = Math.round(Math.max(minEdge, availH));
     w = Math.round(h * artboardAspect);
   } else {
-    w = Math.round(Math.max(200, availW));
+    w = Math.round(Math.max(minEdge, availW));
     h = Math.round(w / artboardAspect);
   }
   return { w, h };

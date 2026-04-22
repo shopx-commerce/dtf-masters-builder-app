@@ -3588,6 +3588,35 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                 selectionZoomActive={selectionZoomActive}
                 onSelectionZoomChange={setSelectionZoomActive}
               />
+              <div className="pointer-events-auto absolute bottom-14 right-2 z-20 flex items-center gap-1 rounded-md border border-gray-200 bg-white p-1 shadow-sm">
+                <button
+                  onClick={handleUndo}
+                  disabled={!canUndo()}
+                  className="h-8 w-8 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30"
+                  title={t("editor.undo")}
+                >
+                  <Undo2 className="mx-auto h-4 w-4" />
+                </button>
+                <button
+                  onClick={handleRedo}
+                  disabled={!canRedo()}
+                  className="h-8 w-8 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30"
+                  title={t("editor.redo")}
+                >
+                  <Redo2 className="mx-auto h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => {
+                    if (selectedDesignIds.size > 1) handleDeleteMulti(selectedDesignIds);
+                    else if (selectedDesignId) handleDeleteDesign(selectedDesignId);
+                  }}
+                  disabled={!selectedDesignId}
+                  className="h-8 w-8 rounded border border-red-200 bg-white text-red-500 transition-colors hover:bg-red-50 hover:text-red-600 disabled:pointer-events-none disabled:opacity-30"
+                  title={t("editor.delete")}
+                >
+                  <Trash2 className="mx-auto h-4 w-4" />
+                </button>
+              </div>
             </div>
             <div className="w-[170px] shrink-0 border-l border-gray-200 bg-gray-100 p-2">
               <div className="flex h-full flex-col gap-2 overflow-y-auto">
@@ -3632,6 +3661,18 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                       title="Number of copies"
                     />
                   </div>
+                  <button
+                    onClick={() => handleDuplicateDesign(duplicateCount)}
+                    disabled={!selectedDesignId}
+                    className={`mb-2 w-full rounded-md px-2 py-2 text-[11px] font-medium transition-all ${
+                      selectedDesignId
+                        ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#7C3AED]"
+                        : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"
+                    }`}
+                    title={t("editor.duplicate")}
+                  >
+                    {t("editor.duplicate").replace(/ \(.*/, "")}
+                  </button>
                   <button
                     onClick={() => handleDuplicateAndArrange(duplicateCount)}
                     disabled={!selectedDesignId}
@@ -3694,36 +3735,6 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                 >
                   {t("editor.autoArrange")}
                 </button>
-
-                <div className="mt-auto flex items-center gap-1 rounded-md border border-gray-200 bg-white p-1">
-                  <button
-                    onClick={handleUndo}
-                    disabled={!canUndo()}
-                    className="h-8 w-8 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30"
-                    title={t("editor.undo")}
-                  >
-                    <Undo2 className="mx-auto h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={handleRedo}
-                    disabled={!canRedo()}
-                    className="h-8 w-8 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30"
-                    title={t("editor.redo")}
-                  >
-                    <Redo2 className="mx-auto h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (selectedDesignIds.size > 1) handleDeleteMulti(selectedDesignIds);
-                      else if (selectedDesignId) handleDeleteDesign(selectedDesignId);
-                    }}
-                    disabled={!selectedDesignId}
-                    className="h-8 w-8 rounded border border-red-200 bg-white text-red-500 transition-colors hover:bg-red-50 hover:text-red-600 disabled:pointer-events-none disabled:opacity-30"
-                    title={t("editor.delete")}
-                  >
-                    <Trash2 className="mx-auto h-4 w-4" />
-                  </button>
-                </div>
               </div>
             </div>
           </div>
