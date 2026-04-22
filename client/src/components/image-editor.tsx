@@ -3515,81 +3515,11 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       <div className={`min-w-0 flex flex-col ${isMobile ? "w-full flex-shrink-0" : "flex-1 h-full overflow-hidden"}`}>
         {!isMobile && renderActionToolbar()}
 
-        {isMobile && (
-          <div className="flex-shrink-0 flex items-center gap-0.5 bg-white border-b border-gray-200 px-2 py-1">
-            <button
-              onClick={handleRotate90}
-              disabled={!selectedDesignId}
-              className="w-8 h-8 rounded border border-gray-300 bg-white hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center shadow-sm"
-              title={t("editor.rotate")}
-            >
-              <RotateCw className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => handleAlignCorner('tl')}
-              disabled={!selectedDesignId}
-              className="p-2 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] flex items-center justify-center"
-              title={t("editor.alignTL")}
-            >
-              <ArrowUpLeft className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => handleAlignCorner('tr')}
-              disabled={!selectedDesignId}
-              className="p-2 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] flex items-center justify-center"
-              title={t("editor.alignTR")}
-            >
-              <ArrowUpRight className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => handleAlignCorner('bl')}
-              disabled={!selectedDesignId}
-              className="p-2 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] flex items-center justify-center"
-              title={t("editor.alignBL")}
-            >
-              <ArrowDownLeft className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => handleAlignCorner('br')}
-              disabled={!selectedDesignId}
-              className="p-2 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] flex items-center justify-center"
-              title={t("editor.alignBR")}
-            >
-              <ArrowDownRight className="w-4 h-4" />
-            </button>
-          </div>
-        )}
-
         {/* Preview Canvas */}
         {isMobile ? (
-          <div className="relative min-h-0 flex-1">
-            <PreviewSection
-              ref={canvasRef}
-              imageInfo={activeImageInfo}
-              resizeSettings={activeResizeSettings}
-              artboardWidth={artboardWidth}
-              artboardHeight={artboardHeight}
-              designTransform={activeDesignTransform}
-              onTransformChange={handleDesignTransformChange}
-              designs={designs}
-              selectedDesignId={selectedDesignId}
-              selectedDesignIds={selectedDesignIds}
-              onSelectDesign={handleSelectDesign}
-              onMultiSelect={handleMultiSelect}
-              onMultiDragDelta={handleMultiDragDelta}
-              onMultiResizeDelta={handleMultiResizeDelta}
-              onMultiRotateDelta={handleMultiRotateDelta}
-              onDuplicateSelected={handleDuplicateSelected}
-              onInteractionEnd={handleInteractionEnd}
-              onExpandArtboard={artboardHeight < MAX_ARTBOARD_HEIGHT ? handleExpandArtboard : undefined}
-              onDesignContextMenu={handleCanvasContextMenu}
-              spotPreviewData={profile.enableFluorescent ? spotPreviewData : undefined}
-              selectionZoomActive={selectionZoomActive}
-              onSelectionZoomChange={setSelectionZoomActive}
-            />
-
-            <div className="pointer-events-none absolute inset-0 z-20">
-              <div className="pointer-events-auto absolute left-2 top-2 flex items-center gap-0.5 rounded-md border border-gray-200 bg-white/95 p-1 shadow-sm">
+          <div className="flex min-h-0 flex-1">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <div className="flex-shrink-0 flex items-center gap-0.5 bg-white border-b border-gray-200 px-2 py-1">
                 <button
                   onClick={handleRotate90}
                   disabled={!selectedDesignId}
@@ -3603,9 +3533,36 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                 <button onClick={() => handleAlignCorner('bl')} disabled={!selectedDesignId} className="h-8 w-8 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30" title={t("editor.alignBL")}><ArrowDownLeft className="mx-auto h-4 w-4" /></button>
                 <button onClick={() => handleAlignCorner('br')} disabled={!selectedDesignId} className="h-8 w-8 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30" title={t("editor.alignBR")}><ArrowDownRight className="mx-auto h-4 w-4" /></button>
               </div>
+              <div className="relative min-h-0 min-w-0 flex-1">
+                <PreviewSection
+                  ref={canvasRef}
+                  imageInfo={activeImageInfo}
+                  resizeSettings={activeResizeSettings}
+                  artboardWidth={artboardWidth}
+                  artboardHeight={artboardHeight}
+                  designTransform={activeDesignTransform}
+                  onTransformChange={handleDesignTransformChange}
+                  designs={designs}
+                  selectedDesignId={selectedDesignId}
+                  selectedDesignIds={selectedDesignIds}
+                  onSelectDesign={handleSelectDesign}
+                  onMultiSelect={handleMultiSelect}
+                  onMultiDragDelta={handleMultiDragDelta}
+                  onMultiResizeDelta={handleMultiResizeDelta}
+                  onMultiRotateDelta={handleMultiRotateDelta}
+                  onDuplicateSelected={handleDuplicateSelected}
+                  onInteractionEnd={handleInteractionEnd}
+                  onExpandArtboard={artboardHeight < MAX_ARTBOARD_HEIGHT ? handleExpandArtboard : undefined}
+                  onDesignContextMenu={handleCanvasContextMenu}
+                  spotPreviewData={profile.enableFluorescent ? spotPreviewData : undefined}
+                  selectionZoomActive={selectionZoomActive}
+                  onSelectionZoomChange={setSelectionZoomActive}
+                />
+              </div>
+            </div>
 
-              <div className="pointer-events-auto absolute right-2 top-2 bottom-16 w-[170px] overflow-y-auto rounded-md border border-gray-200 bg-gray-100 p-2">
-                <div className="flex flex-col gap-2">
+            <div className="w-[170px] shrink-0 border-l border-gray-200 bg-gray-100 p-2">
+              <div className="flex h-full flex-col gap-2 overflow-y-auto">
                   <button onClick={handleThresholdAlpha} disabled={!selectedDesignId && selectedDesignIds.size === 0} className={`flex items-center justify-center gap-1 rounded-md border px-2 py-2 text-[11px] font-medium transition-all ${selectedDesignId || selectedDesignIds.size > 0 ? "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`} title={t("editor.cleanAlphaTitle")}><Droplets className="h-3 w-3" />{t("editor.cleanAlpha")}</button>
                   <button onClick={handleThresholdAlphaAll} disabled={designs.length === 0} className={`flex items-center justify-center gap-1 rounded-md border px-2 py-2 text-[11px] font-medium transition-all ${designs.length > 0 ? "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`} title={t("editor.cleanAlphaAllTitle")}><Droplets className="h-3 w-3" />{t("editor.cleanAlphaAll")}</button>
 
@@ -3640,14 +3597,13 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                     {t("editor.autoArrange")}
                   </button>
 
-                  <div className="flex items-center gap-1 rounded-md border border-gray-200 bg-white p-1">
+                  <div className="mt-auto flex items-center gap-1 rounded-md border border-gray-200 bg-white p-1">
                     <button onClick={handleUndo} disabled={!canUndo()} className="h-8 w-8 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30" title={t("editor.undo")}><Undo2 className="mx-auto h-4 w-4" /></button>
                     <button onClick={handleRedo} disabled={!canRedo()} className="h-8 w-8 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30" title={t("editor.redo")}><Redo2 className="mx-auto h-4 w-4" /></button>
                     <button onClick={() => { if (selectedDesignIds.size > 1) handleDeleteMulti(selectedDesignIds); else if (selectedDesignId) handleDeleteDesign(selectedDesignId); }} disabled={!selectedDesignId} className="h-8 w-8 rounded border border-red-200 bg-white text-red-500 transition-colors hover:bg-red-50 hover:text-red-600 disabled:pointer-events-none disabled:opacity-30" title={t("editor.delete")}><Trash2 className="mx-auto h-4 w-4" /></button>
                   </div>
                 </div>
               </div>
-            </div>
           </div>
         ) : (
           <div className="flex-1 min-h-0 relative">
