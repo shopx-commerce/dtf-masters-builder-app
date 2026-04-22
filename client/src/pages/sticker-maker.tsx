@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import ImageEditor from "@/components/image-editor";
 import { type ProfileConfig, HOT_PEEL_PROFILE } from "@/lib/profiles";
 import { Link } from "wouter";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Upload } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
 import LanguageToggle from "@/components/language-toggle";
 
@@ -145,8 +145,16 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
               </Link>
             )}
             <div className="min-w-0 flex flex-col gap-0.5">
+              <button
+                type="button"
+                className="sm:hidden inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-500 px-4 py-2 text-base font-medium text-white shadow-lg shadow-cyan-500/25 hover:from-cyan-600 hover:to-blue-600 transition-colors"
+                onClick={() => window.dispatchEvent(new CustomEvent("dtf:open-upload"))}
+              >
+                <Upload className="w-5 h-5" />
+                {t("editor.addDesign")}
+              </button>
               <h1
-                className="text-lg font-black tracking-widest truncate max-w-[min(100vw-8rem,28rem)] sm:max-w-xl"
+                className="hidden sm:block text-lg font-black tracking-widest truncate max-w-[min(100vw-8rem,28rem)] sm:max-w-xl"
                 style={{
                   fontFamily: "'Orbitron', sans-serif",
                   background: "linear-gradient(90deg, #06b6d4, #3b82f6, #8b5cf6, #06b6d4)",

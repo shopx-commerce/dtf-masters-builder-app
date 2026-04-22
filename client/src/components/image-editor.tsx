@@ -314,6 +314,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
   const [proportionalLock, setProportionalLock] = useState(true);
   const designInfoRef = useRef<HTMLDivElement>(null);
   const sidebarFileRef = useRef<HTMLInputElement>(null);
+  const headerUploadInputRef = useRef<HTMLInputElement>(null);
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [downloadContainer, setDownloadContainer] = useState<HTMLDivElement | null>(null);
@@ -2300,6 +2301,16 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     }
   }, [processSidebarFile, GANGSHEET_HEIGHTS]);
 
+  useEffect(() => {
+    const onOpenUpload = () => {
+      headerUploadInputRef.current?.click();
+    };
+    window.addEventListener("dtf:open-upload", onOpenUpload);
+    return () => {
+      window.removeEventListener("dtf:open-upload", onOpenUpload);
+    };
+  }, []);
+
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounterRef = useRef(0);
 
@@ -3099,51 +3110,55 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
           </div>
         </div>
       )}
-      {/* Row 3 on mobile: Rotate, Align, Margin */}
+      {/* Row 3 on mobile: Margin only (rotate/align moved to preview pane) */}
       <div className="flex items-center gap-0.5 flex-shrink-0 flex-wrap lg:flex-nowrap w-full lg:w-auto">
-        <div className="w-px h-4 bg-gray-100 mx-0.5 hidden lg:block" />
-        <button
-          onClick={handleRotate90}
-          disabled={!selectedDesignId}
-          className="w-8 h-8 lg:w-7 lg:h-7 rounded border border-gray-300 bg-white hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center shadow-sm"
-          title={t("editor.rotate")}
-        >
-          <RotateCw className="w-4 h-4" />
-        </button>
-        <div className="grid grid-cols-4 gap-0.5 lg:contents">
-          <button
-            onClick={() => handleAlignCorner('tl')}
-            disabled={!selectedDesignId}
-            className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
-            title={t("editor.alignTL")}
-          >
-            <ArrowUpLeft className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
-          </button>
-          <button
-            onClick={() => handleAlignCorner('tr')}
-            disabled={!selectedDesignId}
-            className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
-            title={t("editor.alignTR")}
-          >
-            <ArrowUpRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
-          </button>
-          <button
-            onClick={() => handleAlignCorner('bl')}
-            disabled={!selectedDesignId}
-            className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
-            title={t("editor.alignBL")}
-          >
-            <ArrowDownLeft className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
-          </button>
-          <button
-            onClick={() => handleAlignCorner('br')}
-            disabled={!selectedDesignId}
-            className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
-            title={t("editor.alignBR")}
-          >
-            <ArrowDownRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
-          </button>
-        </div>
+        {!isMobile && (
+          <>
+            <div className="w-px h-4 bg-gray-100 mx-0.5 hidden lg:block" />
+            <button
+              onClick={handleRotate90}
+              disabled={!selectedDesignId}
+              className="w-8 h-8 lg:w-7 lg:h-7 rounded border border-gray-300 bg-white hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center shadow-sm"
+              title={t("editor.rotate")}
+            >
+              <RotateCw className="w-4 h-4" />
+            </button>
+            <div className="grid grid-cols-4 gap-0.5 lg:contents">
+              <button
+                onClick={() => handleAlignCorner('tl')}
+                disabled={!selectedDesignId}
+                className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
+                title={t("editor.alignTL")}
+              >
+                <ArrowUpLeft className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+              </button>
+              <button
+                onClick={() => handleAlignCorner('tr')}
+                disabled={!selectedDesignId}
+                className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
+                title={t("editor.alignTR")}
+              >
+                <ArrowUpRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+              </button>
+              <button
+                onClick={() => handleAlignCorner('bl')}
+                disabled={!selectedDesignId}
+                className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
+                title={t("editor.alignBL")}
+              >
+                <ArrowDownLeft className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+              </button>
+              <button
+                onClick={() => handleAlignCorner('br')}
+                disabled={!selectedDesignId}
+                className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
+                title={t("editor.alignBR")}
+              >
+                <ArrowDownRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+              </button>
+            </div>
+          </>
+        )}
         {isMobile && (
           <div
             className={`flex items-center gap-1 flex-shrink-0 ${designs.length >= 2 ? 'opacity-100' : 'opacity-0'}`}
@@ -3187,6 +3202,14 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         onDragOver={handleDragOver}
         onDrop={handleDrop}
       >
+        <input
+          ref={headerUploadInputRef}
+          type="file"
+          className="hidden"
+          accept=".png,.jpg,.jpeg,.webp,.pdf,image/png,image/jpeg,image/webp,application/pdf"
+          multiple
+          onChange={handleSidebarFileChange}
+        />
         {isDragOver && (
           <div className="absolute inset-0 z-50 bg-blue-500/10 border-2 border-dashed border-blue-500 rounded-lg flex items-center justify-center pointer-events-none">
             <div className="bg-white/95 rounded-xl px-8 py-6 shadow-lg text-center">
@@ -3236,6 +3259,14 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
+      <input
+        ref={headerUploadInputRef}
+        type="file"
+        className="hidden"
+        accept=".png,.jpg,.jpeg,.webp,.pdf,image/png,image/jpeg,image/webp,application/pdf"
+        multiple
+        onChange={handleSidebarFileChange}
+      />
       {isDragOver && (
           <div className="absolute inset-0 z-50 bg-blue-500/10 border-2 border-dashed border-blue-500 rounded-lg flex items-center justify-center pointer-events-none">
             <div className="bg-white/95 rounded-xl px-8 py-6 shadow-lg text-center">
@@ -3477,7 +3508,6 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
               )}
             </div>
           )}
-          {isMobile && renderActionToolbar()}
         </div>
       </div>
 
@@ -3485,33 +3515,246 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       <div className={`min-w-0 flex flex-col ${isMobile ? "w-full flex-shrink-0" : "flex-1 h-full overflow-hidden"}`}>
         {!isMobile && renderActionToolbar()}
 
+        {isMobile && (
+          <div className="flex-shrink-0 flex items-center gap-0.5 bg-white border-b border-gray-200 px-2 py-1">
+            <button
+              onClick={handleRotate90}
+              disabled={!selectedDesignId}
+              className="w-8 h-8 rounded border border-gray-300 bg-white hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center shadow-sm"
+              title={t("editor.rotate")}
+            >
+              <RotateCw className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => handleAlignCorner('tl')}
+              disabled={!selectedDesignId}
+              className="p-2 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] flex items-center justify-center"
+              title={t("editor.alignTL")}
+            >
+              <ArrowUpLeft className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => handleAlignCorner('tr')}
+              disabled={!selectedDesignId}
+              className="p-2 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] flex items-center justify-center"
+              title={t("editor.alignTR")}
+            >
+              <ArrowUpRight className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => handleAlignCorner('bl')}
+              disabled={!selectedDesignId}
+              className="p-2 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] flex items-center justify-center"
+              title={t("editor.alignBL")}
+            >
+              <ArrowDownLeft className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => handleAlignCorner('br')}
+              disabled={!selectedDesignId}
+              className="p-2 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] flex items-center justify-center"
+              title={t("editor.alignBR")}
+            >
+              <ArrowDownRight className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* Preview Canvas */}
-        <div className="flex-1 min-h-0 relative">
-          <PreviewSection
-            ref={canvasRef}
-            imageInfo={activeImageInfo}
-            resizeSettings={activeResizeSettings}
-            artboardWidth={artboardWidth}
-            artboardHeight={artboardHeight}
-            designTransform={activeDesignTransform}
-            onTransformChange={handleDesignTransformChange}
-            designs={designs}
-            selectedDesignId={selectedDesignId}
-            selectedDesignIds={selectedDesignIds}
-            onSelectDesign={handleSelectDesign}
-            onMultiSelect={handleMultiSelect}
-            onMultiDragDelta={handleMultiDragDelta}
-            onMultiResizeDelta={handleMultiResizeDelta}
-            onMultiRotateDelta={handleMultiRotateDelta}
-            onDuplicateSelected={handleDuplicateSelected}
-            onInteractionEnd={handleInteractionEnd}
-            onExpandArtboard={artboardHeight < MAX_ARTBOARD_HEIGHT ? handleExpandArtboard : undefined}
-            onDesignContextMenu={handleCanvasContextMenu}
-            spotPreviewData={profile.enableFluorescent ? spotPreviewData : undefined}
-            selectionZoomActive={selectionZoomActive}
-            onSelectionZoomChange={setSelectionZoomActive}
-          />
-        </div>
+        {isMobile ? (
+          <div className="flex min-h-0 flex-1">
+            <div className="relative min-h-0 min-w-0 flex-1">
+              <PreviewSection
+                ref={canvasRef}
+                imageInfo={activeImageInfo}
+                resizeSettings={activeResizeSettings}
+                artboardWidth={artboardWidth}
+                artboardHeight={artboardHeight}
+                designTransform={activeDesignTransform}
+                onTransformChange={handleDesignTransformChange}
+                designs={designs}
+                selectedDesignId={selectedDesignId}
+                selectedDesignIds={selectedDesignIds}
+                onSelectDesign={handleSelectDesign}
+                onMultiSelect={handleMultiSelect}
+                onMultiDragDelta={handleMultiDragDelta}
+                onMultiResizeDelta={handleMultiResizeDelta}
+                onMultiRotateDelta={handleMultiRotateDelta}
+                onDuplicateSelected={handleDuplicateSelected}
+                onInteractionEnd={handleInteractionEnd}
+                onExpandArtboard={artboardHeight < MAX_ARTBOARD_HEIGHT ? handleExpandArtboard : undefined}
+                onDesignContextMenu={handleCanvasContextMenu}
+                spotPreviewData={profile.enableFluorescent ? spotPreviewData : undefined}
+                selectionZoomActive={selectionZoomActive}
+                onSelectionZoomChange={setSelectionZoomActive}
+              />
+            </div>
+            <div className="w-[170px] shrink-0 border-l border-gray-200 bg-gray-100 p-2">
+              <div className="flex h-full flex-col gap-2 overflow-y-auto">
+                <button
+                  onClick={handleThresholdAlpha}
+                  disabled={!selectedDesignId && selectedDesignIds.size === 0}
+                  className={`flex items-center justify-center gap-1 rounded-md border px-2 py-2 text-[11px] font-medium transition-all ${
+                    selectedDesignId || selectedDesignIds.size > 0
+                      ? "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]"
+                      : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"
+                  }`}
+                  title={t("editor.cleanAlphaTitle")}
+                >
+                  <Droplets className="h-3 w-3" />
+                  {t("editor.cleanAlpha")}
+                </button>
+                <button
+                  onClick={handleThresholdAlphaAll}
+                  disabled={designs.length === 0}
+                  className={`flex items-center justify-center gap-1 rounded-md border px-2 py-2 text-[11px] font-medium transition-all ${
+                    designs.length > 0
+                      ? "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]"
+                      : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"
+                  }`}
+                  title={t("editor.cleanAlphaAllTitle")}
+                >
+                  <Droplets className="h-3 w-3" />
+                  {t("editor.cleanAlphaAll")}
+                </button>
+
+                <div className="rounded-md border border-gray-200 bg-white p-2">
+                  <div className="mb-2 flex items-center gap-1">
+                    <Copy className="h-3 w-3 text-gray-500" />
+                    <input
+                      type="number"
+                      min={1}
+                      max={99}
+                      value={duplicateCount}
+                      onChange={(e) => setDuplicateCount(Math.max(1, Math.min(99, parseInt(e.target.value) || 1)))}
+                      disabled={!selectedDesignId}
+                      className="h-7 w-full rounded border border-gray-300 bg-white px-1 text-center text-[11px] outline-none focus:border-cyan-500 disabled:opacity-30 disabled:pointer-events-none"
+                      title="Number of copies"
+                    />
+                  </div>
+                  <button
+                    onClick={() => handleDuplicateAndArrange(duplicateCount)}
+                    disabled={!selectedDesignId}
+                    className={`w-full rounded-md px-2 py-2 text-[11px] font-medium transition-all ${
+                      selectedDesignId
+                        ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#0891B2]"
+                        : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"
+                    }`}
+                    title={t("editor.duplicateArrange")}
+                  >
+                    {t("editor.duplicateArrange")}
+                  </button>
+                </div>
+
+                <span
+                  className={`mx-auto inline-flex rounded px-2 py-1 text-[9px] font-semibold ${
+                    effectiveDPI < 277
+                      ? "border border-amber-400 bg-amber-100 text-amber-600"
+                      : "border border-emerald-700 bg-emerald-100 text-emerald-600"
+                  }`}
+                  title={t("editor.effectiveRes", { dpi: effectiveDPI })}
+                >
+                  {effectiveDPI} DPI
+                </span>
+
+                <div className="rounded-md border border-gray-200 bg-white p-2">
+                  <div className="mb-1 flex items-center gap-1">
+                    <span className="text-[10px] text-gray-600">W</span>
+                    <SizeInput
+                      value={activeResizeSettings.widthInches * activeDesignTransform.s}
+                      onCommit={(v) => handleEffectiveSizeChange("width", v)}
+                      title={useMetric(lang) ? t("editor.widthTitleCm") : t("editor.widthTitle")}
+                      max={artboardWidth}
+                      lang={lang}
+                    />
+                    <span className="text-[9px] text-gray-600">{getUnitSuffix(activeResizeSettings.widthInches * activeDesignTransform.s, lang)}</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px] text-gray-600">H</span>
+                    <SizeInput
+                      value={activeResizeSettings.heightInches * activeDesignTransform.s}
+                      onCommit={(v) => handleEffectiveSizeChange("height", v)}
+                      title={useMetric(lang) ? t("editor.heightTitleCm") : t("editor.heightTitle")}
+                      max={artboardHeight}
+                      lang={lang}
+                    />
+                    <span className="text-[9px] text-gray-600">{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2 })}
+                  disabled={designs.length < 2 && selectedDesignIds.size < 2}
+                  className={`rounded-md px-2 py-2 text-[11px] font-medium transition-all ${
+                    designs.length >= 2 || selectedDesignIds.size >= 2
+                      ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#0891B2]"
+                      : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"
+                  }`}
+                  title={selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll")}
+                >
+                  {t("editor.autoArrange")}
+                </button>
+
+                <div className="mt-auto flex items-center gap-1 rounded-md border border-gray-200 bg-white p-1">
+                  <button
+                    onClick={handleUndo}
+                    disabled={!canUndo()}
+                    className="h-8 w-8 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30"
+                    title={t("editor.undo")}
+                  >
+                    <Undo2 className="mx-auto h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={handleRedo}
+                    disabled={!canRedo()}
+                    className="h-8 w-8 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30"
+                    title={t("editor.redo")}
+                  >
+                    <Redo2 className="mx-auto h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (selectedDesignIds.size > 1) handleDeleteMulti(selectedDesignIds);
+                      else if (selectedDesignId) handleDeleteDesign(selectedDesignId);
+                    }}
+                    disabled={!selectedDesignId}
+                    className="h-8 w-8 rounded border border-red-200 bg-white text-red-500 transition-colors hover:bg-red-50 hover:text-red-600 disabled:pointer-events-none disabled:opacity-30"
+                    title={t("editor.delete")}
+                  >
+                    <Trash2 className="mx-auto h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="flex-1 min-h-0 relative">
+            <PreviewSection
+              ref={canvasRef}
+              imageInfo={activeImageInfo}
+              resizeSettings={activeResizeSettings}
+              artboardWidth={artboardWidth}
+              artboardHeight={artboardHeight}
+              designTransform={activeDesignTransform}
+              onTransformChange={handleDesignTransformChange}
+              designs={designs}
+              selectedDesignId={selectedDesignId}
+              selectedDesignIds={selectedDesignIds}
+              onSelectDesign={handleSelectDesign}
+              onMultiSelect={handleMultiSelect}
+              onMultiDragDelta={handleMultiDragDelta}
+              onMultiResizeDelta={handleMultiResizeDelta}
+              onMultiRotateDelta={handleMultiRotateDelta}
+              onDuplicateSelected={handleDuplicateSelected}
+              onInteractionEnd={handleInteractionEnd}
+              onExpandArtboard={artboardHeight < MAX_ARTBOARD_HEIGHT ? handleExpandArtboard : undefined}
+              onDesignContextMenu={handleCanvasContextMenu}
+              spotPreviewData={profile.enableFluorescent ? spotPreviewData : undefined}
+              selectionZoomActive={selectionZoomActive}
+              onSelectionZoomChange={setSelectionZoomActive}
+            />
+          </div>
+        )}
       </div>
       
       </div>
