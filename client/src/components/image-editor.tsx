@@ -318,8 +318,6 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [downloadContainer, setDownloadContainer] = useState<HTMLDivElement | null>(null);
-  const swipeStartXRef = useRef<number | null>(null);
-  const swipeStartYRef = useRef<number | null>(null);
   const [spotPreviewData, setSpotPreviewData] = useState<SpotPreviewData>({ enabled: false, colors: [] });
   const [fluorPanelContainer, setFluorPanelContainer] = useState<HTMLDivElement | null>(null);
   const copySpotSelectionsRef = useRef<((fromId: string, toIds: string[]) => void) | null>(null);
@@ -417,25 +415,6 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     const snap = redo(getSnapshot());
     if (snap) applySnapshot(snap);
   }, [redo, getSnapshot, applySnapshot]);
-
-  const handleMobileSwipeStart = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
-    if (!isMobile) return;
-    const touch = e.touches[0];
-    swipeStartXRef.current = touch.clientX;
-    swipeStartYRef.current = touch.clientY;
-  }, [isMobile]);
-
-  const handleMobileSwipeEnd = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
-    if (!isMobile || swipeStartXRef.current == null || swipeStartYRef.current == null) return;
-    const touch = e.changedTouches[0];
-    const dx = touch.clientX - swipeStartXRef.current;
-    const dy = touch.clientY - swipeStartYRef.current;
-    swipeStartXRef.current = null;
-    swipeStartYRef.current = null;
-    if (Math.abs(dx) < 45 || Math.abs(dx) <= Math.abs(dy)) return;
-    if (dx < 0) setMobilePanel("preview");
-    else setMobilePanel("controls");
-  }, [isMobile]);
 
   // Called when a drag/resize/rotate interaction ends on the canvas
   const handleInteractionEnd = useCallback(() => {
@@ -3299,8 +3278,6 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         <div
           className={isMobile ? "flex min-h-0 flex-1 flex-row transition-transform duration-300 ease-out" : "flex-1 min-h-0 flex flex-col lg:flex-row"}
           style={isMobile ? { transform: mobilePanel === "preview" ? "translateX(-100%)" : "translateX(0)" } : undefined}
-          onTouchStart={handleMobileSwipeStart}
-          onTouchEnd={handleMobileSwipeEnd}
         >
       {/* Left sidebar - Layers + Settings */}
       <div className={`flex-shrink-0 w-full lg:w-[320px] xl:w-[340px] border-r border-gray-200 bg-white overflow-x-hidden ${isMobile ? "" : "overflow-y-auto"}`}>
