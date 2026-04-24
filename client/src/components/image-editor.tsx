@@ -320,6 +320,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
   const [downloadContainer, setDownloadContainer] = useState<HTMLDivElement | null>(null);
   const [spotPreviewData, setSpotPreviewData] = useState<SpotPreviewData>({ enabled: false, colors: [] });
   const [fluorPanelContainer, setFluorPanelContainer] = useState<HTMLDivElement | null>(null);
+  const [mobileToolbarContainer, setMobileToolbarContainer] = useState<HTMLDivElement | null>(null);
   const copySpotSelectionsRef = useRef<((fromId: string, toIds: string[]) => void) | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; designId: string } | null>(null);
   const [cropModalDesignId, setCropModalDesignId] = useState<string | null>(null);
@@ -3494,7 +3495,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
 
         {/* Preview Canvas */}
         {isMobile ? (
-          <div className="flex min-h-0 flex-1">
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="flex min-h-0 flex-1">
             <div className="flex min-h-0 min-w-0 flex-1 flex-col h-full">
               <div className="flex-shrink-0 flex items-center gap-0.5 bg-white border-b border-gray-200 px-2 py-1">
                 <button onClick={handleRotate90} disabled={!selectedDesignId} className="h-8 w-8 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30" title={t("editor.rotate")}><RotateCw className="mx-auto h-4 w-4" /></button>
@@ -3527,6 +3529,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                   spotPreviewData={profile.enableFluorescent ? spotPreviewData : undefined}
                   selectionZoomActive={selectionZoomActive}
                   onSelectionZoomChange={setSelectionZoomActive}
+                  bottomToolbarContainer={mobileToolbarContainer}
                 />
               </div>
             </div>
@@ -3563,6 +3566,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
               </div>
               </div>
             </div>
+            </div>
+            <div ref={setMobileToolbarContainer} className="flex-shrink-0" />
           </div>
         ) : (
           <div className="flex-1 min-h-0 relative">

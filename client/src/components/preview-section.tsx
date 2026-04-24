@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, forwardRef, useImperativeHandle, useState, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { ZoomIn, ZoomOut, RotateCcw, ScanSearch, Focus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/lib/i18n";
@@ -77,10 +78,11 @@ interface PreviewSectionProps {
   spotPreviewData?: { enabled: boolean; colors: Array<{ hex: string; rgb: { r: number; g: number; b: number }; spotWhite?: boolean; spotGloss?: boolean; spotFluorY?: boolean; spotFluorM?: boolean; spotFluorG?: boolean; spotFluorOrange?: boolean }> };
   selectionZoomActive?: boolean;
   onSelectionZoomChange?: (active: boolean) => void;
+  bottomToolbarContainer?: HTMLElement | null;
 }
 
 const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
-  ({ imageInfo, resizeSettings, artboardWidth = 24.5, artboardHeight = 12, designTransform, onTransformChange, designs = [], selectedDesignId, selectedDesignIds = new Set(), onSelectDesign, onMultiSelect, onMultiDragDelta, onMultiResizeDelta, onMultiRotateDelta, onDuplicateSelected, onInteractionEnd, onExpandArtboard, onDesignContextMenu, spotPreviewData, selectionZoomActive: selectionZoomActiveProp, onSelectionZoomChange }, ref) => {
+  ({ imageInfo, resizeSettings, artboardWidth = 24.5, artboardHeight = 12, designTransform, onTransformChange, designs = [], selectedDesignId, selectedDesignIds = new Set(), onSelectDesign, onMultiSelect, onMultiDragDelta, onMultiResizeDelta, onMultiRotateDelta, onDuplicateSelected, onInteractionEnd, onExpandArtboard, onDesignContextMenu, spotPreviewData, selectionZoomActive: selectionZoomActiveProp, onSelectionZoomChange, bottomToolbarContainer }, ref) => {
     const { toast } = useToast();
     const { t, lang } = useLanguage();
     const isMobile = useIsMobile();
@@ -3317,6 +3319,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         </div>
 
         {/* Bottom toolbar */}
+        {(bottomToolbarContainer ? createPortal(
         <div className="flex-shrink-0 flex items-center justify-between gap-2 bg-gray-100 border-t border-gray-200 px-2 py-1.5 lg:px-3 lg:py-1.5 min-w-0">
               <div className="flex items-center gap-1.5 min-w-0 overflow-x-auto overflow-y-hidden flex-1 [scrollbar-width:thin]">
                 {selectedDesignId && designTransform && (
@@ -3473,7 +3476,98 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                   />
                 ))}
               </div>
+            </div>,
+            bottomToolbarContainer
+          ) : (
+            <div className="flex-shrink-0 flex items-center justify-between gap-2 bg-gray-100 border-t border-gray-200 px-2 py-1.5 lg:px-3 lg:py-1.5 min-w-0">
+              <div className="flex items-center gap-1.5 min-w-0 overflow-x-auto overflow-y-hidden flex-1 [scrollbar-width:thin]">
+                {selectedDesignId && designTransform && (
+                  <>
+                    {!isMobile && (
+                      <>
+                        {editingRotation ? (
+                          <input
+                            type="number"
+                            className="w-12 h-5 bg-gray-100 text-[11px] text-gray-900 text-center rounded border border-gray-300 outline-none"
+                            value={rotationInput}
+                            autoFocus
+                            onChange={(e) => setRotationInput(e.target.value)}
+                            onBlur={() => {
+                              setEditingRotation(false);
+                              const val = parseFloat(rotationInput);
+                              if (!isNaN(val) && onTransformChange) {
+                                onTransformChange({ ...designTransform, rotation: ((val % 360) + 360) % 360 });
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                            }}
+                          />
+                        ) : (
+                          <span
+                            className="text-[11px] text-gray-600 font-medium cursor-pointer hover:text-gray-900 tabular-nums"
+                            title={t("preview.editRotation")}
+                            onClick={() => {
+                              setRotationInput(String(Math.round(designTransform.rotation || 0)));
+                              setEditingRotation(true);
+                            }}
+                          >
+                            {Math.round(designTransform.rotation || 0)}°
+                          </span>
+                        )}
+                        <div className="w-px h-3.5 bg-gray-300" />
+                      </>
+                    )}
+                  </>
+                )}
+                {isMobile && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={resetView}
+                    className="min-w-[40px] min-h-[40px] h-8 px-2 hover:bg-gray-200 rounded text-gray-600 whitespace-nowrap text-[11px] flex items-center justify-center"
+                    title={t("preview.resetView")}
+                  >
+                    <RotateCcw className="h-3.5 w-3.5 mr-1 flex-shrink-0" />
+                    {t("preview.reset")}
+                  </Button>
+                )}
+                <div className="flex items-center gap-0 flex-shrink-0 items-center">
+                  <Button variant="ghost" size="sm" className="min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 h-8 w-8 sm:h-7 sm:w-7 p-0 hover:bg-gray-200 rounded flex items-center justify-center" onClick={() => {
+                    const newZ = Math.max(zoom / ZOOM_BUTTON_FACTOR, minZoomRef.current);
+                    const clamped = clampPanValue(panX, panY, newZ);
+                    setZoom(newZ);
+                    queuePanStateCommit(clamped.x, clamped.y);
+                    if (canvasAreaRef.current) {
+                      const el = canvasAreaRef.current;
+                      el.style.cursor = (newZ * previewDims.width > el.clientWidth * 1.05 && !moveMode) ? 'grab' : 'default';
+                    }
+                  }} title={t("preview.zoomOut")}>
+                    <ZoomOut className="h-4 w-4 text-gray-600" />
+                  </Button>
+                  <span className="text-[11px] text-gray-600 min-w-[32px] text-center font-medium tabular-nums px-0.5">{Math.round(zoom * 100)}%</span>
+                  <Button variant="ghost" size="sm" className="min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 h-8 w-8 sm:h-7 sm:w-7 p-0 hover:bg-gray-200 rounded flex items-center justify-center" onClick={() => {
+                    const newZ = Math.min(zoom * ZOOM_BUTTON_FACTOR, zoomMax);
+                    const clamped = clampPanValue(panX, panY, newZ);
+                    setZoom(newZ);
+                    queuePanStateCommit(clamped.x, clamped.y);
+                    if (canvasAreaRef.current) {
+                      const el = canvasAreaRef.current;
+                      el.style.cursor = (newZ * previewDims.width > el.clientWidth * 1.05 && !moveMode) ? 'grab' : 'default';
+                    }
+                  }} title={t("preview.zoomIn")}>
+                    <ZoomIn className="h-4 w-4 text-gray-600" />
+                  </Button>
+                </div>
+                <div className="w-px h-3.5 bg-gray-300" />
+              </div>
+              <div className={`flex items-center ${isMobile ? 'gap-1.5' : 'gap-1'} flex-shrink-0`}>
+                {[{ color: 'transparent', label: 'Transparent' }, { color: '#ffffff', label: 'White' }, { color: '#d1d5db', label: 'Light Gray' }, { color: '#6b7280', label: 'Gray' }, { color: '#000000', label: 'Black' }].map(({ color, label }) => (
+                  <button key={color} onClick={() => setPreviewBgColor(color)} className={`rounded-full border-2 transition-all ${previewBgColor === color ? 'border-cyan-400 scale-110' : 'border-gray-300 hover:border-gray-500'}`} title={label} style={{ width: isMobile ? 22 : 18, height: isMobile ? 22 : 18, background: color === 'transparent' ? 'repeating-conic-gradient(#ccc 0% 25%, #fff 0% 50%) 50% / 6px 6px' : color }} />
+                ))}
+              </div>
             </div>
+          ))}
 
         {/* Keyboard shortcut hints */}
         <div className="hidden lg:flex flex-shrink-0 items-center justify-center gap-4 bg-gray-100/90 border-t border-gray-200/80 px-3 py-0.5 text-[9px] text-gray-600">
