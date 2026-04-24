@@ -3576,7 +3576,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                 </div>
                 <span className={`mx-auto inline-flex rounded px-2 py-1 text-[9px] font-semibold ${effectiveDPI < 277 ? "border border-amber-400 bg-amber-100 text-amber-600" : "border border-emerald-700 bg-emerald-100 text-emerald-600"}`} title={t("editor.effectiveRes", { dpi: effectiveDPI })}>{effectiveDPI} DPI</span>
                 <div className="rounded-md border border-gray-200 bg-white p-2">
-                  <div className="mx-auto mb-1 flex max-w-[130px] items-center gap-1">
+                  <div className="mx-auto mb-1 inline-flex items-center justify-center gap-1">
                     <span className="text-[10px] text-gray-600">W</span>
                     <SizeInput value={activeResizeSettings.widthInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("width", v)} title={useMetric(lang) ? t("editor.widthTitleCm") : t("editor.widthTitle")} max={artboardWidth} lang={lang} />
                     <span className="text-[9px] text-gray-600">{getUnitSuffix(activeResizeSettings.widthInches * activeDesignTransform.s, lang)}</span>
@@ -3589,7 +3589,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                   >
                     {proportionalLock ? <Link className="h-3.5 w-3.5" /> : <Unlink className="h-3.5 w-3.5" />}
                   </button>
-                  <div className="mx-auto flex max-w-[130px] items-center gap-1">
+                  <div className="mx-auto inline-flex items-center justify-center gap-1">
                     <span className="text-[10px] text-gray-600">H</span>
                     <SizeInput value={activeResizeSettings.heightInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("height", v)} title={useMetric(lang) ? t("editor.heightTitleCm") : t("editor.heightTitle")} max={artboardHeight} lang={lang} />
                     <span className="text-[9px] text-gray-600">{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>
