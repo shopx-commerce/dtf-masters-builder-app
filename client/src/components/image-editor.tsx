@@ -3539,10 +3539,41 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                 <button onClick={handleThresholdAlpha} disabled={!selectedDesignId && selectedDesignIds.size === 0} className={`flex items-center justify-center gap-1 rounded-md border px-2 py-2 text-[11px] font-medium transition-all ${selectedDesignId || selectedDesignIds.size > 0 ? "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`} title={t("editor.cleanAlphaTitle")}><Droplets className="h-3 w-3" />{t("editor.cleanAlpha")}</button>
                 <button onClick={handleThresholdAlphaAll} disabled={designs.length === 0} className={`flex items-center justify-center gap-1 rounded-md border px-2 py-2 text-[11px] font-medium transition-all ${designs.length > 0 ? "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`} title={t("editor.cleanAlphaAllTitle")}><Droplets className="h-3 w-3" />{t("editor.cleanAlphaAll")}</button>
                 <div className="rounded-md border border-gray-200 bg-white p-2">
-                  <div className="mb-2 grid grid-cols-[1fr_56px_1.2fr] gap-1">
-                    <button onClick={() => handleDuplicateDesign(duplicateCount)} disabled={!selectedDesignId} className={`rounded-md px-1 py-2 text-[11px] font-medium transition-all ${selectedDesignId ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#7C3AED]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`} title={t("editor.duplicate")}>{t("editor.duplicate").replace(/ \(.*/, "")}</button>
-                    <input type="number" min={1} max={99} value={duplicateCount} onChange={(e) => setDuplicateCount(Math.max(1, Math.min(99, parseInt(e.target.value) || 1)))} disabled={!selectedDesignId} className="h-9 rounded border border-gray-300 bg-white px-1 text-center text-[11px] outline-none focus:border-cyan-500 disabled:opacity-30 disabled:pointer-events-none" title="Number of copies" />
-                    <button onClick={() => handleDuplicateAndArrange(duplicateCount)} disabled={!selectedDesignId} className={`rounded-md px-1 py-2 text-[11px] font-medium transition-all ${selectedDesignId ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#0891B2]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`} title={t("editor.duplicateArrange")}>{t("editor.duplicateArrange")}</button>
+                  <div className="flex flex-col gap-2">
+                    <div className="grid grid-cols-[1fr_52px] gap-1.5">
+                      <button
+                        onClick={() => handleDuplicateDesign(duplicateCount)}
+                        disabled={!selectedDesignId}
+                        className={`min-w-0 rounded-md px-2 py-2 text-[11px] font-medium transition-all ${selectedDesignId ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#7C3AED]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`}
+                        title={t("editor.duplicate")}
+                      >
+                        <span className="inline-flex items-center justify-center gap-1">
+                          <Copy className="h-3.5 w-3.5 flex-shrink-0" />
+                          <span className="truncate">{t("editor.duplicate").replace(/ \(.*/, "")}</span>
+                        </span>
+                      </button>
+                      <input
+                        type="number"
+                        min={1}
+                        max={99}
+                        value={duplicateCount}
+                        onChange={(e) => setDuplicateCount(Math.max(1, Math.min(99, parseInt(e.target.value) || 1)))}
+                        disabled={!selectedDesignId}
+                        className="h-9 w-full rounded border border-gray-300 bg-white px-1 text-center text-[12px] outline-none focus:border-cyan-500 disabled:opacity-30 disabled:pointer-events-none"
+                        title="Number of copies"
+                      />
+                    </div>
+                    <button
+                      onClick={() => handleDuplicateAndArrange(duplicateCount)}
+                      disabled={!selectedDesignId}
+                      className={`w-full rounded-md px-2 py-2 text-[11px] font-medium transition-all ${selectedDesignId ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#0891B2]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`}
+                      title={t("editor.duplicateArrange")}
+                    >
+                      <span className="inline-flex items-center justify-center gap-1">
+                        <Copy className="h-3.5 w-3.5 flex-shrink-0" />
+                        <span className="truncate">{t("editor.duplicateArrange")}</span>
+                      </span>
+                    </button>
                   </div>
                 </div>
                 <span className={`mx-auto inline-flex rounded px-2 py-1 text-[9px] font-semibold ${effectiveDPI < 277 ? "border border-amber-400 bg-amber-100 text-amber-600" : "border border-emerald-700 bg-emerald-100 text-emerald-600"}`} title={t("editor.effectiveRes", { dpi: effectiveDPI })}>{effectiveDPI} DPI</span>
