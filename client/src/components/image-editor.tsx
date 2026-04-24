@@ -3575,7 +3575,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                   </div>
                 </div>
                 <span className={`mx-auto inline-flex rounded px-2 py-1 text-[9px] font-semibold ${effectiveDPI < 277 ? "border border-amber-400 bg-amber-100 text-amber-600" : "border border-emerald-700 bg-emerald-100 text-emerald-600"}`} title={t("editor.effectiveRes", { dpi: effectiveDPI })}>{effectiveDPI} DPI</span>
-                <div className="rounded-md border border-gray-200 bg-white p-2">
+                <div className={`rounded-md border border-gray-200 bg-white p-2 ${isMobile ? "mx-auto w-fit max-w-full" : ""}`}>
                   <div className="mx-auto mb-1 inline-flex items-center justify-center gap-1">
                     <span className="text-[10px] text-gray-600">W</span>
                     <SizeInput value={activeResizeSettings.widthInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("width", v)} title={useMetric(lang) ? t("editor.widthTitleCm") : t("editor.widthTitle")} max={artboardWidth} lang={lang} />
