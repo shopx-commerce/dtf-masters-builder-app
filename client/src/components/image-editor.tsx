@@ -1975,6 +1975,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       };
 
       applyImageDirectly(newImageInfo, widthInches, heightInches, imageHasCleanAlpha(finalImage));
+      if (isMobile) setMobilePanel("preview");
 
       const effectiveDPI = Math.min(finalImage.width / widthInches, finalImage.height / heightInches);
       if (effectiveDPI < 278) {
@@ -1994,7 +1995,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     } else {
       processImage(image);
     }
-  }, [applyImageDirectly, toast]);
+  }, [applyImageDirectly, isMobile, toast]);
 
   const handleImageUpload = useCallback(async (file: File, image: HTMLImageElement) => {
     try {
@@ -2121,6 +2122,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       const bh = croppedImg.naturalHeight || croppedImg.height;
       const newImageInfo: ImageInfo = { file, image: croppedImg, originalWidth: bw, originalHeight: bh, dpi };
       applyImageDirectly(newImageInfo, widthInches, heightInches, imageHasCleanAlpha(croppedImg));
+      if (isMobile) setMobilePanel("preview");
       if (matchesArtboard) {
         toast({ title: t("toast.gangsheetDetected"), description: t("toast.gangsheetDetectedDesc") });
       }
@@ -2152,7 +2154,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         toast({ title: t("toast.uploadFailed"), description: t("toast.uploadFailedDesc"), variant: "destructive" });
       }
     }
-  }, [applyImageDirectly, toast, handleFallbackImage, artboardWidth, artboardHeight]);
+  }, [applyImageDirectly, isMobile, toast, handleFallbackImage, artboardWidth, artboardHeight]);
 
   const handlePDFUpload = useCallback((file: File, pdfData: ParsedPDFData) => {
     if (document.activeElement instanceof HTMLElement) {
@@ -2178,7 +2180,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     );
 
     applyImageDirectly(newImageInfo, widthInches, heightInches);
-  }, [applyImageDirectly]);
+    if (isMobile) setMobilePanel("preview");
+  }, [applyImageDirectly, isMobile]);
 
   const handleBatchStart = useCallback((fileCount: number) => {
     const targetHeight = Math.min(48, GANGSHEET_HEIGHTS[GANGSHEET_HEIGHTS.length - 1]);
