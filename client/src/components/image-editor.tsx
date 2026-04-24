@@ -3576,18 +3576,26 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                 </div>
                 <span className={`mx-auto inline-flex rounded px-2 py-1 text-[9px] font-semibold ${effectiveDPI < 277 ? "border border-amber-400 bg-amber-100 text-amber-600" : "border border-emerald-700 bg-emerald-100 text-emerald-600"}`} title={t("editor.effectiveRes", { dpi: effectiveDPI })}>{effectiveDPI} DPI</span>
                 <div className="rounded-md border border-gray-200 bg-white p-2">
-                  <div className="mb-1 flex items-center gap-1">
+                  <div className="mx-auto mb-1 flex max-w-[130px] items-center gap-1">
                     <span className="text-[10px] text-gray-600">W</span>
                     <SizeInput value={activeResizeSettings.widthInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("width", v)} title={useMetric(lang) ? t("editor.widthTitleCm") : t("editor.widthTitle")} max={artboardWidth} lang={lang} />
                     <span className="text-[9px] text-gray-600">{getUnitSuffix(activeResizeSettings.widthInches * activeDesignTransform.s, lang)}</span>
                   </div>
-                  <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setProportionalLock((v) => !v)}
+                    className="mx-auto mb-1 flex h-5 w-5 items-center justify-center rounded text-cyan-500 hover:bg-cyan-50"
+                    title={proportionalLock ? t("editor.proportionsLocked") : t("editor.proportionsUnlocked")}
+                  >
+                    {proportionalLock ? <Link className="h-3.5 w-3.5" /> : <Unlink className="h-3.5 w-3.5" />}
+                  </button>
+                  <div className="mx-auto flex max-w-[130px] items-center gap-1">
                     <span className="text-[10px] text-gray-600">H</span>
                     <SizeInput value={activeResizeSettings.heightInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("height", v)} title={useMetric(lang) ? t("editor.heightTitleCm") : t("editor.heightTitle")} max={artboardHeight} lang={lang} />
                     <span className="text-[9px] text-gray-600">{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>
                   </div>
                 </div>
-                <button onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2 })} disabled={designs.length < 2 && selectedDesignIds.size < 2} className={`rounded-md px-2 py-2 text-[11px] font-medium transition-all ${designs.length >= 2 || selectedDesignIds.size >= 2 ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#0891B2]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`} title={selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll")}>{t("editor.autoArrange")}</button>
+                <button onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2 })} disabled={designs.length < 2 && selectedDesignIds.size < 2} className={`rounded-md px-2 py-2 text-[11px] font-medium transition-all ${designs.length >= 2 || selectedDesignIds.size >= 2 ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#0891B2]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`} title={selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll")}><span className="inline-flex items-center justify-center gap-1"><LayoutGrid className="h-3.5 w-3.5" />{t("editor.autoArrange")}</span></button>
                 <div className="mt-auto flex items-center gap-1 rounded-md border border-gray-200 bg-white p-1">
                 <button onClick={handleUndo} disabled={!canUndo()} className="h-8 w-8 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30" title={t("editor.undo")}><Undo2 className="mx-auto h-4 w-4" /></button>
                 <button onClick={handleRedo} disabled={!canRedo()} className="h-8 w-8 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30" title={t("editor.redo")}><Redo2 className="mx-auto h-4 w-4" /></button>
