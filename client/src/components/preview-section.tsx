@@ -3090,7 +3090,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
             <div className="absolute bottom-0 left-0 right-3.5 flex justify-center pointer-events-none">
               <span className={`text-gray-600 font-medium tracking-wide ${lang === 'en' ? 'text-[10px]' : 'text-[9px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
             </div>
-            <div className="absolute right-0 top-0 bottom-4 flex items-center pointer-events-none">
+            <div className="absolute right-0 top-0 bottom-4 -translate-x-2 flex items-center pointer-events-none">
               <span className={`text-gray-600 font-medium tracking-wide ${lang === 'en' ? 'text-[10px]' : 'text-[9px]'}`} style={{ writingMode: 'vertical-rl' }}>{formatLength(artboardHeight, lang)}{lang === "en" ? '"' : ""}</span>
             </div>
           </div>
