@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import ImageEditor from "@/components/image-editor";
 import { type ProfileConfig, HOT_PEEL_PROFILE } from "@/lib/profiles";
 import { Link } from "wouter";
-import { ArrowLeft, Upload } from "lucide-react";
+import { ArrowLeft, Upload, X } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
 import LanguageToggle from "@/components/language-toggle";
 
@@ -131,57 +131,89 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
     );
   }
 
+  const requestCloseShopifyOverlay = () => {
+    try {
+      window.parent.postMessage({ type: "dtf-builder-close-overlay" }, "*");
+    } catch {
+      /* ignore */
+    }
+  };
+
   return (
     <div className="h-screen [height:100dvh] flex flex-col bg-gray-50 overflow-hidden">
-      <header className="flex-shrink-0 bg-gray-50 border-b border-gray-200 px-4 py-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3 flex-shrink-0">
-            {!embedFromShopify && (
+      {embedFromShopify ? (
+        <header className="flex-shrink-0 bg-gray-50 border-b border-gray-200 px-3 sm:px-4 py-2">
+          <div className="flex flex-row flex-nowrap items-center justify-between gap-2 sm:gap-3 w-full min-w-0">
+            <button
+              type="button"
+              className="inline-flex items-center justify-center gap-1.5 sm:gap-2 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-500 px-3 sm:px-4 py-2 text-sm sm:text-base font-medium text-white shadow-md shadow-cyan-500/25 hover:from-cyan-600 hover:to-blue-600 transition-colors min-w-0 max-w-[min(56%,18rem)] sm:max-w-none"
+              onClick={() => window.dispatchEvent(new CustomEvent("dtf:open-upload"))}
+            >
+              <Upload className="w-4 h-4 sm:w-5 sm:h-5 flex-shrink-0" />
+              <span className="truncate">{t("editor.addDesigns")}</span>
+            </button>
+            <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+              <LanguageToggle />
+              <button
+                type="button"
+                onClick={requestCloseShopifyOverlay}
+                className="inline-flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-800 shadow-sm hover:bg-gray-50"
+                aria-label={t("editor.closeBuilder")}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </header>
+      ) : (
+        <header className="flex-shrink-0 bg-gray-50 border-b border-gray-200 px-4 py-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3 flex-shrink-0">
               <Link href="/">
                 <button type="button" className="flex items-center gap-1 text-gray-600 hover:text-gray-900 transition-colors text-xs">
                   <ArrowLeft className="w-3.5 h-3.5" />
                   {t("editor.back")}
                 </button>
               </Link>
-            )}
-            <div className="min-w-0 flex flex-col gap-0.5">
-              <button
-                type="button"
-                className="sm:hidden inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-500 px-4 py-2 text-base font-medium text-white shadow-lg shadow-cyan-500/25 hover:from-cyan-600 hover:to-blue-600 transition-colors"
-                onClick={() => window.dispatchEvent(new CustomEvent("dtf:open-upload"))}
-              >
-                <Upload className="w-5 h-5" />
-                {t("editor.addDesigns")}
-              </button>
-              <h1
-                className="hidden sm:block text-lg font-black tracking-widest truncate max-w-[min(100vw-8rem,28rem)] sm:max-w-xl"
-                style={{
-                  fontFamily: "'Orbitron', sans-serif",
-                  background: "linear-gradient(90deg, #06b6d4, #3b82f6, #8b5cf6, #06b6d4)",
-                  backgroundSize: "200% auto",
-                  WebkitBackgroundClip: "text",
-                  WebkitTextFillColor: "transparent",
-                  backgroundClip: "text",
-                  animation: "gradientShift 4s linear infinite",
-                  filter: "drop-shadow(0 0 8px rgba(6,182,212,0.5))",
-                }}
-                title={profile.title}
-              >
-                {profile.title}
-              </h1>
+              <div className="min-w-0 flex flex-col gap-0.5">
+                <button
+                  type="button"
+                  className="sm:hidden inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-500 px-4 py-2 text-base font-medium text-white shadow-lg shadow-cyan-500/25 hover:from-cyan-600 hover:to-blue-600 transition-colors"
+                  onClick={() => window.dispatchEvent(new CustomEvent("dtf:open-upload"))}
+                >
+                  <Upload className="w-5 h-5" />
+                  {t("editor.addDesigns")}
+                </button>
+                <h1
+                  className="hidden sm:block text-lg font-black tracking-widest truncate max-w-[min(100vw-8rem,28rem)] sm:max-w-xl"
+                  style={{
+                    fontFamily: "'Orbitron', sans-serif",
+                    background: "linear-gradient(90deg, #06b6d4, #3b82f6, #8b5cf6, #06b6d4)",
+                    backgroundSize: "200% auto",
+                    WebkitBackgroundClip: "text",
+                    WebkitTextFillColor: "transparent",
+                    backgroundClip: "text",
+                    animation: "gradientShift 4s linear infinite",
+                    filter: "drop-shadow(0 0 8px rgba(6,182,212,0.5))",
+                  }}
+                  title={profile.title}
+                >
+                  {profile.title}
+                </h1>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 flex-shrink-0">
+              <span className="text-[11px] text-gray-600 hidden sm:inline">
+                {t("editor.tips")}{" "}
+                <a href="mailto:Support@anynestapp.com" className="text-cyan-600 hover:text-cyan-700 font-semibold">
+                  Support@anynestapp.com
+                </a>
+              </span>
+              <LanguageToggle />
             </div>
           </div>
-          <div className="flex items-center gap-3 flex-shrink-0">
-            <span className="text-[11px] text-gray-600 hidden sm:inline">
-              {t("editor.tips")}{" "}
-              <a href="mailto:Support@anynestapp.com" className="text-cyan-600 hover:text-cyan-700 font-semibold">
-                Support@anynestapp.com
-              </a>
-            </span>
-            <LanguageToggle />
-          </div>
-        </div>
-      </header>
+        </header>
+      )}
 
       <main className="flex-1 min-h-0">
         {waitingForCtx ? (

@@ -38,6 +38,7 @@ export const en: Record<string, string> = {
   "editor.tips": "Have tips and app improvement suggestions? Send it over!",
   "editor.layers": "Layers",
   "editor.addDesigns": "Add Designs",
+  "editor.closeBuilder": "Close builder",
   "editor.addDesignTitle": "Add another image",
   "editor.processing": "Processing...",
   "editor.processingDesign": "Processing your design",

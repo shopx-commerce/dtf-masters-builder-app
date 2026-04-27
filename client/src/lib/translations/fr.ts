@@ -38,6 +38,7 @@ export const fr: Record<string, string> = {
   "editor.tips": "Vous avez des suggestions pour améliorer l'appli ? Envoyez-les-nous !",
   "editor.layers": "Calques",
   "editor.addDesigns": "Ajouter des Designs",
+  "editor.closeBuilder": "Fermer l'éditeur",
   "editor.addDesignTitle": "Ajouter une autre image",
   "editor.processing": "Traitement...",
   "editor.processingDesign": "Traitement de votre design",

@@ -38,6 +38,7 @@ export const es: Record<string, string> = {
   "editor.tips": "¿Tienes sugerencias o ideas para mejorar la app? ¡Envíalas!",
   "editor.layers": "Capas",
   "editor.addDesigns": "Agregar Diseños",
+  "editor.closeBuilder": "Cerrar editor",
   "editor.addDesignTitle": "Agregar otra imagen",
   "editor.processing": "Procesando...",
   "editor.processingDesign": "Procesando tu diseño",
