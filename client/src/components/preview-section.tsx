@@ -168,7 +168,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       if (!computed) return;
       const { w, h } = computed;
       const prev = lastStablePreviewDimsRef.current;
-      if (prev && Math.abs(w - prev.w) < 3 && Math.abs(h - prev.h) < 3) return;
+      const eps = isNarrowViewport() ? 8 : 5;
+      if (prev && Math.abs(w - prev.w) < eps && Math.abs(h - prev.h) < eps) return;
       lastStablePreviewDimsRef.current = { w, h };
       const fitWidthZoom = availW / Math.max(1, w);
       const baseDPI = fitWidthZoom > 1.5 ? Math.ceil(fitWidthZoom * 1.25) : BASE_DPI_SCALE;
@@ -2347,12 +2348,24 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
       let cancelled = false;
       let resizeRafId: number | null = null;
-      const scheduleResize = () => {
+      let resizeDebounceId: ReturnType<typeof setTimeout> | null = null;
+
+      const runSync = () => {
+        if (cancelled) return;
         if (resizeRafId != null) return;
         resizeRafId = requestAnimationFrame(() => {
           resizeRafId = null;
           syncPreviewSizeFromWrapper();
         });
+      };
+
+      const scheduleResize = () => {
+        const ms = isNarrowViewport() ? 100 : 50;
+        if (resizeDebounceId != null) clearTimeout(resizeDebounceId);
+        resizeDebounceId = setTimeout(() => {
+          resizeDebounceId = null;
+          runSync();
+        }, ms);
       };
 
       const observer = new ResizeObserver(() => {
@@ -2392,6 +2405,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       return () => {
         cancelled = true;
         observer.disconnect();
+        if (resizeDebounceId != null) clearTimeout(resizeDebounceId);
         if (resizeRafId != null) cancelAnimationFrame(resizeRafId);
         if (vv) {
           vv.removeEventListener('resize', onVisualViewport);
