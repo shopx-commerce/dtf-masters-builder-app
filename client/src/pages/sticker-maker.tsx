@@ -132,8 +132,19 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
   }
 
   const requestCloseShopifyOverlay = () => {
+    const payload = { type: "dtf-builder-close-overlay" as const };
+    /* Nested iframes: parent = app-proxy shell; theme script runs on the storefront (top). */
     try {
-      window.parent.postMessage({ type: "dtf-builder-close-overlay" }, "*");
+      if (window.top && window.top !== window) {
+        window.top.postMessage(payload, "*");
+      }
+    } catch {
+      /* ignore */
+    }
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage(payload, "*");
+      }
     } catch {
       /* ignore */
     }
