@@ -2311,9 +2311,14 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     }, [syncPreviewSizeFromWrapper]);
 
     // Same “minimized” fit as after changing sheet size, but before paint (no zoom-in-then-snap). Does not run on every render.
+    // On narrow: quantize the signature so Safari/RO 1–6px wobble doesn’t re-run fit+pan reset (felt as “bounce”).
     useLayoutEffect(() => {
       if (previewDims.width <= 0 || previewDims.height <= 0) return;
-      const sig = `${previewDims.width}x${previewDims.height}@${artboardWidth}x${artboardHeight}`;
+      const w = previewDims.width;
+      const h = previewDims.height;
+      const sig = isNarrowViewport()
+        ? `${Math.round(w / 8) * 8}x${Math.round(h / 8) * 8}@${artboardWidth}x${artboardHeight}`
+        : `${w}x${h}@${artboardWidth}x${artboardHeight}`;
       if (lastViewportFitSigRef.current === sig) return;
       lastViewportFitSigRef.current = sig;
       const area = canvasAreaRef.current;
@@ -2335,11 +2340,18 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       setZoom(z);
       setPanX(0);
       setPanY(0);
-      requestAnimationFrame(() => {
+      const clearSuppress = () => {
         requestAnimationFrame(() => {
-          suppressTransitionRef.current = false;
+          requestAnimationFrame(() => {
+            suppressTransitionRef.current = false;
+          });
         });
-      });
+      };
+      if (isNarrowViewport()) {
+        requestAnimationFrame(clearSuppress);
+      } else {
+        clearSuppress();
+      }
     }, [previewDims.width, previewDims.height, artboardWidth, artboardHeight]);
 
     useEffect(() => {
@@ -2360,7 +2372,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       };
 
       const scheduleResize = () => {
-        const ms = isNarrowViewport() ? 100 : 50;
+        const ms = isNarrowViewport() ? 150 : 50;
         if (resizeDebounceId != null) clearTimeout(resizeDebounceId);
         resizeDebounceId = setTimeout(() => {
           resizeDebounceId = null;
@@ -3055,7 +3067,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
           className="flex-1 min-h-0 flex items-center justify-center bg-gray-100 p-3 relative overflow-hidden cursor-default"
-          style={{ userSelect: 'none', touchAction: 'none' }}
+          style={{ userSelect: 'none', touchAction: 'none', overscrollBehavior: 'none' }}
         >
           {previewDims.width > 0 && previewDims.height > 0 ? (
           <>
@@ -3081,7 +3093,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                   transform: `scale(${zoom}) translate(${panX}px, ${panY}px)`,
                   transformOrigin: 'center',
                   willChange: 'transform',
-                  transition: isWheelZoomingRef.current || isPanningRef.current || suppressTransitionRef.current || activeScrollAxis ? 'none' : 'transform 0.15s ease-out',
+                  transition: isMobile || isWheelZoomingRef.current || isPanningRef.current || suppressTransitionRef.current || activeScrollAxis ? 'none' : 'transform 0.15s ease-out',
                   pointerEvents: 'none',
                 }}
               />
