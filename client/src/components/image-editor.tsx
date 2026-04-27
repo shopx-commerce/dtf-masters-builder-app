@@ -3060,29 +3060,6 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
               </button>
             </div>
           )}
-          {isMobile && designs.length >= 2 && (
-            <div className="w-full flex items-center justify-end gap-1 mt-1">
-              <span className="text-[10px] text-gray-600">{t("editor.margin")}</span>
-              <select
-                value={designGap === undefined ? "auto" : String(designGap)}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  const newGap = v === "auto" ? undefined : parseFloat(v);
-                  setDesignGap(newGap);
-                  setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true }), 0);
-                }}
-                className="h-7 px-1.5 bg-gray-100 border border-gray-300 rounded text-[11px] text-gray-700 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
-                title={useMetric(lang) ? t("editor.marginGapCm") : t("editor.marginGap")}
-              >
-                <option value="auto">{t("editor.marginAuto")}</option>
-                <option value="0.0625">{useMetric(lang) ? formatLength(0.0625, lang) : "1/16″"}</option>
-                <option value="0.125">{useMetric(lang) ? formatLength(0.125, lang) : "1/8″"}</option>
-                <option value="0.25">{useMetric(lang) ? formatLength(0.25, lang) : "1/4″"}</option>
-                <option value="0.5">{useMetric(lang) ? formatLength(0.5, lang) : "1/2″"}</option>
-                <option value="1">{useMetric(lang) ? formatLength(1, lang) : "1″"}</option>
-              </select>
-            </div>
-          )}
         </>
       )}
       {!isMobile && designs.length >= 2 && (
@@ -3567,6 +3544,29 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                         <span>{t("editor.duplicateArrange")}</span>
                       </span>
                     </button>
+                    {designs.length >= 2 && (
+                      <div className="mt-1 flex items-center justify-center gap-1">
+                        <span className="text-[10px] text-gray-600">{t("editor.margin")}</span>
+                        <select
+                          value={designGap === undefined ? "auto" : String(designGap)}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            const newGap = v === "auto" ? undefined : parseFloat(v);
+                            setDesignGap(newGap);
+                            setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true }), 0);
+                          }}
+                          className="h-8 px-1.5 bg-gray-100 border border-gray-300 rounded text-[11px] text-gray-700 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
+                          title={useMetric(lang) ? t("editor.marginGapCm") : t("editor.marginGap")}
+                        >
+                          <option value="auto">{t("editor.marginAuto")}</option>
+                          <option value="0.0625">{useMetric(lang) ? formatLength(0.0625, lang) : "1/16″"}</option>
+                          <option value="0.125">{useMetric(lang) ? formatLength(0.125, lang) : "1/8″"}</option>
+                          <option value="0.25">{useMetric(lang) ? formatLength(0.25, lang) : "1/4″"}</option>
+                          <option value="0.5">{useMetric(lang) ? formatLength(0.5, lang) : "1/2″"}</option>
+                          <option value="1">{useMetric(lang) ? formatLength(1, lang) : "1″"}</option>
+                        </select>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <span className={`mx-auto inline-flex rounded px-2 py-1 text-[9px] font-semibold ${effectiveDPI < 277 ? "border border-amber-400 bg-amber-100 text-amber-600" : "border border-emerald-700 bg-emerald-100 text-emerald-600"}`} title={t("editor.effectiveRes", { dpi: effectiveDPI })}>{effectiveDPI} DPI</span>
