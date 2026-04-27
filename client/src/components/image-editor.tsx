@@ -3469,7 +3469,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         {isMobile ? (
           <div className="flex min-h-0 flex-1 flex-col">
             <div className="flex min-h-0 flex-1">
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col h-full">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col h-full pl-1.5">
               <div className="flex-shrink-0 flex items-center gap-0.5 bg-white border-b border-gray-200 px-2 py-1">
                 <button onClick={handleRotate90} disabled={!selectedDesignId} className="h-8 w-8 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30" title={t("editor.rotate")}><RotateCw className="mx-auto h-4 w-4" /></button>
                 <button onClick={() => handleAlignCorner('tl')} disabled={!selectedDesignId} className="h-8 w-8 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30" title={t("editor.alignTL")}><ArrowUpLeft className="mx-auto h-4 w-4" /></button>
