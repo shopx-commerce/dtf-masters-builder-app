@@ -3060,13 +3060,33 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
               </button>
             </div>
           )}
+          {isMobile && designs.length >= 2 && (
+            <div className="w-full flex items-center justify-end gap-1 mt-1">
+              <span className="text-[10px] text-gray-600">{t("editor.margin")}</span>
+              <select
+                value={designGap === undefined ? "auto" : String(designGap)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  const newGap = v === "auto" ? undefined : parseFloat(v);
+                  setDesignGap(newGap);
+                  setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true }), 0);
+                }}
+                className="h-7 px-1.5 bg-gray-100 border border-gray-300 rounded text-[11px] text-gray-700 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
+                title={useMetric(lang) ? t("editor.marginGapCm") : t("editor.marginGap")}
+              >
+                <option value="auto">{t("editor.marginAuto")}</option>
+                <option value="0.0625">{useMetric(lang) ? formatLength(0.0625, lang) : "1/16″"}</option>
+                <option value="0.125">{useMetric(lang) ? formatLength(0.125, lang) : "1/8″"}</option>
+                <option value="0.25">{useMetric(lang) ? formatLength(0.25, lang) : "1/4″"}</option>
+                <option value="0.5">{useMetric(lang) ? formatLength(0.5, lang) : "1/2″"}</option>
+                <option value="1">{useMetric(lang) ? formatLength(1, lang) : "1″"}</option>
+              </select>
+            </div>
+          )}
         </>
       )}
-      {!isMobile && (
-        <div
-          className={`flex items-center gap-1.5 flex-shrink-0 ${designs.length >= 2 ? 'opacity-100' : 'opacity-0'}`}
-          aria-hidden={designs.length < 2}
-        >
+      {!isMobile && designs.length >= 2 && (
+        <div className="flex items-center gap-1.5 flex-shrink-0">
           <div className="w-px h-5 bg-gray-100 hidden lg:block" />
           <div className="flex items-center gap-1">
             <span className="text-[10px] text-gray-600">{t("editor.margin")}</span>
@@ -3093,7 +3113,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
           </div>
         </div>
       )}
-      {/* Row 3 on mobile: Margin only (rotate/align moved to preview pane) */}
+      {/* Row 3: rotate/align controls (desktop only) */}
       <div className="flex items-center gap-0.5 flex-shrink-0 flex-wrap lg:flex-nowrap w-full lg:w-auto">
         {!isMobile && (
           <>
@@ -3141,34 +3161,6 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
               </button>
             </div>
           </>
-        )}
-        {isMobile && (
-          <div
-            className={`flex items-center gap-1 flex-shrink-0 ${designs.length >= 2 ? 'opacity-100' : 'opacity-0'}`}
-            aria-hidden={designs.length < 2}
-          >
-            <span className="text-[10px] text-gray-600">{t("editor.margin")}</span>
-            <select
-              value={designGap === undefined ? "auto" : String(designGap)}
-              onChange={(e) => {
-                const v = e.target.value;
-                const newGap = v === "auto" ? undefined : parseFloat(v);
-                setDesignGap(newGap);
-                if (designs.length >= 2) {
-                  setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true }), 0);
-                }
-              }}
-              className="h-7 px-1.5 bg-gray-100 border border-gray-300 rounded text-[11px] text-gray-700 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
-              title={useMetric(lang) ? t("editor.marginGapCm") : t("editor.marginGap")}
-            >
-              <option value="auto">{t("editor.marginAuto")}</option>
-              <option value="0.0625">{useMetric(lang) ? formatLength(0.0625, lang) : "1/16″"}</option>
-              <option value="0.125">{useMetric(lang) ? formatLength(0.125, lang) : "1/8″"}</option>
-              <option value="0.25">{useMetric(lang) ? formatLength(0.25, lang) : "1/4″"}</option>
-              <option value="0.5">{useMetric(lang) ? formatLength(0.5, lang) : "1/2″"}</option>
-              <option value="1">{useMetric(lang) ? formatLength(1, lang) : "1″"}</option>
-            </select>
-          </div>
         )}
       </div>
     </div>
