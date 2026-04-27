@@ -3079,6 +3079,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                 width: previewDims.width,
                 height: previewDims.height,
                 backgroundColor: 'transparent',
+                marginLeft: isMobile ? 6 : 0,
               }}
             >
               <canvas 
