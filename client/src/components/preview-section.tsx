@@ -2160,16 +2160,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           const z = zoomRef.current;
           const rawPx = panStartRef.current.px + dx / z;
           const rawPy = panStartRef.current.py + dy / z;
-          const dims = previewDimsRef.current;
-          const el = canvasAreaRef.current;
-          const vw = el ? el.clientWidth : dims.width;
-          const vh = el ? el.clientHeight : dims.height;
-          const maxPanX = Math.max(0, dims.width / 2 - vw / (2 * z));
-          const maxPanY = Math.max(0, dims.height / 2 - vh / (2 * z));
-          queuePanStateCommit(
-            Math.max(-maxPanX, Math.min(maxPanX, rawPx)),
-            Math.max(-maxPanY, Math.min(maxPanY, rawPy)),
-          );
+          const clamped = clampPanValue(rawPx, rawPy, z);
+          queuePanStateCommit(clamped.x, clamped.y);
           return;
         }
         pendingMoveRef.current = { cx: e.clientX, cy: e.clientY, alt: e.altKey };
@@ -2266,17 +2258,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           const oldPy = panYRef.current;
           const rawPanX = oldPx + cursorX * (1 / newZoom - 1 / oldZoom);
           const rawPanY = oldPy + cursorY * (1 / newZoom - 1 / oldZoom);
-          const dims = previewDimsRef.current;
-          const vw = el.clientWidth;
-          const vh = el.clientHeight;
-          const maxPx = Math.max(0, dims.width / 2 - vw / (2 * newZoom));
-          const maxPy = Math.max(0, dims.height / 2 - vh / (2 * newZoom));
-          const clampedPanX = Math.max(-maxPx, Math.min(maxPx, rawPanX));
-          const clampedPanY = Math.max(-maxPy, Math.min(maxPy, rawPanY));
+          const clamped = clampPanValue(rawPanX, rawPanY, newZoom);
 
           setZoom(newZoom);
-          setPanX(clampedPanX);
-          setPanY(clampedPanY);
+          setPanX(clamped.x);
+          setPanY(clamped.y);
           if (!selectionZoomActiveRef.current && !isPanningRef.current) {
             el.style.cursor = (newZoom * dims.width > el.clientWidth * 1.05 && !moveModeRef.current) ? 'grab' : 'default';
           }
@@ -2285,22 +2271,16 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
         // Plain wheel: scroll/pan (Shift+wheel → horizontal)
         const z = zoomRef.current;
-        const dims = previewDimsRef.current;
-        const vw = el.clientWidth;
-        const vh = el.clientHeight;
         const rawDx = e.shiftKey ? e.deltaY : e.deltaX;
         const rawDy = e.shiftKey ? 0 : e.deltaY;
         const newPanX = panXRef.current - rawDx / z;
         const newPanY = panYRef.current - rawDy / z;
-        const maxPx = Math.max(0, dims.width / 2 - vw / (2 * z));
-        const maxPy = Math.max(0, dims.height / 2 - vh / (2 * z));
-        const clampedPanX = Math.max(-maxPx, Math.min(maxPx, newPanX));
-        const clampedPanY = Math.max(-maxPy, Math.min(maxPy, newPanY));
-        if (clampedPanX === panXRef.current && clampedPanY === panYRef.current) return;
-        panXRef.current = clampedPanX;
-        panYRef.current = clampedPanY;
-        setPanX(clampedPanX);
-        setPanY(clampedPanY);
+        const clamped = clampPanValue(newPanX, newPanY, z);
+        if (clamped.x === panXRef.current && clamped.y === panYRef.current) return;
+        panXRef.current = clamped.x;
+        panYRef.current = clamped.y;
+        setPanX(clamped.x);
+        setPanY(clamped.y);
       };
       el.addEventListener('wheel', onWheel, { passive: false });
       return () => {
