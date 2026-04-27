@@ -103,7 +103,7 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
 
   if (loading) {
     return (
-      <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
+      <div className="h-screen [height:100dvh] flex flex-col bg-gray-50 overflow-hidden">
         <div className="flex-1 flex items-center justify-center">
           <div className="flex flex-col items-center gap-3 text-gray-400">
             <div className="w-8 h-8 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />
@@ -116,7 +116,7 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
 
   if (!allowEditor) {
     return (
-      <div className="h-screen flex flex-col bg-gray-50 items-center justify-center gap-6 p-6">
+      <div className="h-screen [height:100dvh] flex flex-col bg-gray-50 items-center justify-center gap-6 p-6">
         <p className="text-lg font-semibold text-gray-900">{t("editor.noProductSelected")}</p>
         <Link href="/">
           <button
@@ -132,7 +132,7 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
   }
 
   return (
-    <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
+    <div className="h-screen [height:100dvh] flex flex-col bg-gray-50 overflow-hidden">
       <header className="flex-shrink-0 bg-gray-50 border-b border-gray-200 px-4 py-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3 flex-shrink-0">

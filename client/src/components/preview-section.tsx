@@ -192,30 +192,43 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     }, [isHorizOverflow]);
 
 
+    const getOverscrollPx = useCallback((axis: 'x' | 'y') => {
+      const el = canvasAreaRef.current;
+      const dims = previewDimsRef.current;
+      const v = axis === 'x'
+        ? (el ? el.clientWidth : dims.width)
+        : (el ? el.clientHeight : dims.height);
+      return Math.min(120, Math.max(48, v * 0.3));
+    }, []);
+
     const clampPanValue = useCallback((px: number, py: number, z: number) => {
       const dims = previewDimsRef.current;
       const el = canvasAreaRef.current;
       const vw = el ? el.clientWidth : dims.width;
       const vh = el ? el.clientHeight : dims.height;
-      const maxPanX = Math.max(0, dims.width / 2 - vw / (2 * z));
-      const maxPanY = Math.max(0, dims.height / 2 - vh / (2 * z));
+      const overflowX = dims.width / 2 - vw / (2 * z);
+      const overflowY = dims.height / 2 - vh / (2 * z);
+      const maxPanX = overflowX > 0 ? overflowX + getOverscrollPx('x') / z : 0;
+      const maxPanY = overflowY > 0 ? overflowY + getOverscrollPx('y') / z : 0;
       return {
         x: Math.max(-maxPanX, Math.min(maxPanX, px)),
         y: Math.max(-maxPanY, Math.min(maxPanY, py)),
       };
-    }, []);
+    }, [getOverscrollPx]);
 
     const getMaxPan = useCallback((axis: 'x' | 'y', z: number) => {
       const dims = previewDimsRef.current;
       const el = canvasAreaRef.current;
       if (axis === 'x') {
         const vw = el ? el.clientWidth : dims.width;
-        return Math.max(0, dims.width / 2 - vw / (2 * z));
+        const overflow = dims.width / 2 - vw / (2 * z);
+        return overflow > 0 ? overflow + getOverscrollPx('x') / z : 0;
       } else {
         const vh = el ? el.clientHeight : dims.height;
-        return Math.max(0, dims.height / 2 - vh / (2 * z));
+        const overflow = dims.height / 2 - vh / (2 * z);
+        return overflow > 0 ? overflow + getOverscrollPx('y') / z : 0;
       }
-    }, []);
+    }, [getOverscrollPx]);
 
     const getScrollMetrics = useCallback((axis: 'x' | 'y', z: number) => {
       const dims = previewDimsRef.current;
