@@ -2890,16 +2890,37 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
               <Copy className="w-3 h-3" />
               {t("editor.duplicate").replace(/ \(.*/, '')}
             </button>
-            <input
-              type="number"
-              min={1}
-              max={99}
-              value={duplicateCount}
-              onChange={(e) => setDuplicateCount(Math.max(1, Math.min(99, parseInt(e.target.value) || 1)))}
-              disabled={!selectedDesignId}
-              className="w-10 h-[28px] lg:h-[24px] text-center text-[11px] border border-gray-300 rounded bg-white outline-none focus:border-cyan-500 disabled:opacity-30 disabled:pointer-events-none"
-              title="Number of copies"
-            />
+            <div className="relative w-10 h-[28px] lg:h-[24px]">
+              <input
+                type="text"
+                inputMode="numeric"
+                value={duplicateCount}
+                onChange={(e) => setDuplicateCount(Math.max(1, Math.min(99, parseInt(e.target.value) || 1)))}
+                disabled={!selectedDesignId}
+                className="w-full h-full text-center text-[11px] border border-gray-300 rounded bg-white pr-3 outline-none focus:border-cyan-500 disabled:opacity-30 disabled:pointer-events-none"
+                title="Number of copies"
+              />
+              <div className="absolute right-0 top-0 h-full w-3 border-l border-gray-300 overflow-hidden rounded-r">
+                <button
+                  type="button"
+                  onClick={() => setDuplicateCount((prev) => Math.min(99, prev + 1))}
+                  disabled={!selectedDesignId || duplicateCount >= 99}
+                  className="h-1/2 w-full flex items-center justify-center border-b border-gray-300 bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
+                  title="Increase copies"
+                >
+                  <ChevronUp className="w-2.5 h-2.5 text-gray-600" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDuplicateCount((prev) => Math.max(1, prev - 1))}
+                  disabled={!selectedDesignId || duplicateCount <= 1}
+                  className="h-1/2 w-full flex items-center justify-center bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
+                  title="Decrease copies"
+                >
+                  <ChevronDown className="w-2.5 h-2.5 text-gray-600" />
+                </button>
+              </div>
+            </div>
             <button
               onClick={() => handleDuplicateAndArrange(duplicateCount)}
               disabled={!selectedDesignId}
@@ -3037,16 +3058,37 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                 <Copy className="w-3 h-3" />
                 {t("editor.duplicate").replace(/ \(.*/, '')}
               </button>
-              <input
-                type="number"
-                min={1}
-                max={99}
-                value={duplicateCount}
-                onChange={(e) => setDuplicateCount(Math.max(1, Math.min(99, parseInt(e.target.value) || 1)))}
-                disabled={!selectedDesignId}
-                className="w-10 h-[32px] text-center text-[11px] border border-gray-300 rounded bg-white outline-none focus:border-cyan-500 disabled:opacity-30 disabled:pointer-events-none"
-                title="Number of copies"
-              />
+              <div className="relative w-10 h-[32px]">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={duplicateCount}
+                  onChange={(e) => setDuplicateCount(Math.max(1, Math.min(99, parseInt(e.target.value) || 1)))}
+                  disabled={!selectedDesignId}
+                  className="w-full h-full text-center text-[11px] border border-gray-300 rounded bg-white pr-3 outline-none focus:border-cyan-500 disabled:opacity-30 disabled:pointer-events-none"
+                  title="Number of copies"
+                />
+                <div className="absolute right-0 top-0 h-full w-3 border-l border-gray-300 overflow-hidden rounded-r">
+                  <button
+                    type="button"
+                    onClick={() => setDuplicateCount((prev) => Math.min(99, prev + 1))}
+                    disabled={!selectedDesignId || duplicateCount >= 99}
+                    className="h-1/2 w-full flex items-center justify-center border-b border-gray-300 bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
+                    title="Increase copies"
+                  >
+                    <ChevronUp className="w-2.5 h-2.5 text-gray-600" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDuplicateCount((prev) => Math.max(1, prev - 1))}
+                    disabled={!selectedDesignId || duplicateCount <= 1}
+                    className="h-1/2 w-full flex items-center justify-center bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
+                    title="Decrease copies"
+                  >
+                    <ChevronDown className="w-2.5 h-2.5 text-gray-600" />
+                  </button>
+                </div>
+              </div>
               <button
                 onClick={() => handleDuplicateAndArrange(duplicateCount)}
                 disabled={!selectedDesignId}
@@ -3525,16 +3567,37 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                         <span>{t("editor.duplicate").replace(/ \(.*/, "")}</span>
                       </span>
                     </button>
-                    <input
-                      type="number"
-                      min={1}
-                      max={99}
-                      value={duplicateCount}
-                      onChange={(e) => setDuplicateCount(Math.max(1, Math.min(99, parseInt(e.target.value) || 1)))}
-                      disabled={!selectedDesignId}
-                      className="h-9 w-full rounded border border-gray-300 bg-white px-1 text-center text-[12px] outline-none focus:border-cyan-500 disabled:opacity-30 disabled:pointer-events-none"
-                      title="Number of copies"
-                    />
+                    <div className="relative w-10 h-[28px] lg:h-[24px] mx-auto">
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={duplicateCount}
+                        onChange={(e) => setDuplicateCount(Math.max(1, Math.min(99, parseInt(e.target.value) || 1)))}
+                        disabled={!selectedDesignId}
+                        className="w-full h-full text-center text-[11px] border border-gray-300 rounded bg-white pr-3 outline-none focus:border-cyan-500 disabled:opacity-30 disabled:pointer-events-none"
+                        title="Number of copies"
+                      />
+                      <div className="absolute right-0 top-0 h-full w-3 border-l border-gray-300 overflow-hidden rounded-r">
+                        <button
+                          type="button"
+                          onClick={() => setDuplicateCount((prev) => Math.min(99, prev + 1))}
+                          disabled={!selectedDesignId || duplicateCount >= 99}
+                          className="h-1/2 w-full flex items-center justify-center border-b border-gray-300 bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
+                          title="Increase copies"
+                        >
+                          <ChevronUp className="w-2.5 h-2.5 text-gray-600" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDuplicateCount((prev) => Math.max(1, prev - 1))}
+                          disabled={!selectedDesignId || duplicateCount <= 1}
+                          className="h-1/2 w-full flex items-center justify-center bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
+                          title="Decrease copies"
+                        >
+                          <ChevronDown className="w-2.5 h-2.5 text-gray-600" />
+                        </button>
+                      </div>
+                    </div>
                     <button
                       onClick={() => handleDuplicateAndArrange(duplicateCount)}
                       disabled={!selectedDesignId}
