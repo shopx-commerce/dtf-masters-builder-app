@@ -880,6 +880,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     saveSnapshot();
     setDesigns(prev => [...prev, ...newDesigns]);
     setSelectedDesignId(newDesigns[newDesigns.length - 1].id);
+    setDuplicateCount(1);
   }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight]);
 
   const handleDuplicateAndArrange = useCallback((count: number) => {
@@ -903,6 +904,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     saveSnapshot();
     setDesigns(prev => [...prev, ...newDesigns]);
     setSelectedDesignId(newDesigns[newDesigns.length - 1].id);
+    setDuplicateCount(1);
     requestAnimationFrame(() => {
       handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true });
     });
