@@ -301,6 +301,17 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
   }, [initialQuantity]);
   const [designGap, setDesignGap] = useState<number | undefined>(0.25);
   const [duplicateCount, setDuplicateCount] = useState(1);
+  const clampDuplicateCount = useCallback((value: number) => Math.max(1, Math.min(99, value)), []);
+  const parseDuplicateCount = useCallback((raw: string) => clampDuplicateCount(parseInt(raw, 10) || 1), [clampDuplicateCount]);
+  const handleDuplicateCountKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setDuplicateCount((prev) => clampDuplicateCount(prev + 1));
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setDuplicateCount((prev) => clampDuplicateCount(prev - 1));
+    }
+  }, [clampDuplicateCount]);
   const [designTransform, setDesignTransform] = useState<ImageTransform>({ nx: 0.5, ny: 0.5, s: 1, rotation: 0 });
   const [designs, setDesigns] = useState<DesignItem[]>([]);
   const [selectedDesignId, setSelectedDesignId] = useState<string | null>(null);
@@ -2890,20 +2901,21 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
               <Copy className="w-3 h-3" />
               {t("editor.duplicate").replace(/ \(.*/, '')}
             </button>
-            <div className="relative w-10 h-[28px] lg:h-[24px]">
+            <div className="relative w-10 h-[28px] lg:h-[24px] rounded border border-gray-300 bg-white overflow-hidden focus-within:border-cyan-500">
               <input
                 type="text"
                 inputMode="numeric"
                 value={duplicateCount}
-                onChange={(e) => setDuplicateCount(Math.max(1, Math.min(99, parseInt(e.target.value) || 1)))}
+                onChange={(e) => setDuplicateCount(parseDuplicateCount(e.target.value))}
+                onKeyDown={handleDuplicateCountKeyDown}
                 disabled={!selectedDesignId}
-                className="w-full h-full text-center text-[11px] border border-gray-300 rounded bg-white pr-3 outline-none focus:border-cyan-500 disabled:opacity-30 disabled:pointer-events-none"
+                className="w-full h-full text-center text-[11px] bg-white pr-3 outline-none disabled:opacity-30 disabled:pointer-events-none"
                 title="Number of copies"
               />
               <div className="absolute right-0 top-0 h-full w-3 border-l border-gray-300 overflow-hidden rounded-r">
                 <button
                   type="button"
-                  onClick={() => setDuplicateCount((prev) => Math.min(99, prev + 1))}
+                  onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev + 1))}
                   disabled={!selectedDesignId || duplicateCount >= 99}
                   className="h-1/2 w-full flex items-center justify-center border-b border-gray-300 bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
                   title="Increase copies"
@@ -2912,7 +2924,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                 </button>
                 <button
                   type="button"
-                  onClick={() => setDuplicateCount((prev) => Math.max(1, prev - 1))}
+                  onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev - 1))}
                   disabled={!selectedDesignId || duplicateCount <= 1}
                   className="h-1/2 w-full flex items-center justify-center bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
                   title="Decrease copies"
@@ -3058,20 +3070,21 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                 <Copy className="w-3 h-3" />
                 {t("editor.duplicate").replace(/ \(.*/, '')}
               </button>
-              <div className="relative w-10 h-[32px]">
+            <div className="relative w-10 h-[32px] rounded border border-gray-300 bg-white overflow-hidden focus-within:border-cyan-500">
                 <input
                   type="text"
                   inputMode="numeric"
                   value={duplicateCount}
-                  onChange={(e) => setDuplicateCount(Math.max(1, Math.min(99, parseInt(e.target.value) || 1)))}
+                  onChange={(e) => setDuplicateCount(parseDuplicateCount(e.target.value))}
+                  onKeyDown={handleDuplicateCountKeyDown}
                   disabled={!selectedDesignId}
-                  className="w-full h-full text-center text-[11px] border border-gray-300 rounded bg-white pr-3 outline-none focus:border-cyan-500 disabled:opacity-30 disabled:pointer-events-none"
+                  className="w-full h-full text-center text-[11px] bg-white pr-3 outline-none disabled:opacity-30 disabled:pointer-events-none"
                   title="Number of copies"
                 />
                 <div className="absolute right-0 top-0 h-full w-3 border-l border-gray-300 overflow-hidden rounded-r">
                   <button
                     type="button"
-                    onClick={() => setDuplicateCount((prev) => Math.min(99, prev + 1))}
+                    onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev + 1))}
                     disabled={!selectedDesignId || duplicateCount >= 99}
                     className="h-1/2 w-full flex items-center justify-center border-b border-gray-300 bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
                     title="Increase copies"
@@ -3080,7 +3093,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                   </button>
                   <button
                     type="button"
-                    onClick={() => setDuplicateCount((prev) => Math.max(1, prev - 1))}
+                    onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev - 1))}
                     disabled={!selectedDesignId || duplicateCount <= 1}
                     className="h-1/2 w-full flex items-center justify-center bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
                     title="Decrease copies"
@@ -3567,20 +3580,21 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                         <span>{t("editor.duplicate").replace(/ \(.*/, "")}</span>
                       </span>
                     </button>
-                    <div className="relative w-10 h-[28px] lg:h-[24px] mx-auto">
+                    <div className="relative w-10 h-[28px] lg:h-[24px] mx-auto rounded border border-gray-300 bg-white overflow-hidden focus-within:border-cyan-500">
                       <input
                         type="text"
                         inputMode="numeric"
                         value={duplicateCount}
-                        onChange={(e) => setDuplicateCount(Math.max(1, Math.min(99, parseInt(e.target.value) || 1)))}
+                        onChange={(e) => setDuplicateCount(parseDuplicateCount(e.target.value))}
+                        onKeyDown={handleDuplicateCountKeyDown}
                         disabled={!selectedDesignId}
-                        className="w-full h-full text-center text-[11px] border border-gray-300 rounded bg-white pr-3 outline-none focus:border-cyan-500 disabled:opacity-30 disabled:pointer-events-none"
+                        className="w-full h-full text-center text-[11px] bg-white pr-3 outline-none disabled:opacity-30 disabled:pointer-events-none"
                         title="Number of copies"
                       />
                       <div className="absolute right-0 top-0 h-full w-3 border-l border-gray-300 overflow-hidden rounded-r">
                         <button
                           type="button"
-                          onClick={() => setDuplicateCount((prev) => Math.min(99, prev + 1))}
+                          onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev + 1))}
                           disabled={!selectedDesignId || duplicateCount >= 99}
                           className="h-1/2 w-full flex items-center justify-center border-b border-gray-300 bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
                           title="Increase copies"
@@ -3589,7 +3603,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                         </button>
                         <button
                           type="button"
-                          onClick={() => setDuplicateCount((prev) => Math.max(1, prev - 1))}
+                          onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev - 1))}
                           disabled={!selectedDesignId || duplicateCount <= 1}
                           className="h-1/2 w-full flex items-center justify-center bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
                           title="Decrease copies"
