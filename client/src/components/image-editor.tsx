@@ -2909,7 +2909,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                 onChange={(e) => setDuplicateCount(parseDuplicateCount(e.target.value))}
                 onKeyDown={handleDuplicateCountKeyDown}
                 disabled={!selectedDesignId}
-                className="w-full h-full text-center text-[11px] bg-white pr-3 outline-none disabled:opacity-30 disabled:pointer-events-none"
+                className="w-full h-full text-center text-[11px] leading-none p-0 pr-3 bg-white outline-none disabled:opacity-30 disabled:pointer-events-none"
                 title="Number of copies"
               />
               <div className="absolute right-0 top-0 h-full w-3 border-l border-gray-300 overflow-hidden rounded-r">
@@ -3078,7 +3078,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                   onChange={(e) => setDuplicateCount(parseDuplicateCount(e.target.value))}
                   onKeyDown={handleDuplicateCountKeyDown}
                   disabled={!selectedDesignId}
-                  className="w-full h-full text-center text-[11px] bg-white pr-3 outline-none disabled:opacity-30 disabled:pointer-events-none"
+                  className="w-full h-full text-center text-[11px] leading-none p-0 pr-3 bg-white outline-none disabled:opacity-30 disabled:pointer-events-none"
                   title="Number of copies"
                 />
                 <div className="absolute right-0 top-0 h-full w-3 border-l border-gray-300 overflow-hidden rounded-r">
@@ -3588,7 +3588,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
                         onChange={(e) => setDuplicateCount(parseDuplicateCount(e.target.value))}
                         onKeyDown={handleDuplicateCountKeyDown}
                         disabled={!selectedDesignId}
-                        className="w-full h-full text-center text-[11px] bg-white pr-3 outline-none disabled:opacity-30 disabled:pointer-events-none"
+                        className="w-full h-full text-center text-[11px] leading-none p-0 pr-3 bg-white outline-none disabled:opacity-30 disabled:pointer-events-none"
                         title="Number of copies"
                       />
                       <div className="absolute right-0 top-0 h-full w-3 border-l border-gray-300 overflow-hidden rounded-r">
