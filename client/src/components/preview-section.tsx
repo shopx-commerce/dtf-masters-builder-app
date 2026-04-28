@@ -3580,6 +3580,42 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                   </Button>
                 </div>
                 <div className="w-px h-3.5 bg-gray-300" />
+                {!isMobile && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSelectionZoomActive(prev => !prev)}
+                    className={`h-6 px-1.5 hover:bg-gray-200 rounded whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ${selectionZoomActive ? 'bg-cyan-500/20 text-cyan-400' : 'text-gray-600'} flex items-center`}
+                    title={t("preview.selectionZoom")}
+                  >
+                    <ScanSearch className="h-2.5 w-2.5 mr-0.5 flex-shrink-0" />
+                    {t("preview.selectToZoom")}
+                  </Button>
+                )}
+                {!isMobile && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={resetView}
+                    className={`h-6 px-1.5 hover:bg-gray-200 rounded text-gray-600 whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'}`}
+                    title={t("preview.resetView")}
+                  >
+                    <RotateCcw className="h-2.5 w-2.5 mr-0.5 flex-shrink-0" />
+                    {t("preview.reset")}
+                  </Button>
+                )}
+                {selectedDesignId && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={zoomToSelected}
+                    className={`${isMobile ? 'min-w-[36px] min-h-[36px] h-8 w-8 p-0 justify-center' : 'h-6 px-1.5'} hover:bg-gray-200 rounded text-gray-600 whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} flex items-center`}
+                    title={t("preview.focusTitle")}
+                  >
+                    <Focus className={`${isMobile ? 'h-4 w-4' : 'h-2.5 w-2.5 mr-0.5'} flex-shrink-0`} />
+                    {!isMobile && t("preview.focus")}
+                  </Button>
+                )}
               </div>
               <div className={`flex items-center ${isMobile ? 'gap-1.5' : 'gap-1'} flex-shrink-0`}>
                 {[{ color: 'transparent', label: 'Transparent' }, { color: '#ffffff', label: 'White' }, { color: '#d1d5db', label: 'Light Gray' }, { color: '#6b7280', label: 'Gray' }, { color: '#000000', label: 'Black' }].map(({ color, label }) => (
