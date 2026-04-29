@@ -194,7 +194,8 @@ export default function Landing() {
     const params = new URLSearchParams(window.location.search);
     const builder = (params.get("builder") || params.get("profile") || "uv-dtf").replace(/^\//, "");
     const path = BUILDER_PATHS.has(builder) ? `/${builder}` : "/uv-dtf";
-    setLocation(`${path}?${params.toString()}`);
+    const query = params.toString();
+    setLocation(query ? `${path}?${query}` : path);
   }, [needsShopifyRedirect, setLocation]);
 
   if (needsShopifyRedirect) {
