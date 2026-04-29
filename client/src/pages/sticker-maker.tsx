@@ -155,14 +155,32 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
       {embedFromShopify ? (
         <header className="flex-shrink-0 bg-gray-50 border-b border-gray-200 px-3 sm:px-4 py-2">
           <div className="flex flex-row flex-nowrap items-center justify-between gap-2 sm:gap-3 w-full min-w-0">
-            <button
-              type="button"
-              className="inline-flex items-center justify-center gap-1.5 sm:gap-2 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-500 px-3 sm:px-4 py-2 text-sm sm:text-base font-medium text-white shadow-md shadow-cyan-500/25 hover:from-cyan-600 hover:to-blue-600 transition-colors min-w-0 max-w-[min(56%,18rem)] sm:max-w-none"
-              onClick={() => window.dispatchEvent(new CustomEvent("dtf:open-upload"))}
-            >
-              <Upload className="w-4 h-4 sm:w-5 sm:h-5 flex-shrink-0" />
-              <span className="truncate">{t("editor.addDesigns")}</span>
-            </button>
+            <div className="min-w-0 flex flex-col gap-0.5 flex-1">
+              <button
+                type="button"
+                className="sm:hidden inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-500 px-4 py-2 text-base font-medium text-white shadow-lg shadow-cyan-500/25 hover:from-cyan-600 hover:to-blue-600 transition-colors w-fit max-w-full"
+                onClick={() => window.dispatchEvent(new CustomEvent("dtf:open-upload"))}
+              >
+                <Upload className="w-5 h-5 flex-shrink-0" />
+                <span className="truncate">{t("editor.addDesigns")}</span>
+              </button>
+              <h1
+                className="hidden sm:block text-lg font-black tracking-widest truncate max-w-[min(100vw-8rem,28rem)] sm:max-w-xl"
+                style={{
+                  fontFamily: "'Orbitron', sans-serif",
+                  background: "linear-gradient(90deg, #06b6d4, #3b82f6, #8b5cf6, #06b6d4)",
+                  backgroundSize: "200% auto",
+                  WebkitBackgroundClip: "text",
+                  WebkitTextFillColor: "transparent",
+                  backgroundClip: "text",
+                  animation: "gradientShift 4s linear infinite",
+                  filter: "drop-shadow(0 0 8px rgba(6,182,212,0.5))",
+                }}
+                title={profile.title}
+              >
+                {profile.title}
+              </h1>
+            </div>
             <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
               <LanguageToggle />
               <button
