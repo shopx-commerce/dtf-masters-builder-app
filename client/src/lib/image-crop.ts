@@ -176,6 +176,38 @@ export function getImageBounds(image: HTMLImageElement): { x: number; y: number;
   return { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
 }
 
+export function isOpaqueRasterUpload(image: HTMLImageElement): boolean {
+  try {
+    const w = image.naturalWidth || image.width;
+    const h = image.naturalHeight || image.height;
+    if (w <= 0 || h <= 0) return false;
+    if (w * h > 25_000_000) return false;
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return false;
+
+    canvas.width = w;
+    canvas.height = h;
+    ctx.drawImage(image, 0, 0);
+    const data = ctx.getImageData(0, 0, w, h).data;
+
+    let transparentCount = 0;
+    let opaqueCount = 0;
+    const sampleStep = Math.max(1, Math.floor((w * h) / 10000));
+    for (let i = 3; i < data.length; i += sampleStep * 4) {
+      const alpha = data[i];
+      if (alpha > 240) opaqueCount++;
+      else if (alpha < 50) transparentCount++;
+    }
+    const totalSampled = Math.ceil((w * h) / sampleStep);
+    const transparentRatio = transparentCount / totalSampled;
+    return transparentRatio <= 0.05;
+  } catch {
+    return false;
+  }
+}
+
 export function cropImageToContent(image: HTMLImageElement): HTMLCanvasElement | null {
   try {
     const canvas = document.createElement('canvas');

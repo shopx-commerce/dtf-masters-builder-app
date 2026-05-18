@@ -3,8 +3,7 @@ import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 
 const app = express();
-// Keep request limits conservative; file uploads should use multipart/streaming paths.  
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: false, limit: '5mb' }));
 
 app.use((req, res, next) => {
@@ -58,10 +57,7 @@ app.use((req, res, next) => {
     serveStatic(app);
   }
 
-  // ALWAYS serve the app on port 5000
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
-  const port = 5000;
+  const port = Number(process.env.PORT) || 5000;
   server.listen({
     port,
     host: "0.0.0.0",

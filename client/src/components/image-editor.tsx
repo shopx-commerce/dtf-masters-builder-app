@@ -4,7 +4,26 @@ import UploadSection from "./upload-section";
 import PreviewSection from "./preview-section";
 import ControlsSection, { type SpotPreviewData } from "./controls-section";
 import CropModal from "./crop-modal";
-import { cropImageToContent, cropImageToContentAsync, hasCleanAlpha } from "@/lib/image-crop";
+import { cropImageToContent, cropImageToContentAsync, hasCleanAlpha, isOpaqueRasterUpload } from "@/lib/image-crop";
+
+function inchesFromPixelsPair(pw: number, ph: number, dpi: number): { widthInches: number; heightInches: number } {
+  const wIn = pw / dpi;
+  const hIn = wIn * (ph / pw);
+  return {
+    widthInches: Math.max(0.01, parseFloat(wIn.toFixed(4))),
+    heightInches: Math.max(0.01, parseFloat(hIn.toFixed(4))),
+  };
+}
+
+const RASTER_DPI_FALLBACK = 144;
+
+function normalizeRasterDpiForInches(dpi: number, image: HTMLImageElement): number {
+  const w = image.naturalWidth || image.width;
+  const h = image.naturalHeight || image.height;
+  const longEdge = Math.max(w, h);
+  if (dpi >= 290 && longEdge > 0 && longEdge <= 2200) return RASTER_DPI_FALLBACK;
+  return dpi;
+}
 
 function imageHasCleanAlpha(img: HTMLImageElement): boolean {
   const c = document.createElement('canvas');
@@ -20,9 +39,11 @@ import { parsePDF, type ParsedPDFData } from "@/lib/pdf-parser";
 import { useToast } from "@/hooks/use-toast";
 import { useHistory, type HistorySnapshot } from "@/hooks/use-history";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import { useLanguage } from "@/lib/i18n";
 import { formatDimensions, formatLength, useMetric, cmToInches, getUnitSuffix } from "@/lib/format-length";
-import { Trash2, Copy, ChevronDown, ChevronUp, ChevronLeft, Undo2, Redo2, RotateCw, ArrowUpLeft, ArrowUpRight, ArrowDownLeft, ArrowDownRight, LayoutGrid, Layers, Loader2, Plus, Minus, Droplets, Link, Unlink, FlipHorizontal2, FlipVertical2, MousePointerClick, XCircle, Stamp, Check, X, ScanSearch } from "lucide-react";
+import { formatVariantPriceForDisplay, getSelectedVariantPrice } from "@/lib/variant-price";
+import { Trash2, Copy, ChevronDown, ChevronUp, Undo2, Redo2, RotateCw, ArrowUpLeft, ArrowUpRight, ArrowDownLeft, ArrowDownRight, LayoutGrid, Layers, Loader2, Plus, Minus, Droplets, Link, Unlink, FlipHorizontal2, FlipVertical2, MousePointerClick, XCircle, Stamp, Check, X, ScanSearch } from "lucide-react";
 
 export type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
 import type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
@@ -88,7 +109,6 @@ function SizeInput({
       />
     );
   }
-
   return (
     <input
       type="text"
@@ -130,11 +150,13 @@ async function fetchImageDpi(file: File): Promise<number> {
     const form = new FormData();
     form.append('image', file);
     const res = await fetch('/api/image-info', { method: 'POST', body: form });
-    if (!res.ok) return 300;
+    if (!res.ok) return RASTER_DPI_FALLBACK;
     const data = await res.json();
-    return data.density || 300;
+    const d = Number(data.density);
+    if (!Number.isFinite(d) || d <= 0) return RASTER_DPI_FALLBACK;
+    return Math.min(d, 300);
   } catch {
-    return 300;
+    return RASTER_DPI_FALLBACK;
   }
 }
 
@@ -254,10 +276,11 @@ function clampDesignToArtboard(
   return { nx, ny };
 }
 
-export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFILE }: { onDesignUploaded?: () => void; profile?: ProfileConfig } = {}) {
+export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFILE, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, variantId: initialVariantId, shopDomain, embedFromShopify }: { onDesignUploaded?: () => void; profile?: ProfileConfig; initialWidth?: number; initialHeight?: number; initialGangsheetHeights?: number[]; initialQuantity?: number; shopifyVariants?: Array<{ id: string; title: string; price: string | null; height: number | null }>; variantId?: string | null; shopDomain?: string | null; embedFromShopify?: boolean } = {}) {
   const { toast } = useToast();
   const { t, lang } = useLanguage();
   const isMobile = useIsMobile();
+  const isLgUp = useMediaQuery("(min-width: 1024px)");
   const [imageInfo, setImageInfo] = useState<ImageInfo | null>(null);
   const [resizeSettings, setResizeSettings] = useState<ResizeSettings>({
     widthInches: 5.0,
@@ -266,18 +289,34 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     outputDPI: 300,
   });
   const [isProcessing, setIsProcessing] = useState(false);
+  /** True after Add to Cart until parent finishes upload/redirect (avoid double-submit). */
+  const [isAddingToCart, setIsAddingToCart] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [artboardWidth, setArtboardWidth] = useState(profile.artboardWidth);
-  const [artboardHeight, setArtboardHeight] = useState(profile.gangsheetHeights[0] ?? 12);
+  const [artboardWidth, setArtboardWidth] = useState(initialWidth ?? profile.artboardWidth);
+  const [artboardHeight, setArtboardHeight] = useState(initialHeight ?? profile.gangsheetHeights[0] ?? 12);
+  const [quantity, setQuantity] = useState(initialQuantity ?? 1);
+  useEffect(() => {
+    if (initialQuantity != null && initialQuantity >= 1) setQuantity(initialQuantity);
+  }, [initialQuantity]);
   const [designGap, setDesignGap] = useState<number | undefined>(0.25);
   const [duplicateCount, setDuplicateCount] = useState(1);
-  const [previewDrawerOpen, setPreviewDrawerOpen] = useState(false);
-  const touchStartXRef = useRef<number | null>(null);
+  const clampDuplicateCount = useCallback((value: number) => Math.max(1, Math.min(99, value)), []);
+  const parseDuplicateCount = useCallback((raw: string) => clampDuplicateCount(parseInt(raw, 10) || 1), [clampDuplicateCount]);
+  const handleDuplicateCountKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setDuplicateCount((prev) => clampDuplicateCount(prev + 1));
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setDuplicateCount((prev) => clampDuplicateCount(prev - 1));
+    }
+  }, [clampDuplicateCount]);
   const [designTransform, setDesignTransform] = useState<ImageTransform>({ nx: 0.5, ny: 0.5, s: 1, rotation: 0 });
   const [designs, setDesigns] = useState<DesignItem[]>([]);
   const [selectedDesignId, setSelectedDesignId] = useState<string | null>(null);
   const [selectedDesignIds, setSelectedDesignIds] = useState<Set<string>>(new Set());
+  const [mobilePanel, setMobilePanel] = useState<"controls" | "preview">("controls");
   const [showDesignInfo, setShowDesignInfo] = useState(false);
   const [selectionZoomActive, setSelectionZoomActive] = useState(false);
   const [editingLayerName, setEditingLayerName] = useState<string | null>(null);
@@ -286,11 +325,13 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
   const [proportionalLock, setProportionalLock] = useState(true);
   const designInfoRef = useRef<HTMLDivElement>(null);
   const sidebarFileRef = useRef<HTMLInputElement>(null);
+  const headerUploadInputRef = useRef<HTMLInputElement>(null);
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [downloadContainer, setDownloadContainer] = useState<HTMLDivElement | null>(null);
   const [spotPreviewData, setSpotPreviewData] = useState<SpotPreviewData>({ enabled: false, colors: [] });
   const [fluorPanelContainer, setFluorPanelContainer] = useState<HTMLDivElement | null>(null);
+  const [mobileToolbarContainer, setMobileToolbarContainer] = useState<HTMLDivElement | null>(null);
   const copySpotSelectionsRef = useRef<((fromId: string, toIds: string[]) => void) | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; designId: string } | null>(null);
   const [cropModalDesignId, setCropModalDesignId] = useState<string | null>(null);
@@ -406,6 +447,11 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     widthInches: activeWidthInches,
     heightInches: activeHeightInches,
   }), [resizeSettings, activeWidthInches, activeHeightInches]);
+
+  const selectedVariantPrice = useMemo(
+    () => getSelectedVariantPrice(shopifyVariants, artboardHeight),
+    [shopifyVariants, artboardHeight]
+  );
 
   const effectiveDPI = useMemo(() => {
     if (!activeImageInfo) return 300;
@@ -845,6 +891,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     saveSnapshot();
     setDesigns(prev => [...prev, ...newDesigns]);
     setSelectedDesignId(newDesigns[newDesigns.length - 1].id);
+    setDuplicateCount(1);
   }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight]);
 
   const handleDuplicateAndArrange = useCallback((count: number) => {
@@ -868,6 +915,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     saveSnapshot();
     setDesigns(prev => [...prev, ...newDesigns]);
     setSelectedDesignId(newDesigns[newDesigns.length - 1].id);
+    setDuplicateCount(1);
     requestAnimationFrame(() => {
       handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true });
     });
@@ -1561,9 +1609,14 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
 
     setArtboardWidth(newWidth);
     setArtboardHeight(newHeight);
-  }, [designs, artboardWidth, artboardHeight, saveSnapshot]);
+  }, [designs.length, saveSnapshot, artboardWidth, artboardHeight]);
 
-  const GANGSHEET_HEIGHTS = profile.gangsheetHeights;
+  const GANGSHEET_HEIGHTS = useMemo(() => {
+    if (initialGangsheetHeights && initialGangsheetHeights.length > 0) return initialGangsheetHeights;
+    const base = profile.gangsheetHeights;
+    if (!initialHeight || base.includes(initialHeight)) return base;
+    return [...base, initialHeight].sort((a, b) => a - b);
+  }, [profile.gangsheetHeights, initialHeight, initialGangsheetHeights]);
   const MAX_ARTBOARD_HEIGHT = GANGSHEET_HEIGHTS[GANGSHEET_HEIGHTS.length - 1];
   const recommendedArtboardHeight = useMemo(() => {
     if (designs.length === 0) return null;
@@ -1895,8 +1948,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     image: HTMLImageElement,
     opts?: { dpi?: number; skipCrop?: boolean }
   ) => {
-    const dpi = opts?.dpi ?? (await fetchImageDpi(file).catch((err) => { console.warn('[fetchImageDpi] failed, using 300:', err); return 300; }));
-    
+    const dpiRaw = opts?.dpi ?? (await fetchImageDpi(file).catch((err) => { console.warn('[fetchImageDpi] failed:', err); return RASTER_DPI_FALLBACK; }));
+
     let croppedCanvas: HTMLCanvasElement | null = null;
     if (opts?.skipCrop) {
       const fullCanvas = document.createElement("canvas");
@@ -1917,9 +1970,14 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         document.activeElement.blur();
       }
       setIsUploading(false);
-      
-      const widthInches = Math.max(0.01, parseFloat((finalImage.width / dpi).toFixed(2)));
-      const heightInches = Math.max(0.01, parseFloat((finalImage.height / dpi).toFixed(2)));
+
+      const dpi = normalizeRasterDpiForInches(dpiRaw, finalImage);
+
+      const { widthInches, heightInches } = inchesFromPixelsPair(
+        finalImage.naturalWidth || finalImage.width,
+        finalImage.naturalHeight || finalImage.height,
+        dpi,
+      );
 
       const newImageInfo: ImageInfo = {
         file,
@@ -1930,6 +1988,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       };
 
       applyImageDirectly(newImageInfo, widthInches, heightInches, imageHasCleanAlpha(finalImage));
+      if (isMobile) setMobilePanel("preview");
 
       const effectiveDPI = Math.min(finalImage.width / widthInches, finalImage.height / heightInches);
       if (effectiveDPI < 278) {
@@ -1949,7 +2008,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     } else {
       processImage(image);
     }
-  }, [applyImageDirectly, toast]);
+  }, [applyImageDirectly, isMobile, toast]);
 
   const handleImageUpload = useCallback(async (file: File, image: HTMLImageElement) => {
     try {
@@ -1969,7 +2028,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       await new Promise(r => setTimeout(r, 0));
       setUploadProgress(25);
       
-      const dpi = await fetchImageDpi(file).catch((err) => { console.warn('[fetchImageDpi] failed, using 300:', err); return 300; });
+      const dpiRaw = await fetchImageDpi(file).catch((err) => { console.warn('[fetchImageDpi] failed:', err); return RASTER_DPI_FALLBACK; });
+      const dpi = normalizeRasterDpiForInches(dpiRaw, image);
       const imgWidthInches = image.width / dpi;
       const imgHeightInches = image.height / dpi;
       const ARTBOARD_MATCH_TOLERANCE = 0.05;
@@ -1989,7 +2049,18 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         }
       }
       if (!croppedCanvas) {
-        croppedCanvas = await cropImageToContentAsync(image);
+        if (isOpaqueRasterUpload(image)) {
+          const fullCanvas = document.createElement('canvas');
+          fullCanvas.width = image.width;
+          fullCanvas.height = image.height;
+          const fctx = fullCanvas.getContext('2d');
+          if (fctx) {
+            fctx.drawImage(image, 0, 0);
+            croppedCanvas = fullCanvas;
+          }
+        } else {
+          croppedCanvas = await cropImageToContentAsync(image);
+        }
       }
       if (!croppedCanvas) {
         console.error("Failed to crop image, using original");
@@ -2027,17 +2098,17 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         document.activeElement.blur();
       }
 
-      const physicalWidth = croppedImg.width;
-      const physicalHeight = croppedImg.height;
-      let storedWidth = croppedImg.width;
-      let storedHeight = croppedImg.height;
-      const maxDim = Math.max(physicalWidth, physicalHeight);
+      const intrinsicW = croppedImg.naturalWidth || croppedImg.width;
+      const intrinsicH = croppedImg.naturalHeight || croppedImg.height;
+      let storedWidth = intrinsicW;
+      let storedHeight = intrinsicH;
+      const maxDim = Math.max(intrinsicW, intrinsicH);
 
       if (maxDim > MAX_STORED_DIMENSION) {
         setUploadProgress(75);
         const scale = MAX_STORED_DIMENSION / maxDim;
-        storedWidth = Math.round(physicalWidth * scale);
-        storedHeight = Math.round(physicalHeight * scale);
+        storedWidth = Math.round(intrinsicW * scale);
+        storedHeight = Math.round(intrinsicH * scale);
         const downsampleCanvas = document.createElement('canvas');
         downsampleCanvas.width = storedWidth;
         downsampleCanvas.height = storedHeight;
@@ -2059,17 +2130,19 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       }
 
       setUploadProgress(95);
-      const widthInches = Math.max(0.01, parseFloat((physicalWidth / dpi).toFixed(2)));
-      const heightInches = Math.max(0.01, parseFloat((physicalHeight / dpi).toFixed(2)));
-      const newImageInfo: ImageInfo = { file, image: croppedImg, originalWidth: physicalWidth, originalHeight: physicalHeight, dpi };
+      const { widthInches, heightInches } = inchesFromPixelsPair(intrinsicW, intrinsicH, dpi);
+      const bw = croppedImg.naturalWidth || croppedImg.width;
+      const bh = croppedImg.naturalHeight || croppedImg.height;
+      const newImageInfo: ImageInfo = { file, image: croppedImg, originalWidth: bw, originalHeight: bh, dpi };
       applyImageDirectly(newImageInfo, widthInches, heightInches, imageHasCleanAlpha(croppedImg));
+      if (isMobile) setMobilePanel("preview");
       if (matchesArtboard) {
         toast({ title: t("toast.gangsheetDetected"), description: t("toast.gangsheetDetectedDesc") });
       }
       setUploadProgress(100);
       setTimeout(() => { setIsUploading(false); setUploadProgress(0); }, 300);
 
-      const effectiveDPI = Math.min(physicalWidth / widthInches, physicalHeight / heightInches);
+      const effectiveDPI = Math.min(intrinsicW / widthInches, intrinsicH / heightInches);
       if (effectiveDPI < 278) {
         toast({
           title: t("toast.lowRes"),
@@ -2082,7 +2155,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         setIsUploading(false);
         setUploadProgress(0);
         try {
-          const dpiFallback = await fetchImageDpi(file).catch((err) => { console.warn('[fetchImageDpi] failed, using 300:', err); return 300; });
+          const dpiFallbackRaw = await fetchImageDpi(file).catch((err) => { console.warn('[fetchImageDpi] failed:', err); return RASTER_DPI_FALLBACK; });
+          const dpiFallback = normalizeRasterDpiForInches(dpiFallbackRaw, image);
           const wIn = image.width / dpiFallback;
           const hIn = image.height / dpiFallback;
           const match = Math.abs(wIn - artboardWidth) / Math.max(artboardWidth, 0.1) <= 0.05 &&
@@ -2093,7 +2167,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         toast({ title: t("toast.uploadFailed"), description: t("toast.uploadFailedDesc"), variant: "destructive" });
       }
     }
-  }, [applyImageDirectly, toast, handleFallbackImage, artboardWidth, artboardHeight]);
+  }, [applyImageDirectly, isMobile, toast, handleFallbackImage, artboardWidth, artboardHeight]);
 
   const handlePDFUpload = useCallback((file: File, pdfData: ParsedPDFData) => {
     if (document.activeElement instanceof HTMLElement) {
@@ -2112,19 +2186,23 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       originalPdfData,
     };
     
-    const widthInches = Math.max(0.01, parseFloat((image.width / dpi).toFixed(2)));
-    const heightInches = Math.max(0.01, parseFloat((image.height / dpi).toFixed(2)));
+    const { widthInches, heightInches } = inchesFromPixelsPair(
+      image.naturalWidth || image.width,
+      image.naturalHeight || image.height,
+      dpi,
+    );
 
     applyImageDirectly(newImageInfo, widthInches, heightInches);
-  }, [applyImageDirectly]);
+    if (isMobile) setMobilePanel("preview");
+  }, [applyImageDirectly, isMobile]);
 
   const handleBatchStart = useCallback((fileCount: number) => {
-    const targetHeight = Math.min(48, profile.gangsheetHeights[profile.gangsheetHeights.length - 1]);
-    const validHeight = profile.gangsheetHeights.reduce((best, h) => h <= targetHeight && h > best ? h : best, profile.gangsheetHeights[0]);
+    const targetHeight = Math.min(48, GANGSHEET_HEIGHTS[GANGSHEET_HEIGHTS.length - 1]);
+    const validHeight = GANGSHEET_HEIGHTS.reduce((best, h) => h <= targetHeight && h > best ? h : best, GANGSHEET_HEIGHTS[0]);
     if (fileCount > 1 && artboardHeightRef.current < validHeight) {
       setArtboardHeight(validHeight);
     }
-  }, [profile.gangsheetHeights]);
+  }, [GANGSHEET_HEIGHTS]);
 
   const handleFileUploadUnified = useCallback(async (file: File, image: HTMLImageElement | null) => {
     const ext = file.name.toLowerCase();
@@ -2134,6 +2212,7 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         setIsUploading(true);
         const pdfData = await parsePDF(file);
         handlePDFUpload(file, pdfData);
+        if (isMobile) setMobilePanel("preview");
       } catch (err) {
         console.error('PDF parse error:', err);
         toast({ title: t("toast.pdfFailed"), description: t("toast.pdfFailedDesc"), variant: "destructive" });
@@ -2142,8 +2221,11 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       }
       return;
     }
-    if (image) handleImageUpload(file, image);
-  }, [handleImageUpload, handlePDFUpload, toast]);
+    if (image) {
+      await handleImageUpload(file, image);
+      if (isMobile) setMobilePanel("preview");
+    }
+  }, [handleImageUpload, handlePDFUpload, isMobile, toast]);
 
   const processSidebarFile = useCallback((file: File): Promise<void> => {
     const ext = file.name.toLowerCase();
@@ -2204,8 +2286,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     const files = e.target.files ? Array.from(e.target.files) : [];
     e.target.value = '';
     if (files.length > 1) {
-      const targetHeight = Math.min(48, profile.gangsheetHeights[profile.gangsheetHeights.length - 1]);
-      const validHeight = profile.gangsheetHeights.reduce((best, h) => h <= targetHeight && h > best ? h : best, profile.gangsheetHeights[0]);
+      const targetHeight = Math.min(48, GANGSHEET_HEIGHTS[GANGSHEET_HEIGHTS.length - 1]);
+      const validHeight = GANGSHEET_HEIGHTS.reduce((best, h) => h <= targetHeight && h > best ? h : best, GANGSHEET_HEIGHTS[0]);
       if (artboardHeightRef.current < validHeight) {
         setArtboardHeight(validHeight);
       }
@@ -2213,7 +2295,17 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     for (const file of files) {
       await processSidebarFile(file);
     }
-  }, [processSidebarFile, profile.gangsheetHeights]);
+  }, [processSidebarFile, GANGSHEET_HEIGHTS]);
+
+  useEffect(() => {
+    const onOpenUpload = () => {
+      headerUploadInputRef.current?.click();
+    };
+    window.addEventListener("dtf:open-upload", onOpenUpload);
+    return () => {
+      window.removeEventListener("dtf:open-upload", onOpenUpload);
+    };
+  }, []);
 
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounterRef = useRef(0);
@@ -2250,8 +2342,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     const files = Array.from(e.dataTransfer.files);
     if (files.length === 0) return;
     if (files.length > 1) {
-      const targetHeight = Math.min(48, profile.gangsheetHeights[profile.gangsheetHeights.length - 1]);
-      const validHeight = profile.gangsheetHeights.reduce((best, h) => h <= targetHeight && h > best ? h : best, profile.gangsheetHeights[0]);
+      const targetHeight = Math.min(48, GANGSHEET_HEIGHTS[GANGSHEET_HEIGHTS.length - 1]);
+      const validHeight = GANGSHEET_HEIGHTS.reduce((best, h) => h <= targetHeight && h > best ? h : best, GANGSHEET_HEIGHTS[0]);
       if (artboardHeightRef.current < validHeight) {
         setArtboardHeight(validHeight);
       }
@@ -2664,7 +2756,455 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     }
   }, [imageInfo, designs, artboardWidth, artboardHeight, toast]);
 
-  if (!activeImageInfo) {
+  const handleAddToCart = useCallback(async () => {
+    if (designs.length === 0) {
+      toast({ title: "No designs", description: "Add at least one design before adding to cart.", variant: "destructive" });
+      return;
+    }
+    setIsAddingToCart(true);
+    setIsProcessing(true);
+    try {
+      const exportDpi = 72;
+      const outW = Math.round(artboardWidth * exportDpi);
+      const outH = Math.round(artboardHeight * exportDpi);
+      const previewCanvas = document.createElement('canvas');
+      previewCanvas.width = outW;
+      previewCanvas.height = outH;
+      const ctx = previewCanvas.getContext('2d');
+      if (!ctx) throw new Error('Canvas not supported');
+      ctx.clearRect(0, 0, outW, outH);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, outW, outH);
+      for (const design of designs) {
+        const img = design.imageInfo.image;
+        const drawW = Math.max(1, Math.round(design.widthInches * design.transform.s * exportDpi));
+        const drawH = Math.max(1, Math.round(design.heightInches * design.transform.s * exportDpi));
+        const centerX = design.transform.nx * outW;
+        const centerY = design.transform.ny * outH;
+        ctx.save();
+        ctx.translate(centerX, centerY);
+        ctx.rotate((design.transform.rotation * Math.PI) / 180);
+        ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
+        ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
+        ctx.restore();
+      }
+      const dataUrl = previewCanvas.toDataURL('image/png');
+      const base64 = dataUrl.split(',')[1];
+      previewCanvas.width = 0;
+      previewCanvas.height = 0;
+
+      const selectedVariant = shopifyVariants?.find((v) => v.height != null && Math.abs(v.height - artboardHeight) < 0.01);
+      const vid = selectedVariant?.id || initialVariantId || '';
+      const vidDigits = vid.replace(/\D/g, '');
+
+      if (!vidDigits) throw new Error('No variant ID available');
+      if (!shopDomain) throw new Error('Shop domain missing — open the builder from the storefront product page.');
+
+      const message = {
+        type: 'dtf-builder-add-to-cart',
+        variantId: vidDigits,
+        quantity: quantity,
+        gangsheetSize: artboardWidth + '" x ' + artboardHeight + '"',
+        shop: shopDomain || '',
+        imageBase64: base64,
+        filename: 'gangsheet-' + Date.now() + '.png',
+      };
+      window.parent.postMessage(message, '*');
+      // Keep loading state until parent redirects (upload runs in parent). Do not clear in finally.
+    } catch (error) {
+      console.error('Add to cart failed:', error);
+      toast({ title: "Failed", description: error instanceof Error ? error.message : "Could not add to cart", variant: "destructive" });
+      setIsAddingToCart(false);
+      setIsProcessing(false);
+    }
+  }, [designs, artboardWidth, artboardHeight, quantity, shopifyVariants, initialVariantId, shopDomain, toast]);
+
+  const renderActionToolbar = () => (
+    <>
+  {/* Top bar: three rows on mobile, wraps on desktop when metric to avoid overlap */}
+  <div className="flex-shrink-0 flex flex-col lg:flex-row lg:flex-wrap lg:items-center gap-1.5 lg:gap-2 bg-white border-b border-gray-200 px-2 py-1 lg:px-3 lg:py-1.5">
+    {/* Row 1: Upload, file info, Auto-Arrange, Undo/Redo/Dup/Del */}
+    <div className="flex items-center gap-1.5 lg:gap-2 min-w-0 flex-wrap flex-shrink-0">
+      <UploadSection 
+        onImageUpload={handleFileUploadUnified}
+        onBatchStart={handleBatchStart}
+        imageInfo={activeImageInfo}
+        embedCompact={embedFromShopify}
+      />
+      {isUploading && (
+        <div className="flex items-center gap-1.5 text-cyan-400">
+          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          <span className="text-[11px]">{t("editor.processing")}</span>
+        </div>
+      )}
+      {activeImageInfo?.file?.name && (
+        <p className="text-[11px] text-gray-600 truncate max-w-[100px] hidden sm:block" title={activeImageInfo.file.name}>
+          {activeImageInfo.file.name}
+        </p>
+      )}
+      <div className="flex flex-col gap-1 lg:flex-row lg:gap-1 flex-shrink-0 ml-auto lg:ml-0">
+        <div className="flex items-center gap-1">
+          <button
+            onClick={handleThresholdAlpha}
+            disabled={!selectedDesignId && selectedDesignIds.size === 0}
+            className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
+              selectedDesignId || selectedDesignIds.size > 0
+                ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#2563EB] border border-[#CBD5E1] shadow-none'
+                : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+            }`}
+            title={t("editor.cleanAlphaTitle")}
+          >
+            <Droplets className="w-3 h-3" />
+            {t("editor.cleanAlpha")}
+          </button>
+          <button
+            onClick={handleThresholdAlphaAll}
+            disabled={designs.length === 0}
+            className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
+              designs.length > 0
+                ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#2563EB] border border-[#CBD5E1] shadow-none'
+                : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+            }`}
+            title={t("editor.cleanAlphaAllTitle")}
+          >
+            <Droplets className="w-3 h-3" />
+            {t("editor.cleanAlphaAll")}
+          </button>
+          {!isMobile && (
+            <button
+              onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2 })}
+              disabled={designs.length < 2 && selectedDesignIds.size < 2}
+              className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap font-medium shadow-sm min-h-[36px] lg:min-h-0 ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ${
+                designs.length >= 2 || selectedDesignIds.size >= 2
+                  ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
+                  : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+              }`}
+              title={selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll")}
+            >
+              <LayoutGrid className="w-3 h-3 flex-shrink-0" />
+              {t("editor.autoArrange")}
+            </button>
+          )}
+        </div>
+        {!isMobile && (
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => handleDuplicateDesign(duplicateCount)}
+              disabled={!selectedDesignId}
+              className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
+                selectedDesignId
+                  ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#7C3AED] border border-[#CBD5E1] shadow-none'
+                  : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+              }`}
+              title={t("editor.duplicate")}
+            >
+              <Copy className="w-3 h-3" />
+              {t("editor.duplicate").replace(/ \(.*/, '')}
+            </button>
+            <div className="relative w-10 h-[28px] lg:h-[24px] rounded border border-gray-300 bg-white overflow-hidden focus-within:border-cyan-500">
+              <input
+                type="text"
+                inputMode="numeric"
+                value={duplicateCount}
+                onChange={(e) => setDuplicateCount(parseDuplicateCount(e.target.value))}
+                onKeyDown={handleDuplicateCountKeyDown}
+                disabled={!selectedDesignId}
+                className="w-full h-full text-center text-[11px] leading-none p-0 pr-3 bg-white outline-none disabled:opacity-30 disabled:pointer-events-none"
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                title="Number of copies"
+              />
+              <div className="absolute right-0 top-0 h-full w-3 border-l border-gray-300 overflow-hidden rounded-r">
+                <button
+                  type="button"
+                  onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev + 1))}
+                  disabled={!selectedDesignId || duplicateCount >= 99}
+                  className="h-1/2 w-full flex items-center justify-center border-b border-gray-300 bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
+                  title="Increase copies"
+                >
+                  <ChevronUp className="w-2.5 h-2.5 text-gray-600" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev - 1))}
+                  disabled={!selectedDesignId || duplicateCount <= 1}
+                  className="h-1/2 w-full flex items-center justify-center bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
+                  title="Decrease copies"
+                >
+                  <ChevronDown className="w-2.5 h-2.5 text-gray-600" />
+                </button>
+              </div>
+            </div>
+            <button
+              onClick={() => handleDuplicateAndArrange(duplicateCount)}
+              disabled={!selectedDesignId}
+              className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
+                selectedDesignId
+                  ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
+                  : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+              }`}
+              title={t("editor.duplicateArrange")}
+            >
+              <Copy className="w-3 h-3" />
+              {t("editor.duplicateArrange")}
+            </button>
+          </div>
+        )}
+      </div>
+      <div className="flex min-w-0 items-center justify-end gap-0.5 flex-wrap">
+        <button
+          onClick={handleUndo}
+          disabled={!canUndo()}
+          className="w-8 h-8 lg:w-7 lg:h-7 rounded border border-gray-300 bg-white hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center shadow-sm"
+          title={t("editor.undo")}
+        >
+          <Undo2 className="w-4 h-4" />
+        </button>
+        <button
+          onClick={handleRedo}
+          disabled={!canRedo()}
+          className="w-8 h-8 lg:w-7 lg:h-7 rounded border border-gray-300 bg-white hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center shadow-sm"
+          title={t("editor.redo")}
+        >
+          <Redo2 className="w-4 h-4" />
+        </button>
+        <div className="w-px h-4 bg-gray-100 mx-0.5" />
+        <button
+          onClick={() => {
+            if (selectedDesignIds.size > 1) {
+              handleDeleteMulti(selectedDesignIds);
+            } else if (selectedDesignId) {
+              handleDeleteDesign(selectedDesignId);
+            }
+          }}
+          disabled={!selectedDesignId}
+          className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-red-500 hover:text-red-600 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
+          title={t("editor.delete")}
+        >
+          <Trash2 className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+        </button>
+        {isLgUp && selectedVariantPrice != null && (
+          <>
+            <div className="w-px h-4 bg-gray-200 mx-0.5 flex-shrink-0" aria-hidden />
+            <span className="shrink-0 whitespace-nowrap rounded-full border border-emerald-600 bg-white px-2 py-0.5 text-[11px] font-bold leading-none text-emerald-600 tabular-nums lg:text-xs">
+              {formatVariantPriceForDisplay(selectedVariantPrice)}
+            </span>
+          </>
+        )}
+        {isMobile && (
+          <button
+            onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2 })}
+            disabled={designs.length < 2 && selectedDesignIds.size < 2}
+            className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap font-medium shadow-sm min-h-[36px] ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ml-auto ${
+              designs.length >= 2 || selectedDesignIds.size >= 2
+                ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
+                : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+            }`}
+            title={selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll")}
+          >
+            <LayoutGrid className="w-3 h-3 flex-shrink-0" />
+            {t("editor.autoArrange")}
+          </button>
+        )}
+      </div>
+    </div>
+    {/* Row 2: Size, DPI, Margin, Rotate, Align — always on its own line */}
+    <div className="flex items-center gap-1.5 lg:gap-2 flex-wrap lg:basis-full">
+      {activeImageInfo && (
+        <>
+          <div className="w-px h-5 bg-gray-100 flex-shrink-0 hidden lg:block" />
+          <div className="flex items-center gap-1.5 min-w-0 flex-shrink-0">
+            <div className="flex items-center gap-0.5 flex-shrink-0 flex-wrap">
+              <span className="text-[10px] text-gray-600">W</span>
+              <SizeInput
+                value={activeResizeSettings.widthInches * activeDesignTransform.s}
+                onCommit={(v) => handleEffectiveSizeChange("width", v)}
+                title={useMetric(lang) ? t("editor.widthTitleCm") : t("editor.widthTitle")}
+                max={artboardWidth}
+                lang={lang}
+              />
+              <span className={`text-gray-600 ${lang === 'en' ? 'text-[10px]' : 'text-[9px]'}`}>{getUnitSuffix(activeResizeSettings.widthInches * activeDesignTransform.s, lang)}</span>
+              <button
+                onClick={() => setProportionalLock(prev => !prev)}
+                className={`p-0.5 rounded transition-colors ${proportionalLock ? 'text-cyan-400 hover:text-cyan-300' : 'text-gray-600 hover:text-gray-700'}`}
+                title={proportionalLock ? 'Proportions locked – click to unlock' : 'Proportions unlocked – click to lock'}
+              >
+                {proportionalLock ? <Link className="w-3 h-3" /> : <Unlink className="w-3 h-3" />}
+              </button>
+              <span className="text-[10px] text-gray-600">H</span>
+              <SizeInput
+                value={activeResizeSettings.heightInches * activeDesignTransform.s}
+                onCommit={(v) => handleEffectiveSizeChange("height", v)}
+                title={useMetric(lang) ? t("editor.heightTitleCm") : t("editor.heightTitle")}
+                max={artboardHeight}
+                lang={lang}
+              />
+              <span className={`text-gray-600 ${lang === 'en' ? 'text-[10px]' : 'text-[9px]'}`}>{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>
+            </div>
+            <span
+              className={`text-[9px] font-semibold px-1.5 py-0.5 rounded flex-shrink-0 inline-flex items-center gap-1.5 ${
+                effectiveDPI < 198
+                  ? 'text-amber-600 bg-amber-100 border border-amber-400'
+                  : effectiveDPI < 277
+                    ? 'text-amber-600 bg-amber-100 border border-amber-400'
+                    : 'text-emerald-600 bg-emerald-100 border border-emerald-700'
+              }`}
+              title={t("editor.effectiveRes", { dpi: effectiveDPI })}
+            >
+              <span>{effectiveDPI} DPI</span>
+              <span className="text-[8px] font-medium opacity-90 hidden sm:inline">
+                {effectiveDPI < 198 ? 'Low Res' : effectiveDPI < 277 ? 'Okay to print' : 'Excellent'}
+              </span>
+            </span>
+          </div>
+          {isMobile && (
+            <div className="flex items-center gap-1 ml-auto">
+              <button
+                onClick={() => handleDuplicateDesign(duplicateCount)}
+                disabled={!selectedDesignId}
+                className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] ${
+                  selectedDesignId
+                    ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#7C3AED] border border-[#CBD5E1] shadow-none'
+                    : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+                }`}
+                title={t("editor.duplicate")}
+              >
+                <Copy className="w-3 h-3" />
+                {t("editor.duplicate").replace(/ \(.*/, '')}
+              </button>
+            <div className="relative w-10 h-[32px] rounded border border-gray-300 bg-white overflow-hidden focus-within:border-cyan-500">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={duplicateCount}
+                  onChange={(e) => setDuplicateCount(parseDuplicateCount(e.target.value))}
+                  onKeyDown={handleDuplicateCountKeyDown}
+                  disabled={!selectedDesignId}
+                  className="w-full h-full text-center text-[11px] leading-none p-0 pr-3 bg-white outline-none disabled:opacity-30 disabled:pointer-events-none"
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  title="Number of copies"
+                />
+                <div className="absolute right-0 top-0 h-full w-3 border-l border-gray-300 overflow-hidden rounded-r">
+                  <button
+                    type="button"
+                    onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev + 1))}
+                    disabled={!selectedDesignId || duplicateCount >= 99}
+                    className="h-1/2 w-full flex items-center justify-center border-b border-gray-300 bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
+                    title="Increase copies"
+                  >
+                    <ChevronUp className="w-2.5 h-2.5 text-gray-600" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev - 1))}
+                    disabled={!selectedDesignId || duplicateCount <= 1}
+                    className="h-1/2 w-full flex items-center justify-center bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
+                    title="Decrease copies"
+                  >
+                    <ChevronDown className="w-2.5 h-2.5 text-gray-600" />
+                  </button>
+                </div>
+              </div>
+              <button
+                onClick={() => handleDuplicateAndArrange(duplicateCount)}
+                disabled={!selectedDesignId}
+                className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[10px] font-medium shadow-sm min-h-[36px] ${
+                  selectedDesignId
+                    ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
+                    : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+                }`}
+                title={t("editor.duplicateArrange")}
+              >
+                <Copy className="w-3 h-3" />
+                {t("editor.duplicateArrange")}
+              </button>
+            </div>
+          )}
+        </>
+      )}
+      {!isMobile && designs.length >= 2 && (
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          <div className="w-px h-5 bg-gray-100 hidden lg:block" />
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] text-gray-600">{t("editor.margin")}</span>
+            <select
+              value={designGap === undefined ? "auto" : String(designGap)}
+              onChange={(e) => {
+                const v = e.target.value;
+                const newGap = v === "auto" ? undefined : parseFloat(v);
+                setDesignGap(newGap);
+                if (designs.length >= 2) {
+                  setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true }), 0);
+                }
+              }}
+              className="h-5 px-1 bg-gray-100 border border-gray-300 rounded text-[10px] text-gray-700 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
+              title={useMetric(lang) ? t("editor.marginGapCm") : t("editor.marginGap")}
+            >
+              <option value="auto">{t("editor.marginAuto")}</option>
+              <option value="0.0625">{useMetric(lang) ? formatLength(0.0625, lang) : "1/16″"}</option>
+              <option value="0.125">{useMetric(lang) ? formatLength(0.125, lang) : "1/8″"}</option>
+              <option value="0.25">{useMetric(lang) ? formatLength(0.25, lang) : "1/4″"}</option>
+              <option value="0.5">{useMetric(lang) ? formatLength(0.5, lang) : "1/2″"}</option>
+              <option value="1">{useMetric(lang) ? formatLength(1, lang) : "1″"}</option>
+            </select>
+          </div>
+        </div>
+      )}
+      {/* Row 3: rotate/align controls (desktop only) */}
+      <div className="flex items-center gap-0.5 flex-shrink-0 flex-wrap lg:flex-nowrap w-full lg:w-auto">
+        {!isMobile && (
+          <>
+            <div className="w-px h-4 bg-gray-100 mx-0.5 hidden lg:block" />
+            <button
+              onClick={handleRotate90}
+              disabled={!selectedDesignId}
+              className="w-8 h-8 lg:w-7 lg:h-7 rounded border border-gray-300 bg-white hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center shadow-sm"
+              title={t("editor.rotate")}
+            >
+              <RotateCw className="w-4 h-4" />
+            </button>
+            <div className="grid grid-cols-4 gap-0.5 lg:contents">
+              <button
+                onClick={() => handleAlignCorner('tl')}
+                disabled={!selectedDesignId}
+                className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
+                title={t("editor.alignTL")}
+              >
+                <ArrowUpLeft className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+              </button>
+              <button
+                onClick={() => handleAlignCorner('tr')}
+                disabled={!selectedDesignId}
+                className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
+                title={t("editor.alignTR")}
+              >
+                <ArrowUpRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+              </button>
+              <button
+                onClick={() => handleAlignCorner('bl')}
+                disabled={!selectedDesignId}
+                className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
+                title={t("editor.alignBL")}
+              >
+                <ArrowDownLeft className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+              </button>
+              <button
+                onClick={() => handleAlignCorner('br')}
+                disabled={!selectedDesignId}
+                className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
+                title={t("editor.alignBR")}
+              >
+                <ArrowDownRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  </div>
+
+    </>
+  );
+  if (!activeImageInfo && !embedFromShopify) {
     return (
       <div
         className="h-full flex items-center justify-center bg-gray-50 relative"
@@ -2673,6 +3213,14 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         onDragOver={handleDragOver}
         onDrop={handleDrop}
       >
+        <input
+          ref={headerUploadInputRef}
+          type="file"
+          className="hidden"
+          accept=".png,.jpg,.jpeg,.webp,.pdf,image/png,image/jpeg,image/webp,application/pdf"
+          multiple
+          onChange={handleSidebarFileChange}
+        />
         {isDragOver && (
           <div className="absolute inset-0 z-50 bg-blue-500/10 border-2 border-dashed border-blue-500 rounded-lg flex items-center justify-center pointer-events-none">
             <div className="bg-white/95 rounded-xl px-8 py-6 shadow-lg text-center">
@@ -2721,19 +3269,15 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
-      onTouchStart={(e) => { touchStartXRef.current = e.touches[0].clientX; }}
-      onTouchEnd={(e) => {
-        if (touchStartXRef.current === null) return;
-        const dx = e.changedTouches[0].clientX - touchStartXRef.current;
-        const startX = touchStartXRef.current;
-        touchStartXRef.current = null;
-        if (!previewDrawerOpen && startX > window.innerWidth * 0.7 && dx < -40) {
-          setPreviewDrawerOpen(true);
-        } else if (previewDrawerOpen && dx > 60) {
-          setPreviewDrawerOpen(false);
-        }
-      }}
     >
+      <input
+        ref={headerUploadInputRef}
+        type="file"
+        className="hidden"
+        accept=".png,.jpg,.jpeg,.webp,.pdf,image/png,image/jpeg,image/webp,application/pdf"
+        multiple
+        onChange={handleSidebarFileChange}
+      />
       {isDragOver && (
           <div className="absolute inset-0 z-50 bg-blue-500/10 border-2 border-dashed border-blue-500 rounded-lg flex items-center justify-center pointer-events-none">
             <div className="bg-white/95 rounded-xl px-8 py-6 shadow-lg text-center">
@@ -2743,28 +3287,32 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
             </div>
           </div>
         )}
-        <div className="flex-1 min-h-0 flex flex-col lg:flex-row relative">
-      {/* Mobile: backdrop when preview drawer is open */}
-      {isMobile && previewDrawerOpen && (
+        {isMobile && (
+          <div className="flex-shrink-0 border-b border-gray-200 bg-white px-2 py-1.5">
+            <div className="grid grid-cols-2 gap-1 rounded-md bg-gray-100 p-1">
+              <button
+                type="button"
+                onClick={() => setMobilePanel("controls")}
+                className={`rounded px-2 py-1 text-xs font-medium transition-colors ${mobilePanel === "controls" ? "bg-white text-gray-900 shadow-sm" : "text-gray-600"}`}
+              >
+                Controls
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobilePanel("preview")}
+                className={`rounded px-2 py-1 text-xs font-medium transition-colors ${mobilePanel === "preview" ? "bg-white text-gray-900 shadow-sm" : "text-gray-600"}`}
+              >
+                Preview
+              </button>
+            </div>
+          </div>
+        )}
         <div
-          className="fixed inset-0 bg-black/40 z-40"
-          onClick={() => setPreviewDrawerOpen(false)}
-        />
-      )}
-      {/* Mobile: floating tab to open preview drawer */}
-      {isMobile && !previewDrawerOpen && (
-        <button
-          onClick={() => setPreviewDrawerOpen(true)}
-          className="fixed right-0 top-1/2 -translate-y-1/2 z-40 bg-cyan-500 text-white py-5 px-1 rounded-l-xl shadow-lg flex flex-col items-center gap-1"
-          style={{ writingMode: 'vertical-rl' }}
-          title="Open preview"
+          className={isMobile ? "flex min-h-0 flex-1 flex-row transition-transform duration-300 ease-out" : "flex-1 min-h-0 flex flex-col lg:flex-row"}
+          style={isMobile ? { transform: mobilePanel === "preview" ? "translateX(-100%)" : "translateX(0)" } : undefined}
         >
-          <ChevronLeft className="w-4 h-4 rotate-0 mb-0.5" style={{ writingMode: 'horizontal-tb' }} />
-          <span className="text-[10px] font-semibold tracking-wide" style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}>PREVIEW</span>
-        </button>
-      )}
       {/* Left sidebar - Layers + Settings */}
-      <div className="flex-shrink-0 w-full lg:w-[320px] xl:w-[340px] border-r border-gray-200 bg-white overflow-y-auto overflow-x-hidden">
+      <div className={`flex-shrink-0 w-full lg:w-[320px] xl:w-[340px] border-r border-gray-200 bg-white overflow-x-hidden ${isMobile ? "" : "overflow-y-auto"}`}>
         <div className="p-2.5 space-y-2">
           <ControlsSection
             resizeSettings={activeResizeSettings}
@@ -2774,7 +3322,6 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
             imageInfo={activeImageInfo}
             artboardWidth={artboardWidth}
             artboardHeight={artboardHeight}
-            onArtboardWidthChange={(w) => handleArtboardResize(w, artboardHeight)}
             onArtboardHeightChange={(h) => handleArtboardResize(artboardWidth, h)}
             downloadContainer={downloadContainer}
             designCount={designs.length}
@@ -2786,6 +3333,12 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
             onSpotPreviewChange={setSpotPreviewData}
             fluorPanelContainer={fluorPanelContainer}
             copySpotSelectionsRef={copySpotSelectionsRef}
+            quantity={quantity}
+            onQuantityChange={setQuantity}
+            shopifyVariants={shopifyVariants}
+            onAddToCart={handleAddToCart}
+            hasVariantId={!!(initialVariantId || shopifyVariants?.length)}
+            isAddingToCart={isAddingToCart}
           />
 
           {/* Fluorescent panel portal target */}
@@ -2968,405 +3521,196 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       </div>
 
       {/* Right area - Canvas workspace */}
-      <div className={
-        isMobile
-          ? `fixed inset-y-0 right-0 w-full z-50 flex flex-col bg-white transition-transform duration-300 ease-in-out ${previewDrawerOpen ? 'translate-x-0' : 'translate-x-full'}`
-          : 'flex-1 min-w-0 flex flex-col h-full overflow-hidden'
-      }>
-        {/* Mobile drawer header */}
-        {isMobile && (
-          <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 bg-white flex-shrink-0">
-            <button
-              onClick={() => setPreviewDrawerOpen(false)}
-              className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-600 transition-colors"
-            >
-              <X className="w-5 h-5" />
-            </button>
-            <span className="font-semibold text-sm text-gray-900">Preview &amp; Canvas</span>
-            <span className="text-[10px] text-gray-500 ml-1">← swipe right to close</span>
-          </div>
-        )}
-        {/* Top bar: three rows on mobile, wraps on desktop when metric to avoid overlap */}
-        <div className="flex-shrink-0 flex flex-col lg:flex-row lg:flex-wrap lg:items-center gap-1.5 lg:gap-2 bg-white border-b border-gray-200 px-2 py-1 lg:px-3 lg:py-1.5">
-          {/* Row 1: Upload, file info, Auto-Arrange, Undo/Redo/Dup/Del */}
-          <div className="flex items-center gap-1.5 lg:gap-2 min-w-0 flex-wrap lg:flex-nowrap flex-shrink-0">
-            <UploadSection 
-              onImageUpload={handleFileUploadUnified}
-              onBatchStart={handleBatchStart}
-              imageInfo={activeImageInfo}
-            />
-            {isUploading && (
-              <div className="flex items-center gap-1.5 text-cyan-400">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                <span className="text-[11px]">{t("editor.processing")}</span>
-              </div>
-            )}
-            {activeImageInfo?.file?.name && (
-              <p className="text-[11px] text-gray-600 truncate max-w-[100px] hidden sm:block" title={activeImageInfo.file.name}>
-                {activeImageInfo.file.name}
-              </p>
-            )}
-            <div className="flex flex-col gap-1 lg:flex-row lg:gap-1 flex-shrink-0 ml-auto lg:ml-0">
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={handleThresholdAlpha}
-                  disabled={!selectedDesignId && selectedDesignIds.size === 0}
-                  className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
-                    selectedDesignId || selectedDesignIds.size > 0
-                      ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#2563EB] border border-[#CBD5E1] shadow-none'
-                      : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
-                  }`}
-                  title={t("editor.cleanAlphaTitle")}
-                >
-                  <Droplets className="w-3 h-3" />
-                  {t("editor.cleanAlpha")}
-                </button>
-                <button
-                  onClick={handleThresholdAlphaAll}
-                  disabled={designs.length === 0}
-                  className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
-                    designs.length > 0
-                      ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#2563EB] border border-[#CBD5E1] shadow-none'
-                      : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
-                  }`}
-                  title={t("editor.cleanAlphaAllTitle")}
-                >
-                  <Droplets className="w-3 h-3" />
-                  {t("editor.cleanAlphaAll")}
-                </button>
-                {!isMobile && (
-                  <button
-                    onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2 })}
-                    disabled={designs.length < 2 && selectedDesignIds.size < 2}
-                    className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap font-medium shadow-sm min-h-[36px] lg:min-h-0 ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ${
-                      designs.length >= 2 || selectedDesignIds.size >= 2
-                        ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
-                        : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
-                    }`}
-                    title={selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll")}
-                  >
-                    <LayoutGrid className="w-3 h-3 flex-shrink-0" />
-                    {t("editor.autoArrange")}
-                  </button>
-                )}
-              </div>
-              {!isMobile && (
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => { handleDuplicateDesign(duplicateCount); setDuplicateCount(1); }}
-                    disabled={!selectedDesignId}
-                    className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
-                      selectedDesignId
-                        ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#7C3AED] border border-[#CBD5E1] shadow-none'
-                        : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
-                    }`}
-                    title={t("editor.duplicate")}
-                  >
-                    <Copy className="w-3 h-3" />
-                    {t("editor.duplicate").replace(/ \(.*/, '')}
-                  </button>
-                  <input
-                    type="number"
-                    min={1}
-                    max={200}
-                    value={duplicateCount}
-                    onChange={(e) => setDuplicateCount(Math.max(1, Math.min(200, parseInt(e.target.value) || 1)))}
-                    disabled={!selectedDesignId}
-                    className="w-10 h-[28px] lg:h-[24px] text-center text-[11px] border border-gray-300 rounded bg-white outline-none focus:border-cyan-500 disabled:opacity-30 disabled:pointer-events-none"
-                    title="Number of copies"
-                  />
-                  <button
-                    onClick={() => { handleDuplicateAndArrange(duplicateCount); setDuplicateCount(1); }}
-                    disabled={!selectedDesignId}
-                    className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} font-medium shadow-sm min-h-[36px] lg:min-h-0 ${
-                      selectedDesignId
-                        ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
-                        : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
-                    }`}
-                    title={t("editor.duplicateArrange")}
-                  >
-                    <Copy className="w-3 h-3" />
-                    {t("editor.duplicateArrange")}
-                  </button>
-                </div>
-              )}
-            </div>
-            <div className="flex items-center gap-0.5 flex-shrink-0 flex-wrap lg:flex-nowrap">
-              <button
-                onClick={handleUndo}
-                disabled={!canUndo()}
-                className="w-8 h-8 lg:w-7 lg:h-7 rounded border border-gray-300 bg-white hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center shadow-sm"
-                title={t("editor.undo")}
-              >
-                <Undo2 className="w-4 h-4" />
-              </button>
-              <button
-                onClick={handleRedo}
-                disabled={!canRedo()}
-                className="w-8 h-8 lg:w-7 lg:h-7 rounded border border-gray-300 bg-white hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center shadow-sm"
-                title={t("editor.redo")}
-              >
-                <Redo2 className="w-4 h-4" />
-              </button>
-              <div className="w-px h-4 bg-gray-100 mx-0.5" />
-              <button
-                onClick={() => {
-                  if (selectedDesignIds.size > 1) {
-                    handleDeleteMulti(selectedDesignIds);
-                  } else if (selectedDesignId) {
-                    handleDeleteDesign(selectedDesignId);
-                  }
-                }}
-                disabled={!selectedDesignId}
-                className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-red-500 hover:text-red-600 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
-                title={t("editor.delete")}
-              >
-                <Trash2 className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
-              </button>
-              {isMobile && (
-                <button
-                  onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2 })}
-                  disabled={designs.length < 2 && selectedDesignIds.size < 2}
-                  className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap font-medium shadow-sm min-h-[36px] ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ml-auto ${
-                    designs.length >= 2 || selectedDesignIds.size >= 2
-                      ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
-                      : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
-                  }`}
-                  title={selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll")}
-                >
-                  <LayoutGrid className="w-3 h-3 flex-shrink-0" />
-                  {t("editor.autoArrange")}
-                </button>
-              )}
-            </div>
-          </div>
-          {/* Row 2: Size, DPI, Margin, Rotate, Align — always on its own line */}
-          <div className="flex items-center gap-1.5 lg:gap-2 flex-wrap lg:basis-full">
-            {activeImageInfo && (
-              <>
-                <div className="w-px h-5 bg-gray-100 flex-shrink-0 hidden lg:block" />
-                <div className="flex items-center gap-1.5 min-w-0 flex-shrink-0">
-                  <div className="flex items-center gap-0.5 flex-shrink-0 flex-wrap">
-                    <span className="text-[10px] text-gray-600">W</span>
-                    <SizeInput
-                      value={activeResizeSettings.widthInches * activeDesignTransform.s}
-                      onCommit={(v) => handleEffectiveSizeChange("width", v)}
-                      title={useMetric(lang) ? t("editor.widthTitleCm") : t("editor.widthTitle")}
-                      max={artboardWidth}
-                      lang={lang}
-                    />
-                    <span className={`text-gray-600 ${lang === 'en' ? 'text-[10px]' : 'text-[9px]'}`}>{getUnitSuffix(activeResizeSettings.widthInches * activeDesignTransform.s, lang)}</span>
-                    <button
-                      onClick={() => setProportionalLock(prev => !prev)}
-                      className={`p-0.5 rounded transition-colors ${proportionalLock ? 'text-cyan-400 hover:text-cyan-300' : 'text-gray-600 hover:text-gray-700'}`}
-                      title={proportionalLock ? 'Proportions locked – click to unlock' : 'Proportions unlocked – click to lock'}
-                    >
-                      {proportionalLock ? <Link className="w-3 h-3" /> : <Unlink className="w-3 h-3" />}
-                    </button>
-                    <span className="text-[10px] text-gray-600">H</span>
-                    <SizeInput
-                      value={activeResizeSettings.heightInches * activeDesignTransform.s}
-                      onCommit={(v) => handleEffectiveSizeChange("height", v)}
-                      title={useMetric(lang) ? t("editor.heightTitleCm") : t("editor.heightTitle")}
-                      max={artboardHeight}
-                      lang={lang}
-                    />
-                    <span className={`text-gray-600 ${lang === 'en' ? 'text-[10px]' : 'text-[9px]'}`}>{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>
-                  </div>
-                  <span
-                    className={`text-[9px] font-semibold px-1.5 py-0.5 rounded flex-shrink-0 inline-flex items-center gap-1.5 ${
-                      effectiveDPI < 198
-                        ? 'text-amber-600 bg-amber-100 border border-amber-400'
-                        : effectiveDPI < 277
-                          ? 'text-green-700 bg-green-100 border border-green-500'
-                          : 'bg-black border border-green-400'
-                    }`}
-                    style={effectiveDPI >= 277 ? { color: '#39FF14' } : undefined}
-                    title={t("editor.effectiveRes", { dpi: effectiveDPI })}
-                  >
-                    <span>{effectiveDPI} DPI</span>
-                    <span className="text-[8px] font-medium opacity-90 hidden sm:inline">
-                      {effectiveDPI < 198 ? 'Low Res' : effectiveDPI < 277 ? 'Medium' : 'Excellent'}
-                    </span>
-                  </span>
-                </div>
-                {isMobile && (
-                  <div className="flex items-center gap-1 ml-auto">
-                    <button
-                      onClick={() => { handleDuplicateDesign(duplicateCount); setDuplicateCount(1); }}
-                      disabled={!selectedDesignId}
-                      className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[11px] font-medium shadow-sm min-h-[36px] ${
-                        selectedDesignId
-                          ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#7C3AED] border border-[#CBD5E1] shadow-none'
-                          : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
-                      }`}
-                      title={t("editor.duplicate")}
-                    >
-                      <Copy className="w-3 h-3" />
-                      {t("editor.duplicate").replace(/ \(.*/, '')}
-                    </button>
-                    <input
-                      type="number"
-                      min={1}
-                      max={200}
-                      value={duplicateCount}
-                      onChange={(e) => setDuplicateCount(Math.max(1, Math.min(200, parseInt(e.target.value) || 1)))}
-                      disabled={!selectedDesignId}
-                      className="w-10 h-[32px] text-center text-[11px] border border-gray-300 rounded bg-white outline-none focus:border-cyan-500 disabled:opacity-30 disabled:pointer-events-none"
-                      title="Number of copies"
-                    />
-                    <button
-                      onClick={() => { handleDuplicateAndArrange(duplicateCount); setDuplicateCount(1); }}
-                      disabled={!selectedDesignId}
-                      className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[10px] font-medium shadow-sm min-h-[36px] ${
-                        selectedDesignId
-                          ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
-                          : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
-                      }`}
-                      title={t("editor.duplicateArrange")}
-                    >
-                      <Copy className="w-3 h-3" />
-                      {t("editor.duplicateArrange")}
-                    </button>
-                  </div>
-                )}
-              </>
-            )}
-            {!isMobile && (
-              <div
-                className={`flex items-center gap-1.5 flex-shrink-0 ${designs.length >= 2 ? 'opacity-100' : 'opacity-0'}`}
-                aria-hidden={designs.length < 2}
-              >
-                <div className="w-px h-5 bg-gray-100 hidden lg:block" />
-                <div className="flex items-center gap-1">
-                  <span className="text-[10px] text-gray-600">{t("editor.margin")}</span>
-                  <select
-                    value={designGap === undefined ? "auto" : String(designGap)}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      const newGap = v === "auto" ? undefined : parseFloat(v);
-                      setDesignGap(newGap);
-                      if (designs.length >= 2) {
-                        setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true }), 0);
-                      }
-                    }}
-                    className="h-5 px-1 bg-gray-100 border border-gray-300 rounded text-[10px] text-gray-700 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
-                    title={useMetric(lang) ? t("editor.marginGapCm") : t("editor.marginGap")}
-                  >
-                    <option value="auto">{t("editor.marginAuto")}</option>
-                    <option value="0.0625">{useMetric(lang) ? formatLength(0.0625, lang) : "1/16″"}</option>
-                    <option value="0.125">{useMetric(lang) ? formatLength(0.125, lang) : "1/8″"}</option>
-                    <option value="0.25">{useMetric(lang) ? formatLength(0.25, lang) : "1/4″"}</option>
-                    <option value="0.5">{useMetric(lang) ? formatLength(0.5, lang) : "1/2″"}</option>
-                    <option value="1">{useMetric(lang) ? formatLength(1, lang) : "1″"}</option>
-                  </select>
-                </div>
-              </div>
-            )}
-            {/* Row 3 on mobile: Rotate, Align, Margin */}
-            <div className="flex items-center gap-0.5 flex-shrink-0 flex-wrap lg:flex-nowrap w-full lg:w-auto">
-              <div className="w-px h-4 bg-gray-100 mx-0.5 hidden lg:block" />
-              <button
-                onClick={handleRotate90}
-                disabled={!selectedDesignId}
-                className="w-8 h-8 lg:w-7 lg:h-7 rounded border border-gray-300 bg-white hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center shadow-sm"
-                title={t("editor.rotate")}
-              >
-                <RotateCw className="w-4 h-4" />
-              </button>
-              <div className="grid grid-cols-4 gap-0.5 lg:contents">
-                <button
-                  onClick={() => handleAlignCorner('tl')}
-                  disabled={!selectedDesignId}
-                  className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
-                  title={t("editor.alignTL")}
-                >
-                  <ArrowUpLeft className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
-                </button>
-                <button
-                  onClick={() => handleAlignCorner('tr')}
-                  disabled={!selectedDesignId}
-                  className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
-                  title={t("editor.alignTR")}
-                >
-                  <ArrowUpRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
-                </button>
-                <button
-                  onClick={() => handleAlignCorner('bl')}
-                  disabled={!selectedDesignId}
-                  className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
-                  title={t("editor.alignBL")}
-                >
-                  <ArrowDownLeft className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
-                </button>
-                <button
-                  onClick={() => handleAlignCorner('br')}
-                  disabled={!selectedDesignId}
-                  className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
-                  title={t("editor.alignBR")}
-                >
-                  <ArrowDownRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
-                </button>
-              </div>
-              {isMobile && (
-                <div
-                  className={`flex items-center gap-1 flex-shrink-0 ${designs.length >= 2 ? 'opacity-100' : 'opacity-0'}`}
-                  aria-hidden={designs.length < 2}
-                >
-                  <span className="text-[10px] text-gray-600">{t("editor.margin")}</span>
-                  <select
-                    value={designGap === undefined ? "auto" : String(designGap)}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      const newGap = v === "auto" ? undefined : parseFloat(v);
-                      setDesignGap(newGap);
-                      if (designs.length >= 2) {
-                        setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true }), 0);
-                      }
-                    }}
-                    className="h-7 px-1.5 bg-gray-100 border border-gray-300 rounded text-[11px] text-gray-700 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
-                    title={useMetric(lang) ? t("editor.marginGapCm") : t("editor.marginGap")}
-                  >
-                    <option value="auto">{t("editor.marginAuto")}</option>
-                    <option value="0.0625">{useMetric(lang) ? formatLength(0.0625, lang) : "1/16″"}</option>
-                    <option value="0.125">{useMetric(lang) ? formatLength(0.125, lang) : "1/8″"}</option>
-                    <option value="0.25">{useMetric(lang) ? formatLength(0.25, lang) : "1/4″"}</option>
-                    <option value="0.5">{useMetric(lang) ? formatLength(0.5, lang) : "1/2″"}</option>
-                    <option value="1">{useMetric(lang) ? formatLength(1, lang) : "1″"}</option>
-                  </select>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+      <div className={`min-w-0 flex flex-col ${isMobile ? "w-full flex-shrink-0" : "flex-1 h-full overflow-hidden"}`}>
+        {!isMobile && renderActionToolbar()}
 
         {/* Preview Canvas */}
-        <div className="flex-1 min-h-0 relative">
-          <PreviewSection
-            ref={canvasRef}
-            imageInfo={activeImageInfo}
-            resizeSettings={activeResizeSettings}
-            artboardWidth={artboardWidth}
-            artboardHeight={artboardHeight}
-            designTransform={activeDesignTransform}
-            onTransformChange={handleDesignTransformChange}
-            designs={designs}
-            selectedDesignId={selectedDesignId}
-            selectedDesignIds={selectedDesignIds}
-            onSelectDesign={handleSelectDesign}
-            onMultiSelect={handleMultiSelect}
-            onMultiDragDelta={handleMultiDragDelta}
-            onMultiResizeDelta={handleMultiResizeDelta}
-            onMultiRotateDelta={handleMultiRotateDelta}
-            onDuplicateSelected={handleDuplicateSelected}
-            onInteractionEnd={handleInteractionEnd}
-            onExpandArtboard={artboardHeight < MAX_ARTBOARD_HEIGHT ? handleExpandArtboard : undefined}
-            onDesignContextMenu={handleCanvasContextMenu}
-            spotPreviewData={profile.enableFluorescent ? spotPreviewData : undefined}
-            selectionZoomActive={selectionZoomActive}
-            onSelectionZoomChange={setSelectionZoomActive}
-          />
-        </div>
+        {isMobile ? (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="flex min-h-0 flex-1">
+            <div className="min-h-0 min-w-0 h-full pl-1.5 basis-[53%] shrink-0 flex flex-col">
+              <div className="flex-shrink-0 flex items-center gap-0.5 bg-white border-b border-gray-200 px-2 py-1">
+                <button onClick={handleRotate90} disabled={!selectedDesignId} className="h-8 w-8 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30" title={t("editor.rotate")}><RotateCw className="mx-auto h-4 w-4" /></button>
+                <button onClick={() => handleAlignCorner('tl')} disabled={!selectedDesignId} className="h-8 w-8 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30" title={t("editor.alignTL")}><ArrowUpLeft className="mx-auto h-4 w-4" /></button>
+                <button onClick={() => handleAlignCorner('tr')} disabled={!selectedDesignId} className="h-8 w-8 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30" title={t("editor.alignTR")}><ArrowUpRight className="mx-auto h-4 w-4" /></button>
+                <button onClick={() => handleAlignCorner('bl')} disabled={!selectedDesignId} className="h-8 w-8 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30" title={t("editor.alignBL")}><ArrowDownLeft className="mx-auto h-4 w-4" /></button>
+                <button onClick={() => handleAlignCorner('br')} disabled={!selectedDesignId} className="h-8 w-8 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30" title={t("editor.alignBR")}><ArrowDownRight className="mx-auto h-4 w-4" /></button>
+              </div>
+              <div className="relative min-h-0 min-w-0 flex-1">
+                <PreviewSection
+                  ref={canvasRef}
+                  imageInfo={activeImageInfo}
+                  resizeSettings={activeResizeSettings}
+                  artboardWidth={artboardWidth}
+                  artboardHeight={artboardHeight}
+                  designTransform={activeDesignTransform}
+                  onTransformChange={handleDesignTransformChange}
+                  designs={designs}
+                  selectedDesignId={selectedDesignId}
+                  selectedDesignIds={selectedDesignIds}
+                  onSelectDesign={handleSelectDesign}
+                  onMultiSelect={handleMultiSelect}
+                  onMultiDragDelta={handleMultiDragDelta}
+                  onMultiResizeDelta={handleMultiResizeDelta}
+                  onMultiRotateDelta={handleMultiRotateDelta}
+                  onDuplicateSelected={handleDuplicateSelected}
+                  onInteractionEnd={handleInteractionEnd}
+                  onExpandArtboard={artboardHeight < MAX_ARTBOARD_HEIGHT ? handleExpandArtboard : undefined}
+                  onDesignContextMenu={handleCanvasContextMenu}
+                  spotPreviewData={profile.enableFluorescent ? spotPreviewData : undefined}
+                  selectionZoomActive={selectionZoomActive}
+                  onSelectionZoomChange={setSelectionZoomActive}
+                  bottomToolbarContainer={mobileToolbarContainer}
+                />
+              </div>
+            </div>
+
+            <div className="min-h-0 h-full basis-[47%] shrink-0 border-l border-gray-200 bg-gray-100 p-2">
+              <div className="flex h-full flex-col gap-2 overflow-y-auto">
+                <button onClick={handleThresholdAlpha} disabled={!selectedDesignId && selectedDesignIds.size === 0} className={`flex items-center justify-center gap-1 rounded-md border px-2 py-2 text-[11px] font-medium transition-all ${selectedDesignId || selectedDesignIds.size > 0 ? "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`} title={t("editor.cleanAlphaTitle")}><Droplets className="h-3 w-3" />{t("editor.cleanAlpha")}</button>
+                <button onClick={handleThresholdAlphaAll} disabled={designs.length === 0} className={`flex items-center justify-center gap-1 rounded-md border px-2 py-2 text-[11px] font-medium transition-all ${designs.length > 0 ? "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`} title={t("editor.cleanAlphaAllTitle")}><Droplets className="h-3 w-3" />{t("editor.cleanAlphaAll")}</button>
+                <div className={`rounded-md border border-gray-200 bg-white p-2 ${isMobile ? "mx-auto" : ""}`}>
+                  <div className="flex flex-col gap-2">
+                    <button
+                      onClick={() => handleDuplicateDesign(duplicateCount)}
+                      disabled={!selectedDesignId}
+                      className={`w-full rounded-md px-2 py-2 text-[11px] font-medium transition-all ${selectedDesignId ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#7C3AED]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`}
+                      title={t("editor.duplicate")}
+                    >
+                      <span className="inline-flex w-full items-center justify-center gap-1 text-center whitespace-normal break-words leading-snug">
+                        <Copy className="h-3.5 w-3.5 flex-shrink-0" />
+                        <span>{t("editor.duplicate").replace(/ \(.*/, "")}</span>
+                      </span>
+                    </button>
+                    <div className="relative w-10 h-[28px] lg:h-[24px] mx-auto rounded border border-gray-300 bg-white overflow-hidden focus-within:border-cyan-500">
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={duplicateCount}
+                        onChange={(e) => setDuplicateCount(parseDuplicateCount(e.target.value))}
+                        onKeyDown={handleDuplicateCountKeyDown}
+                        disabled={!selectedDesignId}
+                        className="w-full h-full text-center text-[11px] leading-none p-0 pr-3 bg-white outline-none disabled:opacity-30 disabled:pointer-events-none"
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                        title="Number of copies"
+                      />
+                      <div className="absolute right-0 top-0 h-full w-3 border-l border-gray-300 overflow-hidden rounded-r">
+                        <button
+                          type="button"
+                          onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev + 1))}
+                          disabled={!selectedDesignId || duplicateCount >= 99}
+                          className="h-1/2 w-full flex items-center justify-center border-b border-gray-300 bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
+                          title="Increase copies"
+                        >
+                          <ChevronUp className="w-2.5 h-2.5 text-gray-600" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev - 1))}
+                          disabled={!selectedDesignId || duplicateCount <= 1}
+                          className="h-1/2 w-full flex items-center justify-center bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
+                          title="Decrease copies"
+                        >
+                          <ChevronDown className="w-2.5 h-2.5 text-gray-600" />
+                        </button>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleDuplicateAndArrange(duplicateCount)}
+                      disabled={!selectedDesignId}
+                      className={`w-full rounded-md px-2 py-2 text-[11px] font-medium transition-all ${selectedDesignId ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#0891B2]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`}
+                      title={t("editor.duplicateArrange")}
+                    >
+                      <span className="inline-flex w-full items-center justify-center gap-1 text-center whitespace-normal break-words leading-snug">
+                        <Copy className="h-3.5 w-3.5 flex-shrink-0" />
+                        <span>{t("editor.duplicateArrange")}</span>
+                      </span>
+                    </button>
+                    {designs.length >= 2 && (
+                      <div className="mt-1 flex items-center justify-center gap-1">
+                        <span className="text-[10px] text-gray-600">{t("editor.margin")}</span>
+                        <select
+                          value={designGap === undefined ? "auto" : String(designGap)}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            const newGap = v === "auto" ? undefined : parseFloat(v);
+                            setDesignGap(newGap);
+                            setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true }), 0);
+                          }}
+                          className="h-8 px-1.5 bg-gray-100 border border-gray-300 rounded text-[11px] text-gray-700 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
+                          title={useMetric(lang) ? t("editor.marginGapCm") : t("editor.marginGap")}
+                        >
+                          <option value="auto">{t("editor.marginAuto")}</option>
+                          <option value="0.0625">{useMetric(lang) ? formatLength(0.0625, lang) : "1/16″"}</option>
+                          <option value="0.125">{useMetric(lang) ? formatLength(0.125, lang) : "1/8″"}</option>
+                          <option value="0.25">{useMetric(lang) ? formatLength(0.25, lang) : "1/4″"}</option>
+                          <option value="0.5">{useMetric(lang) ? formatLength(0.5, lang) : "1/2″"}</option>
+                          <option value="1">{useMetric(lang) ? formatLength(1, lang) : "1″"}</option>
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <span className={`mx-auto inline-flex rounded px-2 py-1 text-[9px] font-semibold ${effectiveDPI < 277 ? "border border-amber-400 bg-amber-100 text-amber-600" : "border border-emerald-700 bg-emerald-100 text-emerald-600"}`} title={t("editor.effectiveRes", { dpi: effectiveDPI })}>{effectiveDPI} DPI</span>
+                <div className={`rounded-md border border-gray-200 bg-white p-2 ${isMobile ? "mx-auto w-fit max-w-full" : ""}`}>
+                  <div className="mx-auto mb-1 inline-flex items-center justify-center gap-1">
+                    <span className="text-[10px] text-gray-600">W</span>
+                    <SizeInput value={activeResizeSettings.widthInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("width", v)} title={useMetric(lang) ? t("editor.widthTitleCm") : t("editor.widthTitle")} max={artboardWidth} lang={lang} />
+                    <span className="text-[9px] text-gray-600">{getUnitSuffix(activeResizeSettings.widthInches * activeDesignTransform.s, lang)}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setProportionalLock((v) => !v)}
+                    className="mx-auto mb-1 flex h-5 w-5 items-center justify-center rounded text-cyan-500 hover:bg-cyan-50"
+                    title={proportionalLock ? t("editor.proportionsLocked") : t("editor.proportionsUnlocked")}
+                  >
+                    {proportionalLock ? <Link className="h-3.5 w-3.5" /> : <Unlink className="h-3.5 w-3.5" />}
+                  </button>
+                  <div className="mx-auto inline-flex items-center justify-center gap-1">
+                    <span className="text-[10px] text-gray-600">H</span>
+                    <SizeInput value={activeResizeSettings.heightInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("height", v)} title={useMetric(lang) ? t("editor.heightTitleCm") : t("editor.heightTitle")} max={artboardHeight} lang={lang} />
+                    <span className="text-[9px] text-gray-600">{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>
+                  </div>
+                </div>
+                <button onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2 })} disabled={designs.length < 2 && selectedDesignIds.size < 2} className={`mx-auto rounded-md px-2 py-2 text-[11px] font-medium transition-all ${designs.length >= 2 || selectedDesignIds.size >= 2 ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#0891B2]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`} title={selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll")}><span className="inline-flex items-center justify-center gap-1"><LayoutGrid className="h-3.5 w-3.5" />{t("editor.autoArrange")}</span></button>
+                <div className="mt-auto mx-auto flex items-center gap-1 rounded-md border border-gray-200 bg-white p-1">
+                <button onClick={handleUndo} disabled={!canUndo()} className="h-8 w-8 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30" title={t("editor.undo")}><Undo2 className="mx-auto h-4 w-4" /></button>
+                <button onClick={handleRedo} disabled={!canRedo()} className="h-8 w-8 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30" title={t("editor.redo")}><Redo2 className="mx-auto h-4 w-4" /></button>
+                <button onClick={() => { if (selectedDesignIds.size > 1) handleDeleteMulti(selectedDesignIds); else if (selectedDesignId) handleDeleteDesign(selectedDesignId); }} disabled={!selectedDesignId} className="h-8 w-8 rounded border border-red-200 bg-white text-red-500 transition-colors hover:bg-red-50 hover:text-red-600 disabled:pointer-events-none disabled:opacity-30" title={t("editor.delete")}><Trash2 className="mx-auto h-4 w-4" /></button>
+              </div>
+              </div>
+            </div>
+            </div>
+            <div ref={setMobileToolbarContainer} className="flex-shrink-0" />
+          </div>
+        ) : (
+          <div className="flex-1 min-h-0 relative">
+            <PreviewSection
+              ref={canvasRef}
+              imageInfo={activeImageInfo}
+              resizeSettings={activeResizeSettings}
+              artboardWidth={artboardWidth}
+              artboardHeight={artboardHeight}
+              designTransform={activeDesignTransform}
+              onTransformChange={handleDesignTransformChange}
+              designs={designs}
+              selectedDesignId={selectedDesignId}
+              selectedDesignIds={selectedDesignIds}
+              onSelectDesign={handleSelectDesign}
+              onMultiSelect={handleMultiSelect}
+              onMultiDragDelta={handleMultiDragDelta}
+              onMultiResizeDelta={handleMultiResizeDelta}
+              onMultiRotateDelta={handleMultiRotateDelta}
+              onDuplicateSelected={handleDuplicateSelected}
+              onInteractionEnd={handleInteractionEnd}
+              onExpandArtboard={artboardHeight < MAX_ARTBOARD_HEIGHT ? handleExpandArtboard : undefined}
+              onDesignContextMenu={handleCanvasContextMenu}
+              spotPreviewData={profile.enableFluorescent ? spotPreviewData : undefined}
+              selectionZoomActive={selectionZoomActive}
+              onSelectionZoomChange={setSelectionZoomActive}
+            />
+          </div>
+        )}
       </div>
       
       </div>
@@ -3381,8 +3725,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
           onClick={(e) => e.stopPropagation()}
         >
           {([
-            { icon: Copy, label: t("editor.duplicate").replace(/ \(.*/, '') + ` (${duplicateCount})`, shortcut: 'Ctrl+D', action: () => { handleDuplicateDesign(duplicateCount); setDuplicateCount(1); setContextMenu(null); }, disabled: false },
-            { icon: Copy, label: t("editor.duplicateArrange") + ` (${duplicateCount})`, shortcut: '', action: () => { handleDuplicateAndArrange(duplicateCount); setDuplicateCount(1); setContextMenu(null); }, disabled: false },
+            { icon: Copy, label: t("editor.duplicate").replace(/ \(.*/, '') + ` (${duplicateCount})`, shortcut: 'Ctrl+D', action: () => { handleDuplicateDesign(duplicateCount); setContextMenu(null); }, disabled: false },
+            { icon: Copy, label: t("editor.duplicateArrange") + ` (${duplicateCount})`, shortcut: '', action: () => { handleDuplicateAndArrange(duplicateCount); setContextMenu(null); }, disabled: false },
             { icon: Trash2, label: t("editor.delete").replace(/ \(.*/, ''), shortcut: 'Del', action: () => { if (selectedDesignIds.size > 1) handleDeleteMulti(selectedDesignIds); else handleDeleteDesign(contextMenu.designId); setContextMenu(null); }, disabled: false },
             null,
             { icon: RotateCw, label: t("editor.rotate").replace(/ \(.*/, ''), shortcut: 'R', action: () => { handleRotate90(); setContextMenu(null); }, disabled: false },
@@ -3426,8 +3770,8 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         ) : null;
       })()}
 
-      {/* Processing Modal */}
-      {isProcessing && (
+      {/* Processing Modal (downloads only — add-to-cart uses the bottom button state) */}
+      {isProcessing && !isAddingToCart && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 max-w-sm mx-4">
             <div className="flex items-center space-x-3">

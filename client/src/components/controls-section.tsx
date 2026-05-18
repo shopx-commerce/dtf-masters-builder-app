@@ -3,10 +3,12 @@ import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ResizeSettings, ImageInfo } from "./image-editor";
-import { Download, Layers, FileCheck, Palette, Eye, EyeOff, ChevronDown, Info } from "lucide-react";
+import { Download, Layers, FileCheck, Palette, Eye, EyeOff, ChevronDown, Info, ShoppingCart } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
 import { formatLength } from "@/lib/format-length";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useMediaQuery } from "@/hooks/use-media-query";
+import { formatVariantPriceForDisplay, getSelectedVariantPrice } from "@/lib/variant-price";
 
 export interface SpotPreviewData {
   enabled: boolean;
@@ -34,7 +36,6 @@ interface ControlsSectionProps {
   imageInfo: ImageInfo | null;
   artboardWidth?: number;
   artboardHeight?: number;
-  onArtboardWidthChange?: (width: number) => void;
   onArtboardHeightChange?: (height: number) => void;
   downloadContainer?: HTMLDivElement | null;
   designCount?: number;
@@ -46,9 +47,15 @@ interface ControlsSectionProps {
   onSpotPreviewChange?: (data: SpotPreviewData) => void;
   fluorPanelContainer?: HTMLDivElement | null;
   copySpotSelectionsRef?: React.MutableRefObject<((fromId: string, toIds: string[]) => void) | null>;
+  quantity?: number;
+  onQuantityChange?: (qty: number) => void;
+  shopifyVariants?: Array<{ id: string; title: string; price: string | null; height: number | null }>;
+  onAddToCart?: () => void;
+  hasVariantId?: boolean;
+  isAddingToCart?: boolean;
 }
 
-const DEFAULT_HEIGHTS = [12, 18, 24, 35, 40, 45, 48, 50, 55, 60, 65, 70, 80, 85, 95, 110, 120, 130, 140, 150];
+const DEFAULT_HEIGHTS: number[] = [];
 
 export default function ControlsSection({
   onDownload,
@@ -56,7 +63,6 @@ export default function ControlsSection({
   imageInfo,
   artboardWidth = 24.5,
   artboardHeight = 12,
-  onArtboardWidthChange,
   onArtboardHeightChange,
   downloadContainer,
   designCount = 0,
@@ -68,17 +74,22 @@ export default function ControlsSection({
   onSpotPreviewChange,
   fluorPanelContainer,
   copySpotSelectionsRef,
+  quantity: _quantity = 1,
+  onQuantityChange: _onQuantityChange,
+  shopifyVariants,
+  onAddToCart,
+  hasVariantId = false,
+  isAddingToCart = false,
 }: ControlsSectionProps) {
   const { t, lang } = useLanguage();
   const isMobile = useIsMobile();
+  const isLgUp = useMediaQuery("(min-width: 1024px)");
   const canDownload = !!imageInfo || designCount > 0;
 
-  const [widthInputValue, setWidthInputValue] = useState(String(artboardWidth));
-  const [editingWidth, setEditingWidth] = useState(false);
-
-  useEffect(() => {
-    if (!editingWidth) setWidthInputValue(String(artboardWidth));
-  }, [artboardWidth, editingWidth]);
+  const selectedVariantPrice = useMemo(
+    () => getSelectedVariantPrice(shopifyVariants, artboardHeight),
+    [shopifyVariants, artboardHeight]
+  );
 
   const [showSpotColors, setShowSpotColors] = useState(false);
   const [showFluorInfo, setShowFluorInfo] = useState(false);
@@ -266,60 +277,86 @@ export default function ControlsSection({
 
   return (
     <div className="space-y-4">
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <div className="flex items-center gap-2 px-3 py-1.5">
-          <div className="w-6 h-6 rounded-md bg-cyan-500/10 flex items-center justify-center flex-shrink-0">
-            <Layers className="w-3.5 h-3.5 text-cyan-600" />
+      <div className="bg-white rounded-lg border border-gray-200 overflow-visible">
+        <div className="flex items-center gap-1 px-2 py-1 min-w-0 sm:gap-2 sm:px-3 sm:py-1.5 sm:pr-4">
+          <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-cyan-500/10 sm:h-6 sm:w-6">
+            <Layers className="h-3 w-3 text-cyan-600 sm:h-3.5 sm:w-3.5" />
           </div>
-          <span className="text-xs font-medium text-gray-900 flex-shrink-0">{t("controls.gangsheetSize")}</span>
-          <div className="flex items-center gap-1.5 ml-auto">
-            <input
-              type="number"
-              min="1"
-              max="120"
-              step="0.5"
-              value={widthInputValue}
-              onChange={(e) => { setEditingWidth(true); setWidthInputValue(e.target.value); }}
-              onBlur={(e) => {
-                setEditingWidth(false);
-                const v = parseFloat(e.target.value);
-                if (!isNaN(v) && v > 0) onArtboardWidthChange?.(v);
-                else setWidthInputValue(String(artboardWidth));
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  setEditingWidth(false);
-                  const v = parseFloat(widthInputValue);
-                  if (!isNaN(v) && v > 0) onArtboardWidthChange?.(v);
-                  else setWidthInputValue(String(artboardWidth));
-                  (e.target as HTMLInputElement).blur();
-                }
-              }}
-              className={`h-7 font-semibold text-gray-900 bg-gray-100 border border-gray-200 rounded px-1 text-center focus:outline-none focus:border-cyan-400 ${lang === 'en' ? 'w-[56px] text-xs' : 'w-[64px] text-[10px]'}`}
-            />
-            {lang === 'en' && <span className="text-[10px] text-gray-500">"</span>}
-            <span className={`text-gray-600 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>×</span>
-            <Select value={String(artboardHeight)} onValueChange={(v) => onArtboardHeightChange?.(parseInt(v))}>
-              <SelectTrigger className={`h-7 font-semibold text-gray-900 bg-gray-100 border-gray-200 ${lang === 'en' ? 'w-[68px] text-xs' : 'w-[80px] text-[10px]'}`}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {gangsheetHeights.map((h) => (
-                  <SelectItem key={h} value={String(h)}>
-                    <span className="flex items-center justify-between gap-3 w-full">
-                      <span className={lang !== 'en' ? 'text-[10px]' : ''}>{formatLength(h, lang)}{lang === "en" ? '"' : ""}</span>
-                      {recommendedArtboardHeight === h && (
-                        <span className="text-[10px] text-blue-600 font-medium">
-                          {t("controls.currentBounds")}
-                        </span>
-                      )}
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          <span className="min-w-0 max-w-[5.25rem] shrink truncate text-[10px] font-medium text-gray-900 sm:max-w-none sm:text-xs">{t("controls.gangsheetSize")}</span>
+          {!isLgUp ? (
+            <div className="flex min-w-0 flex-1 items-center justify-end gap-0.5 sm:gap-1.5 -translate-x-[5px]">
+              <div className="flex min-w-0 items-center gap-0.5 sm:gap-1">
+                <span className={`shrink-0 font-semibold text-gray-700 tabular-nums ${lang === 'en' ? 'text-[10px] sm:text-xs' : 'text-[10px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
+                <span className={`shrink-0 text-gray-600 ${lang === 'en' ? 'text-[10px] sm:text-xs' : 'text-[10px]'}`}>×</span>
+                <Select
+                  value={String(artboardHeight)}
+                  onValueChange={(v) => onArtboardHeightChange?.(parseFloat(v))}
+                >
+                  <SelectTrigger
+                    className={`h-6 w-[3.5rem] shrink-0 gap-0.5 border-gray-200 bg-gray-100 pl-1.5 pr-1 font-semibold tabular-nums text-gray-900 sm:h-7 sm:w-[4.5rem] sm:pl-2 sm:pr-1.5 [&>span]:min-w-0 [&>span]:truncate [&>svg]:h-3 [&>svg]:w-3 [&>svg]:shrink-0 sm:[&>svg]:h-3.5 sm:[&>svg]:w-3.5 ${lang === 'en' ? 'text-[10px] sm:text-xs' : 'text-[10px]'}`}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="z-[100]" position="popper" sideOffset={4}>
+                    {gangsheetHeights.map((h) => {
+                      const label = `${formatLength(h, lang)}${lang === "en" ? '"' : ""}`;
+                      return (
+                        <SelectItem
+                          key={h}
+                          value={String(h)}
+                          textValue={label}
+                          className={`tabular-nums ${lang !== 'en' ? 'text-[10px]' : 'text-xs'}`}
+                        >
+                          {label}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+              </div>
+              {selectedVariantPrice != null && (
+                <span className="ml-0.5 shrink-0 whitespace-nowrap rounded-full border border-emerald-600 bg-white px-1.5 py-[1px] text-[9px] font-bold leading-tight text-emerald-600 tabular-nums sm:px-2 sm:py-0.5 sm:text-[10px]">
+                  {formatVariantPriceForDisplay(selectedVariantPrice)}
+                </span>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-1 ml-auto shrink-0 max-w-[min(12rem,46%)]">
+              <span className={`font-semibold text-gray-700 tabular-nums shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
+              <span className={`text-gray-600 shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>×</span>
+              <Select
+                value={String(artboardHeight)}
+                onValueChange={(v) => onArtboardHeightChange?.(parseFloat(v))}
+              >
+                <SelectTrigger
+                  className={`h-7 w-[4.5rem] shrink-0 pl-2 pr-1.5 gap-0.5 font-semibold text-gray-900 bg-gray-100 border-gray-200 tabular-nums [&>span]:min-w-0 [&>span]:truncate [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="z-[100]" position="popper" sideOffset={4}>
+                  {gangsheetHeights.map((h) => {
+                    const label = `${formatLength(h, lang)}${lang === "en" ? '"' : ""}`;
+                    return (
+                      <SelectItem
+                        key={h}
+                        value={String(h)}
+                        textValue={label}
+                        className={`tabular-nums ${lang !== 'en' ? 'text-[10px]' : 'text-xs'}`}
+                      >
+                        {label}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
         </div>
+        {recommendedArtboardHeight != null && recommendedArtboardHeight === artboardHeight && (
+          <div className="border-t border-blue-100/60 bg-blue-50/40 px-2 pb-1.5 pt-0 text-[10px] font-medium leading-snug text-blue-600 sm:px-3 sm:pb-2">
+            {t("controls.currentBounds")}
+          </div>
+        )}
       </div>
 
       {enableFluorescent && imageInfo && fluorPanelContainer && createPortal(
@@ -487,24 +524,58 @@ export default function ControlsSection({
             <span className="text-gray-600">·</span>
             <span className={`tabular-nums ${lang !== 'en' ? 'text-[10px]' : ''}`}>{formatLength(artboardWidth, lang)}{lang === 'en' ? '"' : ''} × {formatLength(artboardHeight, lang)}{lang === 'en' ? '"' : ''}</span>
           </div>
-          <Button
-            onClick={handleDownloadClick}
-            disabled={isProcessing || !canDownload}
-            title={dlTitle}
-            className="flex-1 h-10 bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 text-white rounded-lg shadow-lg shadow-cyan-500/25 font-medium disabled:opacity-50"
-          >
-            {isProcessing ? (
-              <>
-                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
-                {t("editor.processing")}
-              </>
-            ) : (
-              <>
-                <Download className="w-5 h-5 mr-2" />
-                {dlLabel}
-              </>
-            )}
-          </Button>
+          {hasVariantId && onAddToCart ? (
+            <Button
+              onClick={onAddToCart}
+              disabled={isProcessing || !canDownload}
+              title={
+                !canDownload
+                  ? t("controls.uploadFirst")
+                  : isAddingToCart
+                    ? t("controls.addingToCart")
+                    : isProcessing
+                      ? t("editor.processing")
+                      : t("controls.addToCart")
+              }
+              className="flex-1 h-10 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white rounded-lg shadow-lg shadow-emerald-500/25 font-medium disabled:opacity-50"
+            >
+              {isAddingToCart ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
+                  {t("controls.addingToCart")}
+                </>
+              ) : isProcessing ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
+                  {t("editor.processing")}
+                </>
+              ) : (
+                <>
+                  <ShoppingCart className="w-5 h-5 mr-2" />
+                  {t("controls.addToCart")}
+                </>
+              )}
+            </Button>
+          ) : (
+            <Button
+              onClick={handleDownloadClick}
+              disabled={isProcessing || !canDownload}
+              title={dlTitle}
+              className="flex-1 h-10 bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 text-white rounded-lg shadow-lg shadow-cyan-500/25 font-medium disabled:opacity-50"
+            >
+              {isProcessing ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
+                  {t("editor.processing")}
+                </>
+              ) : (
+                <>
+                  <Download className="w-5 h-5 mr-2" />
+                  {dlLabel}
+                </>
+              )}
+            </Button>
+          )}
         </div>,
         downloadContainer
       )}

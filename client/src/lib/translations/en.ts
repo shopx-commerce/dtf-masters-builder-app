@@ -34,9 +34,11 @@ export const en: Record<string, string> = {
   "landing.specialty.press": "325°F • 15s • peel completely cold",
 
   "editor.back": "Back",
+  "editor.noProductSelected": "No product selected",
   "editor.tips": "Have tips and app improvement suggestions? Send it over!",
   "editor.layers": "Layers",
   "editor.addDesigns": "Add Designs",
+  "editor.closeBuilder": "Close builder",
   "editor.addDesignTitle": "Add another image",
   "editor.processing": "Processing...",
   "editor.processingDesign": "Processing your design",
@@ -94,6 +96,8 @@ export const en: Record<string, string> = {
   "controls.designs": "{count} design",
   "controls.designsPlural": "{count} designs",
   "controls.uploadFirst": "Upload an image first",
+  "controls.addToCart": "Add to Cart",
+  "controls.addingToCart": "Adding to Cart…",
   "controls.recommended": "Recommended",
   "controls.currentBounds": "current bounds",
 
