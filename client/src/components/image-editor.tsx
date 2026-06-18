@@ -49,6 +49,27 @@ export type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/li
 import type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
 import { type ProfileConfig, HOT_PEEL_PROFILE } from "@/lib/profiles";
 
+interface InitialDesignStateLayer {
+  layerId?: string;
+  name?: string;
+  selected?: boolean;
+  rotation?: number;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  scaleX?: number;
+  scaleY?: number;
+  settings?: { originalDpi?: number; [k: string]: unknown } | null;
+  asset?: { url?: string; key?: string } | null;
+}
+
+interface InitialDesignState {
+  canvas?: { artboardWidthInches?: number; artboardHeightInches?: number } | null;
+  settings?: { quantity?: number; designGap?: number } | null;
+  layers?: InitialDesignStateLayer[] | null;
+}
+
 function SizeInput({
   value,
   onCommit,
@@ -276,7 +297,7 @@ function clampDesignToArtboard(
   return { nx, ny };
 }
 
-export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFILE, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, variantId: initialVariantId, shopDomain, embedFromShopify }: { onDesignUploaded?: () => void; profile?: ProfileConfig; initialWidth?: number; initialHeight?: number; initialGangsheetHeights?: number[]; initialQuantity?: number; shopifyVariants?: Array<{ id: string; title: string; price: string | null; height: number | null }>; variantId?: string | null; shopDomain?: string | null; embedFromShopify?: boolean } = {}) {
+export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFILE, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, variantId: initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode = false }: { onDesignUploaded?: () => void; profile?: ProfileConfig; initialWidth?: number; initialHeight?: number; initialGangsheetHeights?: number[]; initialQuantity?: number; shopifyVariants?: Array<{ id: string; title: string; price: string | null; height: number | null }>; variantId?: string | null; shopDomain?: string | null; embedFromShopify?: boolean; initialDesignState?: InitialDesignState | null; initialDesignId?: string | null; isEditMode?: boolean } = {}) {
   const { toast } = useToast();
   const { t, lang } = useLanguage();
   const isMobile = useIsMobile();
@@ -291,6 +312,9 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
   const [isProcessing, setIsProcessing] = useState(false);
   /** True after Add to Cart until parent finishes upload/redirect (avoid double-submit). */
   const [isAddingToCart, setIsAddingToCart] = useState(false);
+  const [isUpdateFlow, setIsUpdateFlow] = useState(false);
+  const addToCartStallTimeoutRef = useRef<number | null>(null);
+  const lastAddToCartPngBytesRef = useRef<number>(0);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [artboardWidth, setArtboardWidth] = useState(initialWidth ?? profile.artboardWidth);
@@ -345,6 +369,13 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
   const nudgeSnapshotSavedRef = useRef(false);
   const nudgeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const thumbnailCacheRef = useRef<Map<string, string>>(new Map());
+  const assetDataUrlCacheRef = useRef<
+    Map<string, { sig: string; dataUrl: string; filename?: string; mimeType?: string }>
+  >(new Map());
+  /** R2 refs captured on admin restore — reuse on update when layer pixels unchanged. */
+  const restoredLayerAssetRef = useRef<
+    Map<string, { url: string; key?: string; mimeType?: string; fileSig: string }>
+  >(new Map());
   const multiDragAccumRef = useRef<{ totalDnx: number; totalDny: number; starts: Map<string, {nx: number; ny: number}> } | null>(null);
   const multiResizeStartRef = useRef<Map<string, { nx: number; ny: number; s: number }> | null>(null);
   const multiRotateStartRef = useRef<Map<string, { nx: number; ny: number; rotation: number }> | null>(null);
@@ -1240,7 +1271,6 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
 
     const usableW = artboardWidthRef.current;
     const usableH = artboardHeightRef.current;
-    console.log('[autoArrange] starting', { designCount: currentDesigns.length, usableW, usableH });
 
     const arrangeSelection = selectedDesignIds.size >= 2;
     const designsToArrange = arrangeSelection
@@ -1340,7 +1370,6 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       return;
     }
     if (worker) {
-      console.log('[autoArrange] using worker');
       const requestId = ++_arrangeReqCounter;
       let settled = false;
       const cleanup = () => { worker.removeEventListener('message', handler); clearTimeout(timer); };
@@ -1352,7 +1381,6 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         if (!mountedRef.current) return;
         if (e.data.type === 'error') { console.warn('[autoArrange] worker error:', e.data.error); toast({ title: "Arrange failed", variant: "destructive" }); return; }
         const bestResult: PlacedItem[] = e.data.result;
-        console.log('[autoArrange] worker result:', bestResult.length, 'items, overflows:', bestResult.filter(p => p.overflows).length);
         const anyRotated = bestResult.some(p => p.rotation !== 0);
         const hasOverflow = bestResult.some(p => p.overflows);
         applyResult(bestResult, anyRotated, hasOverflow);
@@ -1379,7 +1407,6 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
         fixedRects,
       });
     } else {
-      console.log('[autoArrange] no worker, using fallback');
       runFallbackArrange();
     }
 
@@ -2307,6 +2334,58 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     };
   }, []);
 
+  const refreshAddToCartStallTimeout = useCallback((pngBytes?: number) => {
+    if (addToCartStallTimeoutRef.current != null) {
+      window.clearTimeout(addToCartStallTimeoutRef.current);
+    }
+    const mb = Math.max(1, (pngBytes || 0) / (1024 * 1024));
+    const minMs = isUpdateFlow ? 4 * 60 * 1000 : 10 * 60 * 1000;
+    const stallMs = Math.max(minMs, Math.ceil(mb * 90_000));
+    addToCartStallTimeoutRef.current = window.setTimeout(() => {
+      setIsAddingToCart(false);
+      setIsProcessing(false);
+      setIsUpdateFlow(false);
+      addToCartStallTimeoutRef.current = null;
+      toast({
+        title: isUpdateFlow ? 'Update stalled' : 'Add to cart stalled',
+        description: `No upload status received for ${Math.round(stallMs / 60_000)} minutes. Please refresh and try again.`,
+        variant: 'destructive',
+      });
+    }, stallMs);
+  }, [toast, isUpdateFlow]);
+
+  useEffect(() => {
+    const onCartStatus = (e: MessageEvent) => {
+      if (e.data?.type !== 'dtf-builder-cart-status') return;
+      if (e.data.status === 'progress' || e.data.status === 'uploaded') {
+        refreshAddToCartStallTimeout(lastAddToCartPngBytesRef.current || undefined);
+      }
+      if (e.data.status === 'error' || e.data.status === 'done') {
+        if (addToCartStallTimeoutRef.current != null) {
+          window.clearTimeout(addToCartStallTimeoutRef.current);
+          addToCartStallTimeoutRef.current = null;
+        }
+        setIsAddingToCart(false);
+        setIsProcessing(false);
+        setIsUpdateFlow(false);
+      }
+      if (e.data.status === 'error') {
+        const detail = typeof e.data.message === 'string' ? e.data.message : (isUpdateFlow ? 'Could not update design' : 'Could not add to cart');
+        toast({ title: isUpdateFlow ? 'Update failed' : 'Add to cart failed', description: detail.slice(0, 180), variant: 'destructive' });
+      }
+      if (e.data.status === 'uploaded') {
+        const msg = typeof e.data.message === 'string' ? e.data.message : (isUpdateFlow ? 'Updating design...' : 'Adding product to cart...');
+        toast({ title: 'Image uploaded', description: msg.slice(0, 180) });
+      }
+      if (e.data.status === 'done') {
+        const doneMsg = typeof e.data.message === 'string' ? e.data.message : (isUpdateFlow ? 'Design updated' : 'Added to cart');
+        toast({ title: isUpdateFlow ? 'Design updated' : 'Added to cart', description: doneMsg.slice(0, 180) });
+      }
+    };
+    window.addEventListener('message', onCartStatus);
+    return () => window.removeEventListener('message', onCartStatus);
+  }, [toast, refreshAddToCartStallTimeout, isUpdateFlow]);
+
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounterRef = useRef(0);
 
@@ -2756,42 +2835,349 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
     }
   }, [imageInfo, designs, artboardWidth, artboardHeight, toast]);
 
+  const fileToDataUrl = useCallback((file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(reader.error || new Error("Failed to read file"));
+      reader.readAsDataURL(file);
+    });
+  }, []);
+
+  const buildDesignStatePayload = useCallback(async () => {
+    const layers = designs.map((d, index) => ({
+      layerId: d.id,
+      name: d.name,
+      type: "image",
+      selected: d.id === selectedDesignId || selectedDesignIds.has(d.id),
+      visible: true,
+      locked: false,
+      opacity: 1,
+      zIndex: index,
+      rotation: d.transform.rotation,
+      x: d.transform.nx,
+      y: d.transform.ny,
+      width: d.widthInches,
+      height: d.heightInches,
+      scaleX: d.transform.s * (d.transform.flipX ? -1 : 1),
+      scaleY: d.transform.s * (d.transform.flipY ? -1 : 1),
+      settings: {
+        alphaThresholded: Boolean(d.alphaThresholded),
+        printFileName: Boolean(d.printFileName),
+        originalDpi: d.originalDPI,
+      },
+    }));
+
+    const savedLayersById = new Map(
+      (Array.isArray((initialDesignState as { layers?: unknown[] } | null)?.layers)
+        ? (initialDesignState as { layers: Array<{ layerId?: string; name?: string; asset?: { url?: string; key?: string; mimeType?: string } }> }).layers
+        : []
+      ).map((l) => [String(l.layerId || ""), l]),
+    );
+
+    const layerAssets = await Promise.all(
+      designs.map(async (d) => {
+        const f = d.imageInfo?.file;
+        const fileSig = f ? `${f.name}:${f.size}:${f.lastModified}` : "";
+        const restored = restoredLayerAssetRef.current.get(d.id);
+        const savedLayer = savedLayersById.get(d.id);
+        const savedUrl = String(savedLayer?.asset?.url || restored?.url || "").trim();
+        const savedKey = savedLayer?.asset?.key || restored?.key;
+
+        if (isEditMode && savedUrl && restored && fileSig && fileSig === restored.fileSig) {
+          return {
+            layerId: d.id,
+            filename: f?.name || savedLayer?.name || null,
+            mimeType: savedLayer?.asset?.mimeType || restored?.mimeType || f?.type || "image/png",
+            url: savedUrl,
+            key: savedKey ? String(savedKey) : undefined,
+          };
+        }
+
+        if (!f) {
+          return {
+            layerId: d.id,
+            filename: null,
+            mimeType: null,
+            dataUrl: null,
+          };
+        }
+        const sig = fileSig;
+        const cached = assetDataUrlCacheRef.current.get(d.id);
+        if (cached?.sig === sig) {
+          return {
+            layerId: d.id,
+            filename: f.name,
+            mimeType: f.type || null,
+            dataUrl: cached.dataUrl,
+          };
+        }
+        const dataUrl = await fileToDataUrl(f);
+        assetDataUrlCacheRef.current.set(d.id, { sig, dataUrl, filename: f.name, mimeType: f.type || undefined });
+        return {
+          layerId: d.id,
+          filename: f.name,
+          mimeType: f.type || null,
+          dataUrl,
+        };
+      }),
+    );
+
+    return {
+      designId:
+        (initialDesignState as { designId?: string | null } | null)?.designId ||
+        initialDesignId ||
+        null,
+      builderPath: typeof window !== "undefined" ? window.location.pathname : null,
+      canvas: {
+        artboardWidthInches: artboardWidth,
+        artboardHeightInches: artboardHeight,
+        outputDpi: 300,
+      },
+      settings: {
+        quantity,
+        designGap,
+      },
+      gangsheetSize: `${artboardWidth}" x ${artboardHeight}"`,
+      layers,
+      layerAssets,
+    };
+  }, [
+    designs,
+    selectedDesignId,
+    selectedDesignIds,
+    fileToDataUrl,
+    artboardWidth,
+    artboardHeight,
+    quantity,
+    designGap,
+    initialDesignState,
+    initialDesignId,
+    isEditMode,
+  ]);
+
+  useEffect(() => {
+    if (!initialDesignState) return;
+    const layers = Array.isArray(initialDesignState.layers) ? initialDesignState.layers : [];
+    if (!layers.length) return;
+
+    let cancelled = false;
+    setIsProcessing(true);
+
+    const loadImageFromAssetUrl = async (assetUrl: string): Promise<{ image: HTMLImageElement; blob: Blob }> => {
+      const response = await fetch(`/api/fetch-binary?url=${encodeURIComponent(assetUrl)}`);
+      if (!response.ok) throw new Error(`Asset load failed (${response.status})`);
+      const blob = await response.blob();
+      const objUrl = URL.createObjectURL(blob);
+      try {
+        const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = () => reject(new Error("Image decode failed"));
+          img.src = objUrl;
+        });
+        return { image, blob };
+      } finally {
+        URL.revokeObjectURL(objUrl);
+      }
+    };
+
+    (async () => {
+      const restoredDesigns: DesignItem[] = [];
+      for (let i = 0; i < layers.length; i++) {
+        if (cancelled) return;
+        const layer = layers[i] || {};
+        const assetUrl = String(layer.asset?.url || "").trim();
+        if (!assetUrl) continue;
+        try {
+          const { image, blob } = await loadImageFromAssetUrl(assetUrl);
+          const fileName =
+            String(layer.name || "").trim() ||
+            String(layer.asset?.key || "").split("/").pop() ||
+            `layer-${i + 1}.png`;
+          const file = new File([blob], fileName, {
+            type: blob.type || "image/png",
+            lastModified: Date.now(),
+          });
+          const layerId = String(layer.layerId || crypto.randomUUID());
+          restoredLayerAssetRef.current.set(layerId, {
+            url: assetUrl,
+            key: layer.asset?.key ? String(layer.asset.key) : undefined,
+            mimeType: layer.asset?.mimeType ? String(layer.asset.mimeType) : undefined,
+            fileSig: `${fileName}:${file.size}:${file.lastModified}`,
+          });
+          const originalDpi = Number(layer.settings?.originalDpi) || 300;
+          const sx = Number(layer.scaleX);
+          const sy = Number(layer.scaleY);
+          const scaleAbs =
+            Number.isFinite(sx) && sx !== 0
+              ? Math.abs(sx)
+              : Number.isFinite(sy) && sy !== 0
+                ? Math.abs(sy)
+                : 1;
+          restoredDesigns.push({
+            id: layerId,
+            name: String(layer.name || fileName),
+            imageInfo: {
+              file,
+              image,
+              originalWidth: image.naturalWidth || image.width,
+              originalHeight: image.naturalHeight || image.height,
+              dpi: originalDpi,
+            },
+            originalDPI: originalDpi,
+            widthInches: Number(layer.width) > 0 ? Number(layer.width) : 1,
+            heightInches: Number(layer.height) > 0 ? Number(layer.height) : 1,
+            transform: {
+              nx: Number.isFinite(Number(layer.x)) ? Number(layer.x) : 0.5,
+              ny: Number.isFinite(Number(layer.y)) ? Number(layer.y) : 0.5,
+              s: scaleAbs,
+              rotation: Number.isFinite(Number(layer.rotation)) ? Number(layer.rotation) : 0,
+              flipX: Number.isFinite(sx) ? sx < 0 : false,
+              flipY: Number.isFinite(sy) ? sy < 0 : false,
+            },
+            alphaThresholded: Boolean(layer.settings?.alphaThresholded),
+            printFileName: Boolean(layer.settings?.printFileName),
+          });
+        } catch (err) {
+          console.warn("[builder] skipped layer restore", err);
+        }
+      }
+
+      if (cancelled || !restoredDesigns.length) return;
+
+      const parsedSize = (() => {
+        const raw =
+          initialDesignState.gangsheet?.size ||
+          (initialDesignState as { gangsheetSize?: string }).gangsheetSize ||
+          "";
+        const m = String(raw).match(/([\d.]+)\s*["']?\s*x\s*([\d.]+)/i);
+        if (!m) return null;
+        const w = Number(m[1]);
+        const h = Number(m[2]);
+        if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null;
+        return { w, h };
+      })();
+      let abW = Number(
+        initialDesignState.canvas?.artboardWidthInches ?? initialDesignState.canvas?.width,
+      );
+      let abH = Number(
+        initialDesignState.canvas?.artboardHeightInches ?? initialDesignState.canvas?.height,
+      );
+      if ((!Number.isFinite(abW) || abW <= 0 || !Number.isFinite(abH) || abH <= 0) && parsedSize) {
+        abW = parsedSize.w;
+        abH = parsedSize.h;
+      }
+      if (Number.isFinite(abW) && abW > 0) setArtboardWidth(abW);
+      if (Number.isFinite(abH) && abH > 0) setArtboardHeight(abH);
+      const restoredQty = Number(initialDesignState.settings?.quantity);
+      if (Number.isFinite(restoredQty) && restoredQty > 0) setQuantity(Math.floor(restoredQty));
+      const restoredGap = Number(initialDesignState.settings?.designGap);
+      if (Number.isFinite(restoredGap) && restoredGap >= 0) setDesignGap(restoredGap);
+
+      setDesigns(restoredDesigns);
+      const selected =
+        restoredDesigns.find((d) =>
+          layers.some((l) => String(l.layerId || "") === d.id && Boolean(l.selected)),
+        ) || restoredDesigns[restoredDesigns.length - 1];
+      setSelectedDesignId(selected?.id || null);
+      if (selected) {
+        setDesignTransform(selected.transform);
+        setImageInfo(selected.imageInfo);
+      }
+    })()
+      .catch((err) => {
+        console.error("[builder] design state restore failed:", err);
+      })
+      .finally(() => {
+        if (!cancelled) setIsProcessing(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialDesignState?.designId, initialDesignState?.version]);
+
   const handleAddToCart = useCallback(async () => {
     if (designs.length === 0) {
       toast({ title: "No designs", description: "Add at least one design before adding to cart.", variant: "destructive" });
       return;
     }
     setIsAddingToCart(true);
+    setIsUpdateFlow(isEditMode);
     setIsProcessing(true);
+    if (addToCartStallTimeoutRef.current != null) {
+      window.clearTimeout(addToCartStallTimeoutRef.current);
+      addToCartStallTimeoutRef.current = null;
+    }
     try {
-      const exportDpi = 72;
-      const outW = Math.round(artboardWidth * exportDpi);
-      const outH = Math.round(artboardHeight * exportDpi);
-      const previewCanvas = document.createElement('canvas');
-      previewCanvas.width = outW;
-      previewCanvas.height = outH;
-      const ctx = previewCanvas.getContext('2d');
-      if (!ctx) throw new Error('Canvas not supported');
-      ctx.clearRect(0, 0, outW, outH);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, outW, outH);
-      for (const design of designs) {
-        const img = design.imageInfo.image;
-        const drawW = Math.max(1, Math.round(design.widthInches * design.transform.s * exportDpi));
-        const drawH = Math.max(1, Math.round(design.heightInches * design.transform.s * exportDpi));
-        const centerX = design.transform.nx * outW;
-        const centerY = design.transform.ny * outH;
-        ctx.save();
-        ctx.translate(centerX, centerY);
-        ctx.rotate((design.transform.rotation * Math.PI) / 180);
-        ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
-        ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
-        ctx.restore();
+      const exportDpi = 300;
+      const outW = Math.max(1, Math.round(artboardWidth * exportDpi));
+      const outH = Math.max(1, Math.round(artboardHeight * exportDpi));
+      const worker = getExportWorker();
+      const useWorker = worker && typeof OffscreenCanvas !== 'undefined';
+      let pngBlob: Blob;
+
+      if (useWorker) {
+        const bitmaps = await Promise.all(designs.map((d) => createImageBitmap(d.imageInfo.image)));
+        const exportDesigns = designs.map((d, i) => ({
+          widthInches: d.widthInches,
+          heightInches: d.heightInches,
+          nx: d.transform.nx,
+          ny: d.transform.ny,
+          s: d.transform.s,
+          rotation: d.transform.rotation,
+          flipX: d.transform.flipX,
+          flipY: d.transform.flipY,
+          bitmap: bitmaps[i],
+          alphaThresholded: d.alphaThresholded,
+          printFileName: d.printFileName,
+          name: d.name,
+        }));
+        const requestId = ++_exportReqCounter;
+        pngBlob = await new Promise<Blob>((resolve, reject) => {
+          const timer = window.setTimeout(() => reject(new Error('Export timed out — sheet may be too large.')), 300_000);
+          const onMessage = (e: MessageEvent) => {
+            if (e.data.requestId !== requestId) return;
+            worker.removeEventListener('message', onMessage);
+            window.clearTimeout(timer);
+            if (e.data.type === 'error') reject(new Error(e.data.error));
+            else resolve(e.data.blob);
+          };
+          worker.addEventListener('message', onMessage);
+          worker.postMessage({ type: 'export', requestId, designs: exportDesigns, outW, outH, exportDpi }, bitmaps);
+        });
+      } else {
+        const exportCanvas = document.createElement('canvas');
+        exportCanvas.width = outW;
+        exportCanvas.height = outH;
+        const ctx = exportCanvas.getContext('2d');
+        if (!ctx) throw new Error('Canvas not supported');
+        ctx.clearRect(0, 0, outW, outH);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        for (const design of designs) {
+          const img = design.imageInfo.image;
+          const drawW = Math.max(1, Math.round(design.widthInches * design.transform.s * exportDpi));
+          const drawH = Math.max(1, Math.round(design.heightInches * design.transform.s * exportDpi));
+          const centerX = design.transform.nx * outW;
+          const centerY = design.transform.ny * outH;
+          ctx.save();
+          ctx.translate(centerX, centerY);
+          ctx.rotate((design.transform.rotation * Math.PI) / 180);
+          ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
+          ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
+          ctx.restore();
+        }
+        const rawBlob: Blob = await new Promise((res, rej) =>
+          exportCanvas.toBlob((b) => (b ? res(b) : rej(new Error('toBlob failed'))), 'image/png'),
+        );
+        exportCanvas.width = 0;
+        exportCanvas.height = 0;
+        pngBlob = await injectPngDpi(rawBlob, exportDpi);
       }
-      const dataUrl = previewCanvas.toDataURL('image/png');
-      const base64 = dataUrl.split(',')[1];
-      previewCanvas.width = 0;
-      previewCanvas.height = 0;
+      const pngBuffer = await pngBlob.arrayBuffer();
+      lastAddToCartPngBytesRef.current = pngBuffer.byteLength;
 
       const selectedVariant = shopifyVariants?.find((v) => v.height != null && Math.abs(v.height - artboardHeight) < 0.01);
       const vid = selectedVariant?.id || initialVariantId || '';
@@ -2800,24 +3186,40 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
       if (!vidDigits) throw new Error('No variant ID available');
       if (!shopDomain) throw new Error('Shop domain missing — open the builder from the storefront product page.');
 
+      const designState = await buildDesignStatePayload();
+
       const message = {
-        type: 'dtf-builder-add-to-cart',
+        type: isEditMode ? 'dtf-builder-save-design' : 'dtf-builder-add-to-cart',
         variantId: vidDigits,
         quantity: quantity,
         gangsheetSize: artboardWidth + '" x ' + artboardHeight + '"',
         shop: shopDomain || '',
-        imageBase64: base64,
+        pngBuffer,
         filename: 'gangsheet-' + Date.now() + '.png',
+        productionExport: true,
+        dedupId: `${isEditMode ? "upd" : "atc"}-${vidDigits}-${Date.now()}`,
+        designState,
+        builderVersion: (import.meta as unknown as { env?: { VITE_APP_VERSION?: string } })?.env?.VITE_APP_VERSION || "builder-unversioned",
       };
-      window.parent.postMessage(message, '*');
+      window.parent.postMessage(message, '*', [pngBuffer]);
+      refreshAddToCartStallTimeout(pngBuffer.byteLength);
       // Keep loading state until parent redirects (upload runs in parent). Do not clear in finally.
     } catch (error) {
       console.error('Add to cart failed:', error);
-      toast({ title: "Failed", description: error instanceof Error ? error.message : "Could not add to cart", variant: "destructive" });
+      toast({
+        title: isEditMode ? "Update failed" : "Failed",
+        description: error instanceof Error ? error.message : (isEditMode ? "Could not update design" : "Could not add to cart"),
+        variant: "destructive"
+      });
       setIsAddingToCart(false);
+      setIsUpdateFlow(false);
       setIsProcessing(false);
+      if (addToCartStallTimeoutRef.current != null) {
+        window.clearTimeout(addToCartStallTimeoutRef.current);
+        addToCartStallTimeoutRef.current = null;
+      }
     }
-  }, [designs, artboardWidth, artboardHeight, quantity, shopifyVariants, initialVariantId, shopDomain, toast]);
+  }, [designs, artboardWidth, artboardHeight, quantity, shopifyVariants, initialVariantId, shopDomain, toast, refreshAddToCartStallTimeout, buildDesignStatePayload, isEditMode]);
 
   const renderActionToolbar = () => (
     <>
@@ -3339,6 +3741,9 @@ export default function ImageEditor({ onDesignUploaded, profile = HOT_PEEL_PROFI
             onAddToCart={handleAddToCart}
             hasVariantId={!!(initialVariantId || shopifyVariants?.length)}
             isAddingToCart={isAddingToCart}
+            addToCartLabel={isEditMode ? "Update Design" : undefined}
+            addingStatusLabel={isEditMode ? "Updating..." : undefined}
+            lockGangsheetSize={isEditMode}
           />
 
           {/* Fluorescent panel portal target */}

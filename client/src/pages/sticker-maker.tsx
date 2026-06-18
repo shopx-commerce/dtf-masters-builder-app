@@ -35,6 +35,17 @@ function getRawParams() {
   return Object.fromEntries(new URLSearchParams(window.location.search).entries());
 }
 
+function resolveStateUrl(stateUrl: string | null, stateKey: string | null): string | null {
+  if (stateUrl && String(stateUrl).trim()) return String(stateUrl).trim();
+  if (!stateKey || !String(stateKey).trim()) return null;
+  const fromEnv = (import.meta as unknown as { env?: { VITE_R2_PUBLIC_BASE_URL?: string } })?.env
+    ?.VITE_R2_PUBLIC_BASE_URL;
+  const base = String(fromEnv || "").trim().replace(/\/$/, "");
+  if (!base) return null;
+  const key = String(stateKey).trim().replace(/^\/+/, "");
+  return `${base}/${key}`;
+}
+
 export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMakerProps) {
   const { t } = useLanguage();
 
@@ -43,8 +54,12 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
   const variantId = rawParams["variant"] ?? rawParams["variant_id"] ?? null;
   const quantity = rawParams["quantity"] ?? null;
   const shopDomain = rawParams["shop"] ?? null;
+  const designId = rawParams["designId"] ?? null;
+  const stateKey = rawParams["stateKey"] ?? null;
+  const stateUrl = resolveStateUrl(rawParams["stateUrl"] ?? null, stateKey);
+  const isAdminEditMode = Boolean(stateUrl || designId || stateKey);
   /** Opened from Shopify (proxy / product) — skip landing-style chrome and upload gate */
-  const embedFromShopify = !!(ctxToken || shopDomain);
+  const embedFromShopify = !!(ctxToken || shopDomain || isAdminEditMode);
   /** Opt-in only: ?storefront=1 fetches sizes from Storefront API (needs env vars). Default is builder_context only. */
   const useStorefront =
     rawParams["storefront"] === "1" || rawParams["storefront"] === "true";
@@ -52,8 +67,16 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
   const allowEditor =
     Boolean(ctxToken) ||
     Boolean(shopDomain) ||
+    isAdminEditMode ||
     (Boolean(variantId) && useStorefront);
   const [variantConfig, setVariantConfig] = useState<VariantConfig | null>(null);
+  const [initialDesignState, setInitialDesignState] = useState<any | null>(null);
+  const [loadingDesignState, setLoadingDesignState] = useState(Boolean(stateUrl));
+  const [effectiveVariantId, setEffectiveVariantId] = useState<string | null>(variantId);
+  const [effectiveShopDomain, setEffectiveShopDomain] = useState<string | null>(shopDomain);
+  const [effectiveQuantity, setEffectiveQuantity] = useState<number | null>(
+    quantity ? parseInt(quantity, 10) || 1 : null,
+  );
   /** Full-screen loader only for optional Storefront fetch — never block UI for ?ctx= (proxy already minted ctx; we hydrate variants in background). */
   const [loading, setLoading] = useState(!!variantId && useStorefront);
 
@@ -94,12 +117,52 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
     setLoading(false);
   }, [ctxToken, variantId, useStorefront]);
 
+  useEffect(() => {
+    if (!stateUrl && !stateKey) return;
+    let cancelled = false;
+    setLoadingDesignState(true);
+    const loaderUrl = stateUrl
+      ? `/api/fetch-json?url=${encodeURIComponent(stateUrl)}`
+      : `/api/design-state?stateKey=${encodeURIComponent(String(stateKey || ""))}`;
+    fetch(loaderUrl)
+      .then((r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        return r.json();
+      })
+      .then((json) => {
+        if (cancelled) return;
+        setInitialDesignState(json);
+        const fromStateVariant = json?.references?.productVariantId;
+        const fromStateShop = json?.shop;
+        const fromStateQty = Number(json?.settings?.quantity);
+        if (!effectiveVariantId && fromStateVariant) {
+          setEffectiveVariantId(String(fromStateVariant));
+        }
+        if (!effectiveShopDomain && fromStateShop) {
+          setEffectiveShopDomain(String(fromStateShop));
+        }
+        if (!effectiveQuantity && Number.isFinite(fromStateQty) && fromStateQty > 0) {
+          setEffectiveQuantity(Math.floor(fromStateQty));
+        }
+      })
+      .catch((err) => {
+        console.error("[builder] design state fetch error:", err);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingDesignState(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [stateUrl, stateKey, effectiveVariantId, effectiveShopDomain, effectiveQuantity]);
+
   const resolvedWidth = variantConfig?.configured ? variantConfig.artboardWidth : undefined;
   const resolvedHeight = variantConfig?.configured ? variantConfig.selectedHeight : undefined;
   const resolvedHeights = variantConfig?.configured ? variantConfig.gangsheetHeights : undefined;
   const resolvedVariants = variantConfig?.configured ? variantConfig.variants : undefined;
   /** Wait for `/api/builder-context` before mounting the editor so artboard size isn’t briefly wrong (first variant / default). */
   const waitingForCtx = Boolean(ctxToken) && variantConfig === null;
+  const waitingForEditState = Boolean(stateUrl || stateKey) && loadingDesignState;
 
   if (loading) {
     return (
@@ -245,7 +308,7 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
       )}
 
       <main className="flex-1 min-h-0">
-        {waitingForCtx ? (
+        {waitingForCtx || waitingForEditState ? (
           <div className="h-full flex items-center justify-center">
             <div className="w-8 h-8 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" aria-hidden />
           </div>
@@ -255,11 +318,14 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
             initialWidth={resolvedWidth}
             initialHeight={resolvedHeight}
             initialGangsheetHeights={resolvedHeights}
-            initialQuantity={quantity ? parseInt(quantity, 10) || 1 : 1}
+            initialQuantity={effectiveQuantity || 1}
             shopifyVariants={resolvedVariants}
-            variantId={variantId}
-            shopDomain={shopDomain}
+            variantId={effectiveVariantId}
+            shopDomain={effectiveShopDomain}
             embedFromShopify={embedFromShopify}
+            initialDesignState={initialDesignState}
+            initialDesignId={designId}
+            isEditMode={isAdminEditMode}
           />
         )}
       </main>

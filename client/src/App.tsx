@@ -16,6 +16,7 @@ function Router() {
     <Switch>
       <Route path="/" component={Landing} />
       <Route path="/hot-peel">{() => <StickerMaker profile={HOT_PEEL_PROFILE} />}</Route>
+      <Route path="/admin-edit">{() => <StickerMaker profile={HOT_PEEL_PROFILE} />}</Route>
       <Route path="/fluorescent">{() => <StickerMaker profile={FLUORESCENT_PROFILE} />}</Route>
       <Route path="/uv-dtf">{() => <StickerMaker profile={UV_DTF_PROFILE} />}</Route>
       <Route path="/specialty-dtf">{() => <StickerMaker profile={SPECIALTY_DTF_PROFILE} />}</Route>

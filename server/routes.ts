@@ -244,7 +244,6 @@ function storeBuilderContextFromBody(body: Record<string, unknown>): string {
     ...(shopTop || shopFromContext ? { shop: shopTop ?? shopFromContext } : {}),
   };
   builderContextStore.set(token, { at: Date.now(), payload });
-  console.log('[builder-context] stored', token.slice(0, 8) + '…', payload.variants?.length, 'variants');
   return token;
 }
 
@@ -272,6 +271,115 @@ const upload = multer({
 export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
+  function parseExternalUrl(raw: unknown): URL | null {
+    const s = String(raw || "").trim();
+    if (!s) return null;
+    try {
+      const u = new URL(s);
+      if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+      return u;
+    } catch {
+      return null;
+    }
+  }
+
+  async function fetchViaR2ApiIfPossible(target: URL): Promise<Response | null> {
+    const accountId = String(process.env.R2_ACCOUNT_ID || "").trim();
+    const apiToken = String(process.env.R2_API_TOKEN || "").trim();
+    const bucketName = String(process.env.R2_BUCKET_NAME || "stickers").trim();
+    if (!accountId || !apiToken || !bucketName) return null;
+    const host = target.host.toLowerCase();
+    const looksLikeR2Public = host.endsWith(".r2.dev") || host.includes(".r2.cloudflarestorage.com");
+    if (!looksLikeR2Public) return null;
+    const key = target.pathname.replace(/^\/+/, "");
+    if (!key) return null;
+    const encodedKey = key.split("/").map((seg) => encodeURIComponent(seg)).join("/");
+    const apiUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/r2/buckets/${encodeURIComponent(bucketName)}/objects/${encodedKey}`;
+    return fetch(apiUrl, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+      },
+    });
+  }
+
+  async function fetchR2ObjectByKey(key: string): Promise<Response | null> {
+    const accountId = String(process.env.R2_ACCOUNT_ID || "").trim();
+    const apiToken = String(process.env.R2_API_TOKEN || "").trim();
+    const bucketName = String(process.env.R2_BUCKET_NAME || "stickers").trim();
+    const cleanKey = String(key || "").trim().replace(/^\/+/, "");
+    if (!accountId || !apiToken || !bucketName || !cleanKey) return null;
+    const encodedKey = cleanKey.split("/").map((seg) => encodeURIComponent(seg)).join("/");
+    const apiUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/r2/buckets/${encodeURIComponent(bucketName)}/objects/${encodedKey}`;
+    return fetch(apiUrl, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+      },
+    });
+  }
+
+  app.get("/api/fetch-json", async (req, res) => {
+    const target = parseExternalUrl(req.query.url);
+    if (!target) {
+      return res.status(400).json({ error: "Valid http/https url is required" });
+    }
+    try {
+      const upstream = (await fetchViaR2ApiIfPossible(target)) || (await fetch(target.toString()));
+      if (!upstream.ok) {
+        return res.status(502).json({ error: `Upstream returned ${upstream.status}` });
+      }
+      const json = await upstream.json();
+      return res.json(json);
+    } catch (err) {
+      console.error("[fetch-json] error:", err);
+      return res.status(500).json({ error: "Failed to fetch JSON" });
+    }
+  });
+
+  app.get("/api/fetch-binary", async (req, res) => {
+    const target = parseExternalUrl(req.query.url);
+    if (!target) {
+      return res.status(400).json({ error: "Valid http/https url is required" });
+    }
+    try {
+      const upstream = (await fetchViaR2ApiIfPossible(target)) || (await fetch(target.toString()));
+      if (!upstream.ok) {
+        return res.status(502).json({ error: `Upstream returned ${upstream.status}` });
+      }
+      const contentType = upstream.headers.get("content-type") || "application/octet-stream";
+      const cacheControl = upstream.headers.get("cache-control") || "public, max-age=300";
+      const body = Buffer.from(await upstream.arrayBuffer());
+      res.setHeader("content-type", contentType);
+      res.setHeader("cache-control", cacheControl);
+      return res.status(200).send(body);
+    } catch (err) {
+      console.error("[fetch-binary] error:", err);
+      return res.status(500).json({ error: "Failed to fetch binary" });
+    }
+  });
+
+  app.get("/api/design-state", async (req, res) => {
+    const stateKey = String(req.query.stateKey || "").trim();
+    if (!stateKey) {
+      return res.status(400).json({ error: "stateKey is required" });
+    }
+    try {
+      const upstream = await fetchR2ObjectByKey(stateKey);
+      if (!upstream) {
+        return res.status(500).json({ error: "R2 credentials are not configured on builder app" });
+      }
+      if (!upstream.ok) {
+        return res.status(502).json({ error: `R2 object read failed (${upstream.status})` });
+      }
+      const json = await upstream.json();
+      return res.json(json);
+    } catch (err) {
+      console.error("[design-state] error:", err);
+      return res.status(500).json({ error: "Failed to load design state" });
+    }
   });
 
   /**
@@ -416,8 +524,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       allHeights.sort((a, b) => a - b);
-
-      console.log(`[Shopify] Product: "${variant.product?.title}" | Variants (${variantList.length}):`, variantList);
 
       return res.json({
         configured: true,
