@@ -5,7 +5,15 @@ import sharp from "sharp";
 import express from "express";
 import { nanoid } from "nanoid";
 
-import sgMail from "@sendgrid/mail";
+import { fetchStorefrontVariantList } from "./lib/storefront-variant-config";
+import { normalizeShopifyPrice } from "./lib/shopify-price";
+import {
+  assertSafeExternalUrl,
+  fetchSafeExternalUrl,
+  isAllowedDesignObjectKey,
+  isAllowedDesignStateKey,
+  parseExternalUrl,
+} from "./lib/safe-external-url";
 
 // ─── Shopify helpers ────────────────────────────────────────────────────────
 
@@ -149,7 +157,7 @@ function normalizeBuilderContextPayload(
         if (isNaN(height)) height = pair.height;
       }
     }
-    const price = row.price != null ? String(row.price) : null;
+    const price = row.price != null ? normalizeShopifyPrice(row.price) : null;
     const sku = row.sku != null ? String(row.sku) : null;
     return {
       id,
@@ -273,18 +281,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
 
-  function parseExternalUrl(raw: unknown): URL | null {
-    const s = String(raw || "").trim();
-    if (!s) return null;
-    try {
-      const u = new URL(s);
-      if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-      return u;
-    } catch {
-      return null;
-    }
-  }
-
   async function fetchViaR2ApiIfPossible(target: URL): Promise<Response | null> {
     const accountId = String(process.env.R2_ACCOUNT_ID || "").trim();
     const apiToken = String(process.env.R2_API_TOKEN || "").trim();
@@ -327,7 +323,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(400).json({ error: "Valid http/https url is required" });
     }
     try {
-      const upstream = (await fetchViaR2ApiIfPossible(target)) || (await fetch(target.toString()));
+      assertSafeExternalUrl(target.toString());
+      const upstream = (await fetchViaR2ApiIfPossible(target)) || (await fetchSafeExternalUrl(target.toString()));
       if (!upstream.ok) {
         return res.status(502).json({ error: `Upstream returned ${upstream.status}` });
       }
@@ -335,7 +332,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.json(json);
     } catch (err) {
       console.error("[fetch-json] error:", err);
-      return res.status(500).json({ error: "Failed to fetch JSON" });
+      const message = err instanceof Error ? err.message : "Failed to fetch JSON";
+      const status = message.includes("not allowed") ? 403 : 500;
+      return res.status(status).json({ error: message });
     }
   });
 
@@ -345,7 +344,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(400).json({ error: "Valid http/https url is required" });
     }
     try {
-      const upstream = (await fetchViaR2ApiIfPossible(target)) || (await fetch(target.toString()));
+      assertSafeExternalUrl(target.toString());
+      const upstream = (await fetchViaR2ApiIfPossible(target)) || (await fetchSafeExternalUrl(target.toString()));
       if (!upstream.ok) {
         return res.status(502).json({ error: `Upstream returned ${upstream.status}` });
       }
@@ -357,7 +357,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(200).send(body);
     } catch (err) {
       console.error("[fetch-binary] error:", err);
-      return res.status(500).json({ error: "Failed to fetch binary" });
+      const message = err instanceof Error ? err.message : "Failed to fetch binary";
+      const status = message.includes("not allowed") ? 403 : 500;
+      return res.status(status).json({ error: message });
     }
   });
 
@@ -365,6 +367,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const stateKey = String(req.query.stateKey || "").trim();
     if (!stateKey) {
       return res.status(400).json({ error: "stateKey is required" });
+    }
+    if (!isAllowedDesignStateKey(stateKey)) {
+      return res.status(403).json({ error: "stateKey not allowed" });
     }
     try {
       const upstream = await fetchR2ObjectByKey(stateKey);
@@ -382,6 +387,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/r2-object", async (req, res) => {
+    const key = String(req.query.key || "").trim();
+    if (!key) {
+      return res.status(400).json({ error: "key is required" });
+    }
+    if (!isAllowedDesignObjectKey(key)) {
+      return res.status(403).json({ error: "key not allowed" });
+    }
+    try {
+      const upstream = await fetchR2ObjectByKey(key);
+      if (!upstream) {
+        return res.status(500).json({ error: "R2 credentials are not configured on builder app" });
+      }
+      if (!upstream.ok) {
+        return res.status(502).json({ error: `R2 object read failed (${upstream.status})` });
+      }
+      const contentType = upstream.headers.get("content-type") || "application/octet-stream";
+      const body = Buffer.from(await upstream.arrayBuffer());
+      res.setHeader("content-type", contentType);
+      res.setHeader("cache-control", "public, max-age=300");
+      return res.status(200).send(body);
+    } catch (err) {
+      console.error("[r2-object] error:", err);
+      return res.status(500).json({ error: "Failed to load object" });
+    }
+  });
+
   /**
    * Shopify proxy JSON entrypoint.
    * Body: variant, quantity, shop (optional), builder_path, builder_context (object | JSON string).
@@ -396,9 +428,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const v = body.variant ?? body.variant_id;
       const qn = body.quantity;
       const shop = body.shop;
+      const productId = body.product_id ?? body.productId;
+      const productHandle = body.product_handle ?? body.productHandle;
       if (v != null) q.set('variant', String(v));
       if (qn != null) q.set('quantity', String(qn));
       if (shop != null) q.set('shop', String(shop));
+      if (productId != null) q.set('product_id', String(productId));
+      if (productHandle != null) q.set('product_handle', String(productHandle));
       const rawPath = body.builder_path ?? body.builderPath ?? '/uv-dtf';
       const normalizedPath =
         typeof rawPath === 'string' && rawPath.trim() !== ''
@@ -467,6 +503,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(404).json({ error: 'Context expired or not found', configured: false });
     }
     return res.json(entry.payload);
+  });
+
+  app.get("/api/storefront-variant-config", async (req, res) => {
+    const variantId = String(req.query.variant ?? req.query.variant_id ?? "").trim();
+    const productId = String(req.query.product_id ?? req.query.productId ?? "").trim();
+    const productHandle = String(req.query.product_handle ?? req.query.productHandle ?? "").trim();
+    if (!variantId) {
+      return res.status(400).json({ configured: false, error: "variant or variant_id param required" });
+    }
+    try {
+      const raw = await fetchStorefrontVariantList(variantId, { productId, productHandle });
+      if (!raw) {
+        return res.status(502).json({
+          configured: false,
+          error: "Could not load variants (pass product_id/product_handle; set SHOP_CUSTOM_DOMAIN on builder)",
+        });
+      }
+      const normalized = normalizeBuilderContextPayload(
+        raw as unknown as Record<string, unknown>,
+        variantId,
+      );
+      return res.json({ ...normalized, source: "storefront-ajax" });
+    } catch (err) {
+      console.error("[storefront-variant-config] error:", err);
+      return res.status(500).json({ configured: false, error: "Failed to load variant config" });
+    }
   });
 
   // ── Optional: Storefront API (only used when client passes ?storefront=1 — not needed for builder_context flow)

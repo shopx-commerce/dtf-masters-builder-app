@@ -97,7 +97,7 @@ export const es: Record<string, string> = {
   "controls.designsPlural": "{count} diseños",
   "controls.uploadFirst": "Sube una imagen primero",
   "controls.addToCart": "Añadir al carrito",
-  "controls.addingToCart": "Añadiendo al carrito…",
+  "controls.addingToCart": "Añadiendo al carrito",
   "controls.recommended": "Recomendado",
   "controls.currentBounds": "límites actuales",
 

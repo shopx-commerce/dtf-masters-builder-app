@@ -1,0 +1,36 @@
+import type { ImageTransform } from "@/lib/types";
+
+/** Minimum stall timeout before add-to-cart / update is considered stuck (admin edit). */
+export const ADD_TO_CART_STALL_MIN_MS_UPDATE = 4 * 60 * 1000;
+
+/** Minimum stall timeout before add-to-cart is considered stuck (new design). */
+export const ADD_TO_CART_STALL_MIN_MS_NEW = 10 * 60 * 1000;
+
+/** Extra stall time per MB of PNG uploaded (ms). */
+export const ADD_TO_CART_STALL_MS_PER_MB = 90_000;
+
+/** Default layer width/height in inches when restoring saved state. */
+export const DEFAULT_LAYER_SIZE_INCHES = 1;
+
+/** Default normalized X/Y when layer position missing from saved state. */
+export const DEFAULT_LAYER_CENTER_NX = 0.5;
+export const DEFAULT_LAYER_CENTER_NY = 0.5;
+
+/** Default scale when restoring layer transform. */
+export const DEFAULT_LAYER_SCALE = 1;
+
+/** Default rotation when restoring layer transform. */
+export const DEFAULT_LAYER_ROTATION = 0;
+
+/** Default transform for a new design on the artboard. */
+export const DEFAULT_DESIGN_TRANSFORM: ImageTransform = {
+  nx: DEFAULT_LAYER_CENTER_NX,
+  ny: DEFAULT_LAYER_CENTER_NY,
+  s: DEFAULT_LAYER_SCALE,
+  rotation: DEFAULT_LAYER_ROTATION,
+};
+
+export const RASTER_DPI_FALLBACK = 144;
+export const EXPORT_DPI = 300;
+export const ADD_TO_CART_LABEL_MAX_LEN = 34;
+export const EXPORT_TIMEOUT_MS = 300_000;
