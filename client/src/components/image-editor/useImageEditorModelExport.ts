@@ -1,45 +1,13 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { flushSync } from "react-dom";
-import { cropImageToContent, cropImageToContentAsync, hasCleanAlpha, isOpaqueRasterUpload } from "@/lib/image-crop";
-import { parsePDF, type ParsedPDFData } from "@/lib/pdf-parser";
-import { useToast } from "@/hooks/use-toast";
-import { useHistory, type HistorySnapshot } from "@/hooks/use-history";
-import { useIsMobile } from "@/hooks/use-mobile";
-import { useMediaQuery } from "@/hooks/use-media-query";
-import { useLanguage } from "@/lib/i18n";
-import { getSelectedVariantPrice } from "@/lib/variant-price";
-import { uploadProductionToR2 } from "@/lib/r2-direct-upload";
+import { useCallback } from "react";
+import { EXPORT_DPI } from "./constants";
 import {
-  DEFAULT_DESIGN_TRANSFORM,
-  DEFAULT_LAYER_CENTER_NX,
-  DEFAULT_LAYER_CENTER_NY,
-  EXPORT_DPI,
-  EXPORT_TIMEOUT_MS,
-  RASTER_DPI_FALLBACK,
-} from "./constants";
-import {
-  clampDesignToArtboard,
-  fetchImageDpi,
-  getArrangeWorker,
-  getEffectiveHeight,
   getExportWorker,
-  getRotatedBounds,
-  getStampExtra,
   injectPngDpi,
-  inchesFromPixelsPair,
-  imageHasCleanAlpha,
-  nextExportRequestId,
-  normalizeRasterDpiForInches,
   exportWorkerResultToBlob,
-  shortAddToCartLabel,
 } from "./utils";
-import { useAddToCartStall } from "./use-add-to-cart-stall";
-import type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
-import { HOT_PEEL_PROFILE } from "@/lib/profiles";
-import type { ImageEditorProps } from "./types";
-import type { SpotPreviewData } from "../controls-section";
+import type { ImageEditorBagAfterUploadCrop } from "./image-editor-hook-bag.types";
 
-export function useImageEditorModelExport(bag: Record<string, unknown>) {
+export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
   const {
     onDesignUploaded,
     profile,
@@ -250,7 +218,7 @@ export function useImageEditorModelExport(bag: Record<string, unknown>) {
         const { PDFDocument, degrees } = await import('pdf-lib');
         const { addSpotColorVectorsToPDF } = await import('@/lib/spot-color-vectors');
 
-        const exportDpi = 300;
+        const exportDpi = EXPORT_DPI;
         const pageWidthPt = artboardWidth * 72;
         const pageHeightPt = artboardHeight * 72;
         const pdfDoc = await PDFDocument.create();
@@ -365,14 +333,14 @@ export function useImageEditorModelExport(bag: Record<string, unknown>) {
 
         let exportDpi: number;
         if (useWorker) {
-          exportDpi = 300;
+          exportDpi = EXPORT_DPI;
         } else {
           const MAX_FALLBACK_PIXELS = 80_000_000;
           const MAX_FALLBACK_DIM = 12_000;
           const dpiByArea = Math.sqrt(MAX_FALLBACK_PIXELS / Math.max(1e-6, artboardWidth * artboardHeight));
           const dpiByDim = Math.min(MAX_FALLBACK_DIM / artboardWidth, MAX_FALLBACK_DIM / artboardHeight);
-          exportDpi = Math.min(300, dpiByArea, dpiByDim);
-          if (exportDpi < 300) {
+          exportDpi = Math.min(EXPORT_DPI, dpiByArea, dpiByDim);
+          if (exportDpi < EXPORT_DPI) {
             toast({
               title: t("toast.largeSheet"),
               description: t("toast.largeSheetDesc", { dpi: Math.floor(exportDpi) }),
@@ -515,5 +483,9 @@ export function useImageEditorModelExport(bag: Record<string, unknown>) {
   }, []);
 
 
-  return { onDesignUploaded, profile, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode, toast, t, lang, isMobile, isLgUp, imageInfo, setImageInfo, resizeSettings, setResizeSettings, isProcessing, setIsProcessing, isAddingToCart, setIsAddingToCart, isUpdateFlow, setIsUpdateFlow, addToCartProgressLabel, setAddToCartProgressLabel, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, refreshAddToCartStallTimeout, isUploading, setIsUploading, uploadProgress, setUploadProgress, artboardWidth, setArtboardWidth, artboardHeight, setArtboardHeight, quantity, setQuantity, designGap, setDesignGap, duplicateCount, setDuplicateCount, clampDuplicateCount, parseDuplicateCount, handleDuplicateCountKeyDown, designTransform, setDesignTransform, designs, setDesigns, selectedDesignId, setSelectedDesignId, selectedDesignIds, setSelectedDesignIds, mobilePanel, setMobilePanel, showDesignInfo, setShowDesignInfo, selectionZoomActive, setSelectionZoomActive, editingLayerName, setEditingLayerName, editingNameValue, setEditingNameValue, clipboardRef, proportionalLock, setProportionalLock, designInfoRef, sidebarFileRef, headerUploadInputRef, canvasRef, downloadContainer, setDownloadContainer, spotPreviewData, setSpotPreviewData, fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer, copySpotSelectionsRef, contextMenu, setContextMenu, cropModalDesignId, setCropModalDesignId, pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo, mountedRef, designsRef, nudgeSnapshotSavedRef, nudgeTimeoutRef, thumbnailCacheRef, assetDataUrlCacheRef, restoredLayerAssetRef, multiDragAccumRef, multiResizeStartRef, multiRotateStartRef, snapshotCacheRef, getSnapshot, saveSnapshot, applySnapshot, handleUndo, handleRedo, handleInteractionEnd, selectedDesign, activeImageInfo, activeDesignTransform, activeWidthInches, activeHeightInches, activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, handleSelectDesign, handleMultiSelect, getLayerThumbnail, handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta, handleEffectiveSizeChange, isArtboardFull, handleDuplicateDesign, handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleCopySelected, handlePaste, handleDeleteGroup, handleDeleteDesign, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleCanvasContextMenu, getAlignNxNy, handleAlignCorner, contentFillCacheRef, handleAutoArrange, handleArtboardResize, GANGSHEET_HEIGHTS, MAX_ARTBOARD_HEIGHT, recommendedArtboardHeight, handleExpandArtboard, handleUndoRef, handleRedoRef, handleAutoArrangeRef, handleDuplicateDesignRef, handleDeleteDesignRef, handleDeleteMultiRef, handleDuplicateSelectedRef, handleCopySelectedRef, handlePasteRef, handleRotate90Ref, selectedDesignIdRef, showDesignInfoRef, saveSnapshotRef, artboardWidthRef, artboardHeightRef, selectedDesignIdsRef, applyImageDirectly, handleFallbackImage, handleImageUpload, handlePDFUpload, handleBatchStart, handleFileUploadUnified, processSidebarFile, handleSidebarFileChange, isDragOver, setIsDragOver, dragCounterRef, handleDragEnter, handleDragLeave, handleDragOver, handleDrop, handleResizeChange, thresholdAlphaForDesign, handleThresholdAlpha, handleThresholdAlphaAll, handleCropDesign, handleCropApply, handleDownload, fileToDataUrl };
+  return {
+    ...bag,
+    handleDownload,
+    fileToDataUrl,
+  };
 }

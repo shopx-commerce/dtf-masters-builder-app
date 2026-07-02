@@ -282,6 +282,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   async function fetchViaR2ApiIfPossible(target: URL): Promise<Response | null> {
+    assertSafeExternalUrl(target.toString());
     const accountId = String(process.env.R2_ACCOUNT_ID || "").trim();
     const apiToken = String(process.env.R2_API_TOKEN || "").trim();
     const bucketName = String(process.env.R2_BUCKET_NAME || "stickers").trim();

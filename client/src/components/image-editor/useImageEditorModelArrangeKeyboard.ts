@@ -1,45 +1,17 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { flushSync } from "react-dom";
-import { cropImageToContent, cropImageToContentAsync, hasCleanAlpha, isOpaqueRasterUpload } from "@/lib/image-crop";
-import { parsePDF, type ParsedPDFData } from "@/lib/pdf-parser";
-import { useToast } from "@/hooks/use-toast";
-import { useHistory, type HistorySnapshot } from "@/hooks/use-history";
-import { useIsMobile } from "@/hooks/use-mobile";
-import { useMediaQuery } from "@/hooks/use-media-query";
-import { useLanguage } from "@/lib/i18n";
+import { useRef, useCallback, useEffect, useMemo } from "react";
 import { formatDimensions } from "@/lib/format-length";
-import { getSelectedVariantPrice } from "@/lib/variant-price";
-import { uploadProductionToR2 } from "@/lib/r2-direct-upload";
-import {
-  DEFAULT_DESIGN_TRANSFORM,
-  DEFAULT_LAYER_CENTER_NX,
-  DEFAULT_LAYER_CENTER_NY,
-  EXPORT_DPI,
-  EXPORT_TIMEOUT_MS,
-  RASTER_DPI_FALLBACK,
-} from "./constants";
 import {
   clampDesignToArtboard,
-  fetchImageDpi,
   getArrangeWorker,
   getEffectiveHeight,
-  getExportWorker,
   getRotatedBounds,
   getStampExtra,
-  injectPngDpi,
-  inchesFromPixelsPair,
-  imageHasCleanAlpha,
   nextArrangeRequestId,
-  normalizeRasterDpiForInches,
-  shortAddToCartLabel,
 } from "./utils";
-import { useAddToCartStall } from "./use-add-to-cart-stall";
-import type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
-import { HOT_PEEL_PROFILE } from "@/lib/profiles";
-import type { ImageEditorProps } from "./types";
-import type { SpotPreviewData } from "../controls-section";
+import type { ImageInfo, DesignItem } from "@/lib/types";
+import type { ImageEditorBagAfterDesign } from "./image-editor-hook-bag.types";
 
-export function useImageEditorModelArrangeKeyboard(bag: Record<string, unknown>) {
+export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesign) {
   const {
     onDesignUploaded,
     profile,
@@ -621,7 +593,7 @@ export function useImageEditorModelArrangeKeyboard(bag: Record<string, unknown>)
     if (artboardHeight >= MAX_ARTBOARD_HEIGHT) return;
     const nextHeight = GANGSHEET_HEIGHTS.find(h => h > artboardHeight) ?? MAX_ARTBOARD_HEIGHT;
     handleArtboardResize(artboardWidth, nextHeight);
-  }, [artboardHeight, artboardWidth, handleArtboardResize]);
+  }, [artboardHeight, artboardWidth, handleArtboardResize, GANGSHEET_HEIGHTS, MAX_ARTBOARD_HEIGHT]);
 
   // Stable refs for keyboard handler to avoid frequent re-registration
   const handleUndoRef = useRef(handleUndo);
@@ -928,5 +900,29 @@ export function useImageEditorModelArrangeKeyboard(bag: Record<string, unknown>)
   }, [saveSnapshot, toast]);
 
 
-  return { onDesignUploaded, profile, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode, toast, t, lang, isMobile, isLgUp, imageInfo, setImageInfo, resizeSettings, setResizeSettings, isProcessing, setIsProcessing, isAddingToCart, setIsAddingToCart, isUpdateFlow, setIsUpdateFlow, addToCartProgressLabel, setAddToCartProgressLabel, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, refreshAddToCartStallTimeout, isUploading, setIsUploading, uploadProgress, setUploadProgress, artboardWidth, setArtboardWidth, artboardHeight, setArtboardHeight, quantity, setQuantity, designGap, setDesignGap, duplicateCount, setDuplicateCount, clampDuplicateCount, parseDuplicateCount, handleDuplicateCountKeyDown, designTransform, setDesignTransform, designs, setDesigns, selectedDesignId, setSelectedDesignId, selectedDesignIds, setSelectedDesignIds, mobilePanel, setMobilePanel, showDesignInfo, setShowDesignInfo, selectionZoomActive, setSelectionZoomActive, editingLayerName, setEditingLayerName, editingNameValue, setEditingNameValue, clipboardRef, proportionalLock, setProportionalLock, designInfoRef, sidebarFileRef, headerUploadInputRef, canvasRef, downloadContainer, setDownloadContainer, spotPreviewData, setSpotPreviewData, fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer, copySpotSelectionsRef, contextMenu, setContextMenu, cropModalDesignId, setCropModalDesignId, pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo, mountedRef, designsRef, nudgeSnapshotSavedRef, nudgeTimeoutRef, thumbnailCacheRef, assetDataUrlCacheRef, restoredLayerAssetRef, multiDragAccumRef, multiResizeStartRef, multiRotateStartRef, snapshotCacheRef, getSnapshot, saveSnapshot, applySnapshot, handleUndo, handleRedo, handleInteractionEnd, selectedDesign, activeImageInfo, activeDesignTransform, activeWidthInches, activeHeightInches, activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, handleSelectDesign, handleMultiSelect, getLayerThumbnail, handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta, handleEffectiveSizeChange, isArtboardFull, handleDuplicateDesign, handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleCopySelected, handlePaste, handleDeleteGroup, handleDeleteDesign, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleCanvasContextMenu, getAlignNxNy, handleAlignCorner, contentFillCacheRef, handleAutoArrange, handleArtboardResize, GANGSHEET_HEIGHTS, MAX_ARTBOARD_HEIGHT, recommendedArtboardHeight, handleExpandArtboard, handleUndoRef, handleRedoRef, handleAutoArrangeRef, handleDuplicateDesignRef, handleDeleteDesignRef, handleDeleteMultiRef, handleDuplicateSelectedRef, handleCopySelectedRef, handlePasteRef, handleRotate90Ref, selectedDesignIdRef, showDesignInfoRef, saveSnapshotRef, artboardWidthRef, artboardHeightRef, selectedDesignIdsRef, applyImageDirectly };
+  return {
+    ...bag,
+    getAlignNxNy,
+    handleAlignCorner,
+    handleAutoArrange,
+    handleArtboardResize,
+    GANGSHEET_HEIGHTS,
+    MAX_ARTBOARD_HEIGHT,
+    recommendedArtboardHeight,
+    handleExpandArtboard,
+    handleUndoRef,
+    handleRedoRef,
+    handleDuplicateDesignRef,
+    handleDeleteDesignRef,
+    handleDeleteMultiRef,
+    handleDuplicateSelectedRef,
+    handleCopySelectedRef,
+    handlePasteRef,
+    handleRotate90Ref,
+    selectedDesignIdRef,
+    showDesignInfoRef,
+    saveSnapshotRef,
+    selectedDesignIdsRef,
+    applyImageDirectly,
+  };
 }

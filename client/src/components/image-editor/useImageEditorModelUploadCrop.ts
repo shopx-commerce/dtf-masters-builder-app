@@ -1,44 +1,23 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { flushSync } from "react-dom";
-import { cropImageToContent, cropImageToContentAsync, hasCleanAlpha, isOpaqueRasterUpload } from "@/lib/image-crop";
+import { useState, useRef, useCallback, useEffect } from "react";
+import { cropImageToContent, cropImageToContentAsync, isOpaqueRasterUpload } from "@/lib/image-crop";
 import { parsePDF, type ParsedPDFData } from "@/lib/pdf-parser";
-import { useToast } from "@/hooks/use-toast";
-import { useHistory, type HistorySnapshot } from "@/hooks/use-history";
-import { useIsMobile } from "@/hooks/use-mobile";
-import { useMediaQuery } from "@/hooks/use-media-query";
-import { useLanguage } from "@/lib/i18n";
-import { getSelectedVariantPrice } from "@/lib/variant-price";
-import { uploadProductionToR2 } from "@/lib/r2-direct-upload";
 import {
-  DEFAULT_DESIGN_TRANSFORM,
-  DEFAULT_LAYER_CENTER_NX,
-  DEFAULT_LAYER_CENTER_NY,
   EXPORT_DPI,
-  EXPORT_TIMEOUT_MS,
+  LAYER_THUMBNAIL_SIZE,
+  LOW_RES_EFFECTIVE_DPI_THRESHOLD,
+  MAX_STORED_IMAGE_DIMENSION,
   RASTER_DPI_FALLBACK,
 } from "./constants";
 import {
-  clampDesignToArtboard,
   fetchImageDpi,
-  getArrangeWorker,
-  getEffectiveHeight,
-  getExportWorker,
-  getRotatedBounds,
-  getStampExtra,
-  injectPngDpi,
-  inchesFromPixelsPair,
   imageHasCleanAlpha,
-  nextExportRequestId,
+  inchesFromPixelsPair,
   normalizeRasterDpiForInches,
-  shortAddToCartLabel,
 } from "./utils";
-import { useAddToCartStall } from "./use-add-to-cart-stall";
-import type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
-import { HOT_PEEL_PROFILE } from "@/lib/profiles";
-import type { ImageEditorProps } from "./types";
-import type { SpotPreviewData } from "../controls-section";
+import type { ImageInfo } from "@/lib/types";
+import type { ImageEditorBagAfterArrange } from "./image-editor-hook-bag.types";
 
-export function useImageEditorModelUploadCrop(bag: Record<string, unknown>) {
+export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
   const {
     onDesignUploaded,
     profile,
@@ -260,7 +239,7 @@ export function useImageEditorModelUploadCrop(bag: Record<string, unknown>) {
       if (isMobile) setMobilePanel("preview");
 
       const effectiveDPI = Math.min(finalImage.width / widthInches, finalImage.height / heightInches);
-      if (effectiveDPI < 278) {
+      if (effectiveDPI < LOW_RES_EFFECTIVE_DPI_THRESHOLD) {
         toast({
           title: t("toast.lowRes"),
           description: t("toast.lowResDesc"),
@@ -338,7 +317,7 @@ export function useImageEditorModelUploadCrop(bag: Record<string, unknown>) {
       }
       
       setUploadProgress(60);
-      const MAX_STORED_DIMENSION = 4000;
+      const maxStoredDimension = MAX_STORED_IMAGE_DIMENSION;
 
       const loadImageFromBlob = (blob: Blob): Promise<HTMLImageElement> =>
         new Promise((res, rej) => {
@@ -373,9 +352,9 @@ export function useImageEditorModelUploadCrop(bag: Record<string, unknown>) {
       let storedHeight = intrinsicH;
       const maxDim = Math.max(intrinsicW, intrinsicH);
 
-      if (maxDim > MAX_STORED_DIMENSION) {
+      if (maxDim > maxStoredDimension) {
         setUploadProgress(75);
-        const scale = MAX_STORED_DIMENSION / maxDim;
+        const scale = maxStoredDimension / maxDim;
         storedWidth = Math.round(intrinsicW * scale);
         storedHeight = Math.round(intrinsicH * scale);
         const downsampleCanvas = document.createElement('canvas');
@@ -412,7 +391,7 @@ export function useImageEditorModelUploadCrop(bag: Record<string, unknown>) {
       setTimeout(() => { setIsUploading(false); setUploadProgress(0); }, 300);
 
       const effectiveDPI = Math.min(intrinsicW / widthInches, intrinsicH / heightInches);
-      if (effectiveDPI < 278) {
+      if (effectiveDPI < LOW_RES_EFFECTIVE_DPI_THRESHOLD) {
         toast({
           title: t("toast.lowRes"),
           description: t("toast.lowResDesc"),
@@ -620,7 +599,7 @@ export function useImageEditorModelUploadCrop(bag: Record<string, unknown>) {
     for (const file of files) {
       await processSidebarFile(file);
     }
-  }, [processSidebarFile, profile.gangsheetHeights]);
+  }, [processSidebarFile, GANGSHEET_HEIGHTS]);
 
   const handleResizeChange = useCallback((newSettings: Partial<ResizeSettings>) => {
     const currentImageInfo = selectedDesign?.imageInfo || imageInfo;
@@ -760,5 +739,28 @@ export function useImageEditorModelUploadCrop(bag: Record<string, unknown>) {
   }, [designs, selectedDesignId, saveSnapshot, toast, setImageInfo]);
 
 
-  return { onDesignUploaded, profile, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode, toast, t, lang, isMobile, isLgUp, imageInfo, setImageInfo, resizeSettings, setResizeSettings, isProcessing, setIsProcessing, isAddingToCart, setIsAddingToCart, isUpdateFlow, setIsUpdateFlow, addToCartProgressLabel, setAddToCartProgressLabel, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, refreshAddToCartStallTimeout, isUploading, setIsUploading, uploadProgress, setUploadProgress, artboardWidth, setArtboardWidth, artboardHeight, setArtboardHeight, quantity, setQuantity, designGap, setDesignGap, duplicateCount, setDuplicateCount, clampDuplicateCount, parseDuplicateCount, handleDuplicateCountKeyDown, designTransform, setDesignTransform, designs, setDesigns, selectedDesignId, setSelectedDesignId, selectedDesignIds, setSelectedDesignIds, mobilePanel, setMobilePanel, showDesignInfo, setShowDesignInfo, selectionZoomActive, setSelectionZoomActive, editingLayerName, setEditingLayerName, editingNameValue, setEditingNameValue, clipboardRef, proportionalLock, setProportionalLock, designInfoRef, sidebarFileRef, headerUploadInputRef, canvasRef, downloadContainer, setDownloadContainer, spotPreviewData, setSpotPreviewData, fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer, copySpotSelectionsRef, contextMenu, setContextMenu, cropModalDesignId, setCropModalDesignId, pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo, mountedRef, designsRef, nudgeSnapshotSavedRef, nudgeTimeoutRef, thumbnailCacheRef, assetDataUrlCacheRef, restoredLayerAssetRef, multiDragAccumRef, multiResizeStartRef, multiRotateStartRef, snapshotCacheRef, getSnapshot, saveSnapshot, applySnapshot, handleUndo, handleRedo, handleInteractionEnd, selectedDesign, activeImageInfo, activeDesignTransform, activeWidthInches, activeHeightInches, activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, handleSelectDesign, handleMultiSelect, getLayerThumbnail, handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta, handleEffectiveSizeChange, isArtboardFull, handleDuplicateDesign, handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleCopySelected, handlePaste, handleDeleteGroup, handleDeleteDesign, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleCanvasContextMenu, getAlignNxNy, handleAlignCorner, contentFillCacheRef, handleAutoArrange, handleArtboardResize, GANGSHEET_HEIGHTS, MAX_ARTBOARD_HEIGHT, recommendedArtboardHeight, handleExpandArtboard, handleUndoRef, handleRedoRef, handleAutoArrangeRef, handleDuplicateDesignRef, handleDeleteDesignRef, handleDeleteMultiRef, handleDuplicateSelectedRef, handleCopySelectedRef, handlePasteRef, handleRotate90Ref, selectedDesignIdRef, showDesignInfoRef, saveSnapshotRef, artboardWidthRef, artboardHeightRef, selectedDesignIdsRef, applyImageDirectly, handleFallbackImage, handleImageUpload, handlePDFUpload, handleBatchStart, handleFileUploadUnified, processSidebarFile, handleSidebarFileChange, isDragOver, setIsDragOver, dragCounterRef, handleDragEnter, handleDragLeave, handleDragOver, handleDrop, handleResizeChange, thresholdAlphaForDesign, handleThresholdAlpha, handleThresholdAlphaAll, handleCropDesign, handleCropApply };
+  return {
+    ...bag,
+    applyImageDirectly,
+    handleFallbackImage,
+    handleImageUpload,
+    handlePDFUpload,
+    handleBatchStart,
+    handleFileUploadUnified,
+    processSidebarFile,
+    handleSidebarFileChange,
+    isDragOver,
+    setIsDragOver,
+    dragCounterRef,
+    handleDragEnter,
+    handleDragLeave,
+    handleDragOver,
+    handleDrop,
+    handleResizeChange,
+    thresholdAlphaForDesign,
+    handleThresholdAlpha,
+    handleThresholdAlphaAll,
+    handleCropDesign,
+    handleCropApply,
+  };
 }

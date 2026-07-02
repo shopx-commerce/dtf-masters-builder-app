@@ -1,44 +1,16 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { flushSync } from "react-dom";
-import { cropImageToContent, cropImageToContentAsync, hasCleanAlpha, isOpaqueRasterUpload } from "@/lib/image-crop";
-import { parsePDF, type ParsedPDFData } from "@/lib/pdf-parser";
-import { useToast } from "@/hooks/use-toast";
-import { useHistory, type HistorySnapshot } from "@/hooks/use-history";
-import { useIsMobile } from "@/hooks/use-mobile";
-import { useMediaQuery } from "@/hooks/use-media-query";
-import { useLanguage } from "@/lib/i18n";
-import { getSelectedVariantPrice } from "@/lib/variant-price";
+import { useCallback } from "react";
 import { uploadProductionToR2, canUseShellRelay } from "@/lib/r2-direct-upload";
+import { EXPORT_DPI, EXPORT_TIMEOUT_MS } from "./constants";
 import {
-  DEFAULT_DESIGN_TRANSFORM,
-  DEFAULT_LAYER_CENTER_NX,
-  DEFAULT_LAYER_CENTER_NY,
-  EXPORT_DPI,
-  EXPORT_TIMEOUT_MS,
-  RASTER_DPI_FALLBACK,
-} from "./constants";
-import {
-  clampDesignToArtboard,
-  fetchImageDpi,
-  getArrangeWorker,
-  getEffectiveHeight,
   getExportWorker,
-  getRotatedBounds,
-  getStampExtra,
   injectPngDpi,
-  inchesFromPixelsPair,
-  imageHasCleanAlpha,
   nextExportRequestId,
-  normalizeRasterDpiForInches,
-  shortAddToCartLabel,
+  exportWorkerResultToBlob,
 } from "./utils";
-import { useAddToCartStall } from "./use-add-to-cart-stall";
-import type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
-import { HOT_PEEL_PROFILE } from "@/lib/profiles";
-import type { ImageEditorProps } from "./types";
-import type { SpotPreviewData } from "../controls-section";
+import type { DesignItem } from "@/lib/types";
+import type { ImageEditorBagAfterExport } from "./image-editor-hook-bag.types";
 
-export function useImageEditorModelCart(bag: Record<string, unknown>) {
+export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
   const {
     onDesignUploaded,
     profile,
@@ -235,11 +207,14 @@ export function useImageEditorModelCart(bag: Record<string, unknown>) {
   } = bag;
 
   const buildDesignStatePayload = useCallback(async () => {
-    const layers = designs.map((d, index) => ({
+    const currentDesigns = designsRef.current;
+    const currentSelectedDesignId = selectedDesignIdRef.current;
+    const currentSelectedDesignIds = selectedDesignIdsRef.current;
+    const layers = currentDesigns.map((d, index) => ({
       layerId: d.id,
       name: d.name,
       type: "image",
-      selected: d.id === selectedDesignId || selectedDesignIds.has(d.id),
+      selected: d.id === currentSelectedDesignId || currentSelectedDesignIds.has(d.id),
       visible: true,
       locked: false,
       opacity: 1,
@@ -266,7 +241,7 @@ export function useImageEditorModelCart(bag: Record<string, unknown>) {
     );
 
     const layerAssets = await Promise.all(
-      designs.map(async (d) => {
+      currentDesigns.map(async (d) => {
         const f = d.imageInfo?.file;
         const fileSig = f ? `${f.name}:${f.size}` : "";
         const restored = restoredLayerAssetRef.current.get(d.id);
@@ -326,7 +301,7 @@ export function useImageEditorModelCart(bag: Record<string, unknown>) {
       canvas: {
         artboardWidthInches: artboardWidth,
         artboardHeightInches: artboardHeight,
-        outputDpi: 300,
+        outputDpi: EXPORT_DPI,
       },
       settings: {
         quantity,
@@ -337,9 +312,6 @@ export function useImageEditorModelCart(bag: Record<string, unknown>) {
       layerAssets,
     };
   }, [
-    designs,
-    selectedDesignId,
-    selectedDesignIds,
     fileToDataUrl,
     artboardWidth,
     artboardHeight,
@@ -348,10 +320,15 @@ export function useImageEditorModelCart(bag: Record<string, unknown>) {
     initialDesignState,
     initialDesignId,
     isEditMode,
+    designsRef,
+    selectedDesignIdRef,
+    selectedDesignIdsRef,
+    restoredLayerAssetRef,
+    assetDataUrlCacheRef,
   ]);
 
   const handleAddToCart = useCallback(async () => {
-    if (designs.length === 0) {
+    if (designsRef.current.length === 0) {
       toast({ title: "No designs", description: "Add at least one design before adding to cart.", variant: "destructive" });
       return;
     }
@@ -363,79 +340,88 @@ export function useImageEditorModelCart(bag: Record<string, unknown>) {
       addToCartStallTimeoutRef.current = null;
     }
     try {
-      const exportDpi = 300;
-      const outW = Math.max(1, Math.round(artboardWidth * exportDpi));
-      const outH = Math.max(1, Math.round(artboardHeight * exportDpi));
-      const worker = getExportWorker();
-      const useWorker = worker && typeof OffscreenCanvas !== 'undefined';
-      let pngBlob: Blob;
-      let exportWorkerBuffer: ArrayBuffer | null = null;
+      const exportProductionPng = async (): Promise<{ pngBlob: Blob; exportWorkerBuffer: ArrayBuffer | null }> => {
+        const currentDesigns = designsRef.current;
+        const exportDpi = EXPORT_DPI;
+        const outW = Math.max(1, Math.round(artboardWidth * exportDpi));
+        const outH = Math.max(1, Math.round(artboardHeight * exportDpi));
+        const worker = getExportWorker();
+        const useWorker = worker && typeof OffscreenCanvas !== 'undefined';
+        let pngBlob: Blob;
+        let exportWorkerBuffer: ArrayBuffer | null = null;
 
-      if (useWorker) {
-        const bitmaps = await Promise.all(designs.map((d) => createImageBitmap(d.imageInfo.image)));
-        const exportDesigns = designs.map((d, i) => ({
-          widthInches: d.widthInches,
-          heightInches: d.heightInches,
-          nx: d.transform.nx,
-          ny: d.transform.ny,
-          s: d.transform.s,
-          rotation: d.transform.rotation,
-          flipX: d.transform.flipX,
-          flipY: d.transform.flipY,
-          bitmap: bitmaps[i],
-          alphaThresholded: d.alphaThresholded,
-          printFileName: d.printFileName,
-          name: d.name,
-        }));
-        const requestId = nextExportRequestId();
-        const exportResult = await new Promise<{ buffer: ArrayBuffer; byteLength: number }>((resolve, reject) => {
-          const timer = window.setTimeout(() => reject(new Error('Export timed out — sheet may be too large.')), EXPORT_TIMEOUT_MS);
-          const onMessage = (e: MessageEvent) => {
-            if (e.data.requestId !== requestId) return;
-            worker.removeEventListener('message', onMessage);
-            window.clearTimeout(timer);
-            if (e.data.type === 'error') reject(new Error(e.data.error));
-            else if (e.data.buffer) {
-              const buf = e.data.buffer as ArrayBuffer;
-              const byteLength = Number(e.data.byteLength) > 0 ? Number(e.data.byteLength) : buf.byteLength;
-              resolve({ buffer: buf, byteLength });
-            }
-            else reject(new Error('Export returned no image data'));
-          };
-          worker.addEventListener('message', onMessage);
-          worker.postMessage({ type: 'export', requestId, designs: exportDesigns, outW, outH, exportDpi }, bitmaps);
-        });
-        exportWorkerBuffer = exportResult.buffer;
-        pngBlob = new Blob([exportWorkerBuffer], { type: 'image/png' });
-      } else {
-        const exportCanvas = document.createElement('canvas');
-        exportCanvas.width = outW;
-        exportCanvas.height = outH;
-        const ctx = exportCanvas.getContext('2d');
-        if (!ctx) throw new Error('Canvas not supported');
-        ctx.clearRect(0, 0, outW, outH);
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        for (const design of designs) {
-          const img = design.imageInfo.image;
-          const drawW = Math.max(1, Math.round(design.widthInches * design.transform.s * exportDpi));
-          const drawH = Math.max(1, Math.round(design.heightInches * design.transform.s * exportDpi));
-          const centerX = design.transform.nx * outW;
-          const centerY = design.transform.ny * outH;
-          ctx.save();
-          ctx.translate(centerX, centerY);
-          ctx.rotate((design.transform.rotation * Math.PI) / 180);
-          ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
-          ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
-          ctx.restore();
+        if (useWorker) {
+          const bitmaps = await Promise.all(currentDesigns.map((d) => createImageBitmap(d.imageInfo.image)));
+          const exportDesigns = currentDesigns.map((d, i) => ({
+            widthInches: d.widthInches,
+            heightInches: d.heightInches,
+            nx: d.transform.nx,
+            ny: d.transform.ny,
+            s: d.transform.s,
+            rotation: d.transform.rotation,
+            flipX: d.transform.flipX,
+            flipY: d.transform.flipY,
+            bitmap: bitmaps[i],
+            alphaThresholded: d.alphaThresholded,
+            printFileName: d.printFileName,
+            name: d.name,
+          }));
+          const requestId = nextExportRequestId();
+          const exportResult = await new Promise<{ buffer: ArrayBuffer; byteLength: number }>((resolve, reject) => {
+            const timer = window.setTimeout(() => reject(new Error('Export timed out — sheet may be too large.')), EXPORT_TIMEOUT_MS);
+            const onMessage = (e: MessageEvent) => {
+              if (e.data.requestId !== requestId) return;
+              worker.removeEventListener('message', onMessage);
+              window.clearTimeout(timer);
+              if (e.data.type === 'error') reject(new Error(e.data.error));
+              else if (e.data.buffer) {
+                const buf = e.data.buffer as ArrayBuffer;
+                const byteLength = Number(e.data.byteLength) > 0 ? Number(e.data.byteLength) : buf.byteLength;
+                resolve({ buffer: buf, byteLength });
+              }
+              else reject(new Error('Export returned no image data'));
+            };
+            worker.addEventListener('message', onMessage);
+            worker.postMessage({ type: 'export', requestId, designs: exportDesigns, outW, outH, exportDpi }, bitmaps);
+          });
+          exportWorkerBuffer = exportResult.buffer;
+          pngBlob = new Blob([exportWorkerBuffer], { type: 'image/png' });
+        } else {
+          const exportCanvas = document.createElement('canvas');
+          exportCanvas.width = outW;
+          exportCanvas.height = outH;
+          const ctx = exportCanvas.getContext('2d');
+          if (!ctx) throw new Error('Canvas not supported');
+          ctx.clearRect(0, 0, outW, outH);
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          for (const design of currentDesigns) {
+            const img = design.imageInfo.image;
+            const drawW = Math.max(1, Math.round(design.widthInches * design.transform.s * exportDpi));
+            const drawH = Math.max(1, Math.round(design.heightInches * design.transform.s * exportDpi));
+            const centerX = design.transform.nx * outW;
+            const centerY = design.transform.ny * outH;
+            ctx.save();
+            ctx.translate(centerX, centerY);
+            ctx.rotate((design.transform.rotation * Math.PI) / 180);
+            ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
+            ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
+            ctx.restore();
+          }
+          const rawBlob: Blob = await new Promise((res, rej) =>
+            exportCanvas.toBlob((b) => (b ? res(b) : rej(new Error('toBlob failed'))), 'image/png'),
+          );
+          exportCanvas.width = 0;
+          exportCanvas.height = 0;
+          pngBlob = await injectPngDpi(rawBlob, exportDpi);
         }
-        const rawBlob: Blob = await new Promise((res, rej) =>
-          exportCanvas.toBlob((b) => (b ? res(b) : rej(new Error('toBlob failed'))), 'image/png'),
-        );
-        exportCanvas.width = 0;
-        exportCanvas.height = 0;
-        pngBlob = await injectPngDpi(rawBlob, exportDpi);
-      }
+        return { pngBlob, exportWorkerBuffer };
+      };
+
+      const [{ pngBlob, exportWorkerBuffer }, designState] = await Promise.all([
+        exportProductionPng(),
+        buildDesignStatePayload(),
+      ]);
       lastAddToCartPngBytesRef.current = pngBlob.size;
 
       const selectedVariant = shopifyVariants?.find((v) => v.height != null && Math.abs(v.height - artboardHeight) < 0.01);
@@ -445,7 +431,6 @@ export function useImageEditorModelCart(bag: Record<string, unknown>) {
       if (!vidDigits) throw new Error('No variant ID available');
       if (!shopDomain) throw new Error('Shop domain missing — open the builder from the storefront product page.');
 
-      const designState = await buildDesignStatePayload();
       const existingProduction = (initialDesignState as { production?: { url?: string | null; key?: string | null } } | null)?.production;
       const filename = 'gangsheet-' + Date.now() + '.png';
       const productionKey =
@@ -456,12 +441,13 @@ export function useImageEditorModelCart(bag: Record<string, unknown>) {
 
       let productionUrl: string | null = null;
       let uploadedProductionKey: string | null = productionKey || null;
+      let exportBufferForUpload = exportWorkerBuffer;
 
       if (uploadInBuilder) {
         const uploadOpts = { objectKey: productionKey, useShellRelay: canUseShellRelay() };
         const uploadBody =
-          exportWorkerBuffer && exportWorkerBuffer.byteLength > 0
-            ? new Blob([exportWorkerBuffer], { type: "image/png" })
+          exportBufferForUpload && exportBufferForUpload.byteLength > 0
+            ? new Blob([exportBufferForUpload], { type: "image/png" })
             : pngBlob;
         try {
           const uploaded = await uploadProductionToR2(
@@ -473,7 +459,7 @@ export function useImageEditorModelCart(bag: Record<string, unknown>) {
           );
           productionUrl = uploaded.productionUrl;
           uploadedProductionKey = uploaded.key || uploadedProductionKey;
-          exportWorkerBuffer = null;
+          exportBufferForUpload = null;
         } catch (uploadErr) {
           const detail = uploadErr instanceof Error ? uploadErr.message : String(uploadErr);
           console.warn("[handleAddToCart] Builder R2 upload failed, falling back to parent shell:", detail);
@@ -533,7 +519,11 @@ export function useImageEditorModelCart(bag: Record<string, unknown>) {
         addToCartStallTimeoutRef.current = null;
       }
     }
-  }, [designs, artboardWidth, artboardHeight, quantity, shopifyVariants, initialVariantId, shopDomain, toast, refreshAddToCartStallTimeout, buildDesignStatePayload, isEditMode, initialDesignState]);
+  }, [artboardWidth, artboardHeight, quantity, shopifyVariants, initialVariantId, shopDomain, toast, refreshAddToCartStallTimeout, buildDesignStatePayload, isEditMode, initialDesignState, setIsAddingToCart, setIsUpdateFlow, setIsProcessing, setAddToCartProgressLabel, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef]);
 
-  return { onDesignUploaded, profile, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode, toast, t, lang, isMobile, isLgUp, imageInfo, setImageInfo, resizeSettings, setResizeSettings, isProcessing, setIsProcessing, isAddingToCart, setIsAddingToCart, isUpdateFlow, setIsUpdateFlow, addToCartProgressLabel, setAddToCartProgressLabel, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, refreshAddToCartStallTimeout, isUploading, setIsUploading, uploadProgress, setUploadProgress, artboardWidth, setArtboardWidth, artboardHeight, setArtboardHeight, quantity, setQuantity, designGap, setDesignGap, duplicateCount, setDuplicateCount, clampDuplicateCount, parseDuplicateCount, handleDuplicateCountKeyDown, designTransform, setDesignTransform, designs, setDesigns, selectedDesignId, setSelectedDesignId, selectedDesignIds, setSelectedDesignIds, mobilePanel, setMobilePanel, showDesignInfo, setShowDesignInfo, selectionZoomActive, setSelectionZoomActive, editingLayerName, setEditingLayerName, editingNameValue, setEditingNameValue, clipboardRef, proportionalLock, setProportionalLock, designInfoRef, sidebarFileRef, headerUploadInputRef, canvasRef, downloadContainer, setDownloadContainer, spotPreviewData, setSpotPreviewData, fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer, copySpotSelectionsRef, contextMenu, setContextMenu, cropModalDesignId, setCropModalDesignId, pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo, mountedRef, designsRef, nudgeSnapshotSavedRef, nudgeTimeoutRef, thumbnailCacheRef, assetDataUrlCacheRef, restoredLayerAssetRef, multiDragAccumRef, multiResizeStartRef, multiRotateStartRef, snapshotCacheRef, getSnapshot, saveSnapshot, applySnapshot, handleUndo, handleRedo, handleInteractionEnd, selectedDesign, activeImageInfo, activeDesignTransform, activeWidthInches, activeHeightInches, activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, handleSelectDesign, handleMultiSelect, getLayerThumbnail, handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta, handleEffectiveSizeChange, isArtboardFull, handleDuplicateDesign, handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleCopySelected, handlePaste, handleDeleteGroup, handleDeleteDesign, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleCanvasContextMenu, getAlignNxNy, handleAlignCorner, contentFillCacheRef, handleAutoArrange, handleArtboardResize, GANGSHEET_HEIGHTS, MAX_ARTBOARD_HEIGHT, recommendedArtboardHeight, handleExpandArtboard, handleUndoRef, handleRedoRef, handleAutoArrangeRef, handleDuplicateDesignRef, handleDeleteDesignRef, handleDeleteMultiRef, handleDuplicateSelectedRef, handleCopySelectedRef, handlePasteRef, handleRotate90Ref, selectedDesignIdRef, showDesignInfoRef, saveSnapshotRef, artboardWidthRef, artboardHeightRef, selectedDesignIdsRef, applyImageDirectly, handleFallbackImage, handleImageUpload, handlePDFUpload, handleBatchStart, handleFileUploadUnified, processSidebarFile, handleSidebarFileChange, isDragOver, setIsDragOver, dragCounterRef, handleDragEnter, handleDragLeave, handleDragOver, handleDrop, handleResizeChange, thresholdAlphaForDesign, handleThresholdAlpha, handleThresholdAlphaAll, handleCropDesign, handleCropApply, handleDownload, fileToDataUrl, buildDesignStatePayload, handleAddToCart };
+  return {
+    ...bag,
+    buildDesignStatePayload,
+    handleAddToCart,
+  };
 }

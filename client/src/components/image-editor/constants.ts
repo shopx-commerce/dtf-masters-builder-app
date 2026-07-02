@@ -32,5 +32,11 @@ export const DEFAULT_DESIGN_TRANSFORM: ImageTransform = {
 
 export const RASTER_DPI_FALLBACK = 144;
 export const EXPORT_DPI = 300;
+/** Warn when effective layer DPI falls below export DPI minus this margin. */
+export const LOW_RES_EFFECTIVE_DPI_THRESHOLD = EXPORT_DPI - 22;
+/** Max pixel width/height when storing uploaded raster assets client-side. */
+export const MAX_STORED_IMAGE_DIMENSION = 4000;
+/** Layer thumbnail size in the layers panel (px). */
+export const LAYER_THUMBNAIL_SIZE = 48;
 export const ADD_TO_CART_LABEL_MAX_LEN = 34;
 export const EXPORT_TIMEOUT_MS = 300_000;

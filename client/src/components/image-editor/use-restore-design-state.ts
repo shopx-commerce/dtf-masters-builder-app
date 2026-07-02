@@ -6,6 +6,7 @@ import {
   DEFAULT_LAYER_ROTATION,
   DEFAULT_LAYER_SCALE,
   DEFAULT_LAYER_SIZE_INCHES,
+  EXPORT_DPI,
 } from "./constants";
 import type { InitialDesignState } from "./types";
 
@@ -122,7 +123,7 @@ export function useRestoreDesignState({
                 mimeType: layer.asset?.mimeType ? String(layer.asset.mimeType) : undefined,
                 fileSig: `${fileName}:${file.size}`,
               });
-              const originalDpi = Number(layer.settings?.originalDpi) || 300;
+              const originalDpi = Number(layer.settings?.originalDpi) || EXPORT_DPI;
               const sx = Number(layer.scaleX);
               const sy = Number(layer.scaleY);
               const scaleAbs =

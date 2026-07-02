@@ -15,6 +15,7 @@ import {
   DEFAULT_LAYER_CENTER_NY,
   EXPORT_DPI,
   EXPORT_TIMEOUT_MS,
+  LAYER_THUMBNAIL_SIZE,
   RASTER_DPI_FALLBACK,
 } from "./constants";
 import {
@@ -65,7 +66,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     widthInches: 5.0,
     heightInches: 3.8,
     maintainAspectRatio: true,
-    outputDPI: 300,
+    outputDPI: EXPORT_DPI,
   });
   const [isProcessing, setIsProcessing] = useState(false);
   /** True after Add to Cart until parent finishes upload/redirect (avoid double-submit). */
@@ -280,7 +281,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   );
 
   const effectiveDPI = useMemo(() => {
-    if (!activeImageInfo) return 300;
+    if (!activeImageInfo) return EXPORT_DPI;
     return activeImageInfo.dpi;
   }, [activeImageInfo]);
 
@@ -338,7 +339,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       const cache = thumbnailCacheRef.current;
       const key = design.imageInfo?.image?.src ?? design.id;
       if (cache.has(key)) return cache.get(key)!;
-      const THUMB_SIZE = 48;
+      const THUMB_SIZE = LAYER_THUMBNAIL_SIZE;
       const img = design.imageInfo.image;
       if (!img || !img.width || !img.height) return '';
       const aspect = img.width / img.height;
@@ -1025,5 +1026,6 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   }, [contextMenu]);
 
 
+  // Base editor state; arrange/upload/export/cart hooks extend this bag in image-editor-provider.
   return { onDesignUploaded, profile, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode, toast, t, lang, isMobile, isLgUp, imageInfo, setImageInfo, resizeSettings, setResizeSettings, isProcessing, setIsProcessing, isAddingToCart, setIsAddingToCart, isUpdateFlow, setIsUpdateFlow, addToCartProgressLabel, setAddToCartProgressLabel, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, refreshAddToCartStallTimeout, isUploading, setIsUploading, uploadProgress, setUploadProgress, artboardWidth, setArtboardWidth, artboardHeight, setArtboardHeight, artboardWidthRef, artboardHeightRef, contentFillCacheRef, handleAutoArrangeRef, quantity, setQuantity, designGap, setDesignGap, duplicateCount, setDuplicateCount, clampDuplicateCount, parseDuplicateCount, handleDuplicateCountKeyDown, designTransform, setDesignTransform, designs, setDesigns, selectedDesignId, setSelectedDesignId, selectedDesignIds, setSelectedDesignIds, mobilePanel, setMobilePanel, showDesignInfo, setShowDesignInfo, selectionZoomActive, setSelectionZoomActive, editingLayerName, setEditingLayerName, editingNameValue, setEditingNameValue, clipboardRef, proportionalLock, setProportionalLock, designInfoRef, sidebarFileRef, headerUploadInputRef, canvasRef, downloadContainer, setDownloadContainer, spotPreviewData, setSpotPreviewData, fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer, copySpotSelectionsRef, contextMenu, setContextMenu, cropModalDesignId, setCropModalDesignId, pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo, mountedRef, designsRef, nudgeSnapshotSavedRef, nudgeTimeoutRef, thumbnailCacheRef, assetDataUrlCacheRef, restoredLayerAssetRef, multiDragAccumRef, multiResizeStartRef, multiRotateStartRef, snapshotCacheRef, getSnapshot, saveSnapshot, applySnapshot, handleUndo, handleRedo, handleInteractionEnd, selectedDesign, activeImageInfo, activeDesignTransform, activeWidthInches, activeHeightInches, activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, handleSelectDesign, handleMultiSelect, getLayerThumbnail, handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta, handleEffectiveSizeChange, isArtboardFull, handleDuplicateDesign, handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleCopySelected, handlePaste, handleDeleteGroup, handleDeleteDesign, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleCanvasContextMenu };
 }
