@@ -40,3 +40,5 @@ export const MAX_STORED_IMAGE_DIMENSION = 4000;
 export const LAYER_THUMBNAIL_SIZE = 48;
 export const ADD_TO_CART_LABEL_MAX_LEN = 34;
 export const EXPORT_TIMEOUT_MS = 300_000;
+/** Delay before hiding the upload progress bar, so the 100% state is visible. */
+export const UPLOAD_PROGRESS_HIDE_DELAY_MS = 300;

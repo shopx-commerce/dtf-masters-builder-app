@@ -22,7 +22,7 @@ interface ShopifyVariant {
 
 interface VariantConfig {
   configured: boolean;
-  source?: "proxy" | "storefront";
+  source?: "proxy" | "storefront" | "storefront-ajax";
   artboardWidth?: number;
   gangsheetHeights?: number[];
   selectedHeight?: number;

@@ -1,4 +1,4 @@
-import type { Express, NextFunction, Request, Response } from "express";
+import type { Express, NextFunction, Request, Response as ExpressResponse } from "express";
 import { createServer, type Server } from "http";
 import multer from "multer";
 import sharp from "sharp";
@@ -14,6 +14,8 @@ import {
   isAllowedDesignStateKey,
   parseExternalUrl,
 } from "./lib/safe-external-url";
+
+import sgMail from "@sendgrid/mail";
 
 // ─── Shopify helpers ────────────────────────────────────────────────────────
 
@@ -463,7 +465,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     limits: { fieldSize: 15 * 1024 * 1024 },
   }).none();
 
-  function multipartFormIfNeeded(req: Request, res: Response, next: NextFunction) {
+  function multipartFormIfNeeded(req: Request, res: ExpressResponse, next: NextFunction) {
     const ct = req.headers['content-type'] ?? '';
     if (ct.includes('multipart/form-data')) {
       return formMultipart(req, res, next);

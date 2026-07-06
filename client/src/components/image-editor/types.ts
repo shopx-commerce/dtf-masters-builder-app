@@ -10,7 +10,7 @@ export interface InitialDesignStateLayer {
   scaleX?: number;
   scaleY?: number;
   settings?: { originalDpi?: number; [k: string]: unknown } | null;
-  asset?: { url?: string; key?: string; mimeType?: string } | null;
+  asset?: { url?: string; key?: string; mimeType?: string; source?: string } | null;
 }
 
 export interface InitialDesignState {

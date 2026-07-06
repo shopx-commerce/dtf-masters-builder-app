@@ -7,7 +7,7 @@ import EditorActionToolbar from "./editor-action-toolbar";
 import { formatDimensions, formatLength, useMetric, getUnitSuffix } from "@/lib/format-length";
 import {
   ArrowDownLeft, ArrowDownRight, ArrowUpLeft, ArrowUpRight, Copy, ChevronDown, ChevronUp,
-  Droplets, Focus, FlipHorizontal2, FlipVertical2, Layers, LayoutGrid, Link, Loader2, Minus, Plus, RotateCw, ScanSearch,
+  Droplets, FlipHorizontal2, FlipVertical2, Layers, LayoutGrid, Link, Loader2, Minus, Plus, RotateCw,
   Stamp, Trash2, Undo2, Redo2, Unlink, XCircle,
 } from "lucide-react";
 import { useImageEditorContext } from "./image-editor-context";

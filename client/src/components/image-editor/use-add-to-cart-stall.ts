@@ -67,6 +67,10 @@ export function useAddToCartStall({
       if (e.data.status === 'progress' || e.data.status === 'uploaded') {
         refreshAddToCartStallTimeout(lastAddToCartPngBytesRef.current || undefined);
       }
+      if (e.data.status === 'uploaded') {
+        const msg = typeof e.data.message === 'string' ? e.data.message : (isUpdateFlow ? 'Updating design...' : 'Adding product to cart...');
+        toast({ title: 'Image uploaded', description: msg.slice(0, 180) });
+      }
       if (e.data.status === 'error' || e.data.status === 'done') {
         if (addToCartStallTimeoutRef.current != null) {
           window.clearTimeout(addToCartStallTimeoutRef.current);
@@ -78,13 +82,8 @@ export function useAddToCartStall({
         setIsUpdateFlow(false);
         setAddToCartProgressLabel(undefined);
         if (e.data.status === 'done') {
-          const message =
-            typeof e.data.message === 'string' && e.data.message.trim()
-              ? e.data.message.trim()
-              : wasUpdateFlow
-                ? 'Design updated'
-                : 'Added to cart';
-          toast({ title: message });
+          const doneMsg = typeof e.data.message === 'string' ? e.data.message : (wasUpdateFlow ? 'Design updated' : 'Added to cart');
+          toast({ title: wasUpdateFlow ? 'Design updated' : 'Added to cart', description: doneMsg.slice(0, 180) });
         }
       }
       if (e.data.status === 'error') {

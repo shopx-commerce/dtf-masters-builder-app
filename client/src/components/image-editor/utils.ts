@@ -82,7 +82,7 @@ async function fetchImageDpi(file: File): Promise<number> {
     const data = await res.json();
     const d = Number(data.density);
     if (!Number.isFinite(d) || d <= 0) return RASTER_DPI_FALLBACK;
-    return Math.min(d, 300);
+    return Math.min(d, EXPORT_DPI);
   } catch {
     return RASTER_DPI_FALLBACK;
   }

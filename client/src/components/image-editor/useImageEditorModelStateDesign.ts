@@ -1,38 +1,17 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { flushSync } from "react-dom";
-import { cropImageToContent, cropImageToContentAsync, hasCleanAlpha, isOpaqueRasterUpload } from "@/lib/image-crop";
-import { parsePDF, type ParsedPDFData } from "@/lib/pdf-parser";
 import { useToast } from "@/hooks/use-toast";
 import { useHistory, type HistorySnapshot } from "@/hooks/use-history";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useLanguage } from "@/lib/i18n";
 import { getSelectedVariantPrice } from "@/lib/variant-price";
-import { uploadProductionToR2 } from "@/lib/r2-direct-upload";
 import {
   DEFAULT_DESIGN_TRANSFORM,
-  DEFAULT_LAYER_CENTER_NX,
-  DEFAULT_LAYER_CENTER_NY,
   EXPORT_DPI,
-  EXPORT_TIMEOUT_MS,
   LAYER_THUMBNAIL_SIZE,
-  RASTER_DPI_FALLBACK,
 } from "./constants";
-import {
-  clampDesignToArtboard,
-  fetchImageDpi,
-  getArrangeWorker,
-  getEffectiveHeight,
-  getExportWorker,
-  getRotatedBounds,
-  getStampExtra,
-  injectPngDpi,
-  inchesFromPixelsPair,
-  imageHasCleanAlpha,
-  nextExportRequestId,
-  normalizeRasterDpiForInches,
-  shortAddToCartLabel,
-} from "./utils";
+import { clampDesignToArtboard } from "./utils";
 import { useAddToCartStall } from "./use-add-to-cart-stall";
 import { useRestoreDesignState } from "./use-restore-design-state";
 import type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
@@ -166,6 +145,8 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     setIsProcessing,
     setDesigns,
     setSelectedDesignId,
+    setImageInfo,
+    setDesignTransform,
     setArtboardWidth,
     setArtboardHeight,
     setQuantity,
@@ -231,7 +212,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       restoredIds = new Set(restored.map(d => d.id));
       return restored;
     });
-    const validSelectedId = restoredIds.has(snap.selectedDesignId) ? snap.selectedDesignId : null;
+    const validSelectedId = snap.selectedDesignId != null && restoredIds.has(snap.selectedDesignId) ? snap.selectedDesignId : null;
     setSelectedDesignId(validSelectedId);
     if (validSelectedId) {
       const sel = parsed.find(p => p.id === validSelectedId);

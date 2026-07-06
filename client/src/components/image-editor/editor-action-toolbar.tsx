@@ -12,7 +12,6 @@ import {
   LayoutGrid,
   Link,
   Loader2,
-  Plus,
   Redo2,
   RotateCw,
   Trash2,
@@ -25,13 +24,13 @@ import type { ProfileConfig } from "@/lib/profiles";
 import type { ImageInfo, ImageTransform, ResizeSettings } from "@/lib/types";
 
 export type EditorActionToolbarProps = {
-  t: (key: string) => string;
+  t: (key: string, vars?: Record<string, string | number>) => string;
   lang: "en" | "es" | "fr";
   embedFromShopify?: boolean;
   isUploading: boolean;
   activeImageInfo: ImageInfo | null;
   handleFileUploadUnified: (file: File, image: HTMLImageElement | null) => Promise<void>;
-  handleBatchStart: () => void;
+  handleBatchStart: (fileCount: number) => void;
   selectedDesignId: string | null;
   selectedDesignIds: Set<string>;
   designs: { id: string }[];
@@ -68,7 +67,7 @@ export type EditorActionToolbarProps = {
   handleAlignCorner: (corner: "tl" | "tr" | "bl" | "br") => void;
   isMobile: boolean;
   isLgUp: boolean;
-  selectedVariantPrice: number | null;
+  selectedVariantPrice: string | null;
   GANGSHEET_HEIGHTS: number[];
   recommendedArtboardHeight: number | null;
   profile: ProfileConfig;

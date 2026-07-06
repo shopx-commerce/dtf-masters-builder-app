@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import type { DesignItem } from "@/lib/types";
+import type { DesignItem, ImageInfo, ImageTransform } from "@/lib/types";
 import {
   DEFAULT_LAYER_CENTER_NX,
   DEFAULT_LAYER_CENTER_NY,
@@ -63,6 +63,8 @@ export function useRestoreDesignState({
   setIsProcessing,
   setDesigns,
   setSelectedDesignId,
+  setImageInfo,
+  setDesignTransform,
   setArtboardWidth,
   setArtboardHeight,
   setQuantity,
@@ -73,6 +75,8 @@ export function useRestoreDesignState({
   setIsProcessing: (v: boolean) => void;
   setDesigns: React.Dispatch<React.SetStateAction<DesignItem[]>>;
   setSelectedDesignId: (v: string | null) => void;
+  setImageInfo: (v: ImageInfo | null) => void;
+  setDesignTransform: (v: ImageTransform) => void;
   setArtboardWidth: (v: number) => void;
   setArtboardHeight: (v: number) => void;
   setQuantity: (v: number) => void;
@@ -86,20 +90,10 @@ export function useRestoreDesignState({
     let cancelled = false;
     setIsProcessing(true);
 
-    const artboard = resolveArtboardSize(initialDesignState);
-    if (artboard) {
-      setArtboardWidth(artboard.w);
-      setArtboardHeight(artboard.h);
-    }
-    const restoredQty = Number(initialDesignState.settings?.quantity);
-    if (Number.isFinite(restoredQty) && restoredQty > 0) setQuantity(Math.floor(restoredQty));
-    const restoredGap = Number(initialDesignState.settings?.designGap);
-    if (Number.isFinite(restoredGap)) setDesignGap(restoredGap);
-
     void (async () => {
       const restoredDesigns = (
         await Promise.all(
-          layers.map(async (layer, i) => {
+          layers.map(async (layer, i): Promise<DesignItem | null> => {
             if (cancelled) return null;
             if (String(layer.asset?.source || "") === "production-reference") return null;
 
@@ -121,7 +115,7 @@ export function useRestoreDesignState({
                 url: assetUrl,
                 key: layer.asset?.key ? String(layer.asset.key) : undefined,
                 mimeType: layer.asset?.mimeType ? String(layer.asset.mimeType) : undefined,
-                fileSig: `${fileName}:${file.size}`,
+                fileSig: `${fileName}:${file.size}:${file.lastModified}`,
               });
               const originalDpi = Number(layer.settings?.originalDpi) || EXPORT_DPI;
               const sx = Number(layer.scaleX);
@@ -171,8 +165,26 @@ export function useRestoreDesignState({
         return;
       }
 
+      const artboard = resolveArtboardSize(initialDesignState);
+      if (artboard) {
+        setArtboardWidth(artboard.w);
+        setArtboardHeight(artboard.h);
+      }
+      const restoredQty = Number(initialDesignState.settings?.quantity);
+      if (Number.isFinite(restoredQty) && restoredQty > 0) setQuantity(Math.floor(restoredQty));
+      const restoredGap = Number(initialDesignState.settings?.designGap);
+      if (Number.isFinite(restoredGap) && restoredGap >= 0) setDesignGap(restoredGap);
+
       setDesigns(restoredDesigns);
-      setSelectedDesignId(restoredDesigns[0]?.id ?? null);
+      const selected =
+        restoredDesigns.find((d) =>
+          layers.some((l) => String(l.layerId || "") === d.id && Boolean(l.selected)),
+        ) || restoredDesigns[restoredDesigns.length - 1];
+      setSelectedDesignId(selected?.id ?? null);
+      if (selected) {
+        setDesignTransform(selected.transform);
+        setImageInfo(selected.imageInfo);
+      }
       setIsProcessing(false);
     })().catch((err) => {
       console.error("[builder] design state restore failed", err);

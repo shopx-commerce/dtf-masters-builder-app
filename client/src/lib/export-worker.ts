@@ -483,9 +483,10 @@ self.onmessage = async function(e: MessageEvent) {
       const bytes = hasStreaming
         ? await buildPngStreaming(e.data)
         : await runExportLegacy(e.data);
-      self.postMessage(
-        { type: 'result', requestId: e.data.requestId, buffer: bytes.buffer, byteLength: bytes.byteLength },
-        [bytes.buffer],
+      const buffer = bytes.buffer as ArrayBuffer;
+      (self as unknown as Worker).postMessage(
+        { type: 'result', requestId: e.data.requestId, buffer, byteLength: bytes.byteLength },
+        [buffer],
       );
     } catch (err: any) {
       if (designs) for (const d of designs) { try { d.bitmap.close(); } catch {} }
