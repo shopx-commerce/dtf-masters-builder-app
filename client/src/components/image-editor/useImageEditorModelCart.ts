@@ -7,6 +7,7 @@ import {
   nextExportRequestId,
 } from "./utils";
 import type { ImageEditorBagAfterExport } from "./image-editor-hook-bag.types";
+import type { InitialDesignState } from "./types";
 
 export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
   // Only the bag fields these two handlers actually use are destructured here;
@@ -248,11 +249,80 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         return { pngBlob, exportWorkerBuffer };
       };
 
-      const [{ pngBlob, exportWorkerBuffer }, designState] = await Promise.all([
-        exportProductionPng(),
-        buildDesignStatePayload(),
-      ]);
-      lastAddToCartPngBytesRef.current = pngBlob.size;
+      // Skip re-export/re-upload on update when nothing rendered has actually changed.
+      const existingProduction = (initialDesignState as { production?: { url?: string | null; key?: string | null } } | null)?.production;
+
+      const roundSig = (v: unknown) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n.toFixed(6) : "x";
+      };
+      // Must cover every field the renderer reads, or a real visual change could go undetected.
+      const currentContentSig = (): string => {
+        const parts = [`ab:${roundSig(artboardWidth)}x${roundSig(artboardHeight)}`];
+        for (const d of designsRef.current) {
+          const f = d.imageInfo?.file;
+          const fileSig = f ? `${f.name}:${f.size}:${f.lastModified}` : "";
+          const t = d.transform;
+          parts.push(
+            `${d.id}|${roundSig(d.widthInches)}|${roundSig(d.heightInches)}|${roundSig(t.nx)}|${roundSig(t.ny)}|${roundSig(t.s)}|${roundSig(t.rotation)}|${t.flipX ? 1 : 0}|${t.flipY ? 1 : 0}|${d.alphaThresholded ? 1 : 0}|${d.printFileName ? 1 : 0}|${String(d.name || "")}|${fileSig}`,
+          );
+        }
+        return parts.join("~");
+      };
+      const savedContentSig = (): string | null => {
+        const st = initialDesignState as InitialDesignState | null;
+        if (!st) return null;
+        const abW = Number(st.canvas?.artboardWidthInches ?? st.canvas?.width);
+        const abH = Number(st.canvas?.artboardHeightInches ?? st.canvas?.height);
+        if (!Number.isFinite(abW) || !Number.isFinite(abH) || abW <= 0 || abH <= 0) return null;
+        const savedLayers = Array.isArray(st.layers) ? st.layers : [];
+        const parts = [`ab:${roundSig(abW)}x${roundSig(abH)}`];
+        for (const l of savedLayers) {
+          // Mirror the restore filter (use-restore-design-state): production-reference and
+          // non-http layers are not restored, so they must not appear in the comparison.
+          if (String(l.asset?.source || "") === "production-reference") continue;
+          const url = String(l.asset?.url || "").trim();
+          if (!url.startsWith("http://") && !url.startsWith("https://")) continue;
+          const layerId = String(l.layerId || "");
+          const restored = restoredLayerAssetRef.current.get(layerId);
+          if (!restored?.fileSig) return null; // can't confirm pixels unchanged → don't skip
+          const sx = Number(l.scaleX);
+          const sy = Number(l.scaleY);
+          const s =
+            Number.isFinite(sx) && sx !== 0 ? Math.abs(sx)
+            : Number.isFinite(sy) && sy !== 0 ? Math.abs(sy)
+            : NaN;
+          const settings = l.settings as { alphaThresholded?: unknown; printFileName?: unknown } | null | undefined;
+          const alphaThresholded = Boolean(settings?.alphaThresholded);
+          const printFileName = Boolean(settings?.printFileName);
+          parts.push(
+            `${layerId}|${roundSig(l.width)}|${roundSig(l.height)}|${roundSig(l.x)}|${roundSig(l.y)}|${roundSig(s)}|${roundSig(l.rotation)}|${sx < 0 ? 1 : 0}|${sy < 0 ? 1 : 0}|${alphaThresholded ? 1 : 0}|${printFileName ? 1 : 0}|${String(l.name || "")}|${restored.fileSig}`,
+          );
+        }
+        return parts.join("~");
+      };
+
+      let canReuseProduction = false;
+      if (isEditMode && existingProduction?.url) {
+        const savedSig = savedContentSig();
+        const curSig = currentContentSig();
+        canReuseProduction = Boolean(savedSig && curSig && savedSig === curSig);
+      }
+
+      let pngBlob: Blob | null = null;
+      let exportWorkerBuffer: ArrayBuffer | null = null;
+      let designState: Awaited<ReturnType<typeof buildDesignStatePayload>>;
+      if (canReuseProduction) {
+        // Only the (small) design-state JSON needs rebuilding — no pixel work at all.
+        designState = await buildDesignStatePayload();
+      } else {
+        const [exp, ds] = await Promise.all([exportProductionPng(), buildDesignStatePayload()]);
+        pngBlob = exp.pngBlob;
+        exportWorkerBuffer = exp.exportWorkerBuffer;
+        designState = ds;
+      }
+      // Reset to 0 on reuse so the stall-timeout watchdog isn't fed a stale byte count.
+      lastAddToCartPngBytesRef.current = pngBlob ? pngBlob.size : 0;
 
       const selectedVariant = shopifyVariants?.find((v) => v.height != null && Math.abs(v.height - artboardHeight) < 0.01);
       const vid = selectedVariant?.id || initialVariantId || '';
@@ -261,7 +331,6 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       if (!vidDigits) throw new Error('No variant ID available');
       if (!shopDomain) throw new Error('Shop domain missing — open the builder from the storefront product page.');
 
-      const existingProduction = (initialDesignState as { production?: { url?: string | null; key?: string | null } } | null)?.production;
       const filename = 'gangsheet-' + Date.now() + '.png';
       const productionKey =
         isEditMode && existingProduction?.key ? String(existingProduction.key) : undefined;
@@ -273,7 +342,12 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       let uploadedProductionKey: string | null = productionKey || null;
       let exportBufferForUpload = exportWorkerBuffer;
 
-      if (uploadInBuilder) {
+      if (canReuseProduction && existingProduction?.url) {
+        // Nothing affecting the sheet changed — point at the already-uploaded production PNG.
+        productionUrl = String(existingProduction.url);
+        uploadedProductionKey = existingProduction.key ? String(existingProduction.key) : uploadedProductionKey;
+        setAddToCartProgressLabel(undefined);
+      } else if (uploadInBuilder) {
         const uploadOpts = { objectKey: productionKey, useShellRelay: canUseShellRelay() };
         const uploadBody =
           exportBufferForUpload && exportBufferForUpload.byteLength > 0
@@ -281,7 +355,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
             : pngBlob;
         try {
           const uploaded = await uploadProductionToR2(
-            uploadBody,
+            uploadBody as Blob,
             filename,
             uploadUrl,
             onUploadProgress,
@@ -324,14 +398,14 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       const pngByteLength = lastAddToCartPngBytesRef.current;
 
       if (!productionUrl) {
-        if (!pngBlob.size) throw new Error("Empty design image");
+        if (!pngBlob || !pngBlob.size) throw new Error("Empty design image");
         const pngBuffer = await pngBlob.arrayBuffer();
         (message as { pngBuffer?: ArrayBuffer }).pngBuffer = pngBuffer;
         window.parent.postMessage(message, '*', [pngBuffer]);
         refreshAddToCartStallTimeout(pngByteLength || pngBuffer.byteLength);
       } else {
         window.parent.postMessage(message, '*');
-        refreshAddToCartStallTimeout(pngByteLength);
+        refreshAddToCartStallTimeout(canReuseProduction ? 0 : pngByteLength);
       }
       // Keep loading state until parent redirects (upload runs in parent). Do not clear in finally.
     } catch (error) {

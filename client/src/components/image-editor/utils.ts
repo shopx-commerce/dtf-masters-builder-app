@@ -73,7 +73,73 @@ export function getArrangeWorker(): Worker | null {
   return _arrangeWorker;
 }
 
+// Reads DPI metadata from PNG/JPEG headers, if present.
+function parseDpiFromHeader(buf: Uint8Array): number | null {
+  const pngSig = [137, 80, 78, 71, 13, 10, 26, 10];
+  let isPng = buf.length >= 8;
+  for (let i = 0; i < pngSig.length && isPng; i++) if (buf[i] !== pngSig[i]) isPng = false;
+  if (isPng) {
+    let offset = 8;
+    while (offset + 12 <= buf.length) {
+      const len = readU32(buf, offset);
+      const isPHYs = buf[offset + 4] === 0x70 && buf[offset + 5] === 0x48 &&
+                     buf[offset + 6] === 0x59 && buf[offset + 7] === 0x73;
+      const isIdatOrEnd =
+        (buf[offset + 4] === 0x49 && buf[offset + 5] === 0x44 && buf[offset + 6] === 0x41 && buf[offset + 7] === 0x54) ||
+        (buf[offset + 4] === 0x49 && buf[offset + 5] === 0x45 && buf[offset + 6] === 0x4e && buf[offset + 7] === 0x44);
+      if (isPHYs) {
+        const dataStart = offset + 8;
+        const ppuX = readU32(buf, dataStart);
+        const unit = buf[dataStart + 8]; // 1 = metre
+        if (unit === 1 && ppuX > 0) return Math.round(ppuX * 0.0254); // px/metre -> px/inch
+        return null;
+      }
+      if (isIdatOrEnd) break;
+      offset += 12 + len;
+    }
+    return null;
+  }
+
+  if (buf.length >= 4 && buf[0] === 0xff && buf[1] === 0xd8) {
+    let offset = 2;
+    while (offset + 4 <= buf.length) {
+      if (buf[offset] !== 0xff) break;
+      const marker = buf[offset + 1];
+      if (marker === 0xd9 || marker === 0xda) break; // EOI / start of scan
+      const segLen = (buf[offset + 2] << 8) | buf[offset + 3];
+      if (marker === 0xe0 && offset + 18 <= buf.length) {
+        const isJfif = buf[offset + 4] === 0x4a && buf[offset + 5] === 0x46 &&
+                       buf[offset + 6] === 0x49 && buf[offset + 7] === 0x46 && buf[offset + 8] === 0x00;
+        if (isJfif) {
+          const units = buf[offset + 11]; // 1 = dpi, 2 = dpcm, 0 = aspect only
+          const xDensity = (buf[offset + 12] << 8) | buf[offset + 13];
+          if (xDensity > 0) {
+            if (units === 1) return xDensity;
+            if (units === 2) return Math.round(xDensity * 2.54);
+          }
+          return null;
+        }
+      }
+      offset += 2 + segLen;
+    }
+    return null;
+  }
+
+  return null;
+}
+
 async function fetchImageDpi(file: File): Promise<number> {
+  // Fast path: parse from the header. Falls back to the server only if that fails.
+  try {
+    const headerBytes = new Uint8Array(await file.slice(0, 65536).arrayBuffer());
+    const headerDpi = parseDpiFromHeader(headerBytes);
+    if (headerDpi && Number.isFinite(headerDpi) && headerDpi > 0) {
+      return Math.min(headerDpi, EXPORT_DPI);
+    }
+  } catch {
+    // fall through to the server round-trip
+  }
+
   try {
     const form = new FormData();
     form.append('image', file);
