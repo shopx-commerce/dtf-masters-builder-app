@@ -223,9 +223,11 @@ function crc32(data: Uint8Array): number {
   return (c ^ 0xFFFFFFFF) >>> 0;
 }
 
-function getStampExtra(d: { heightInches: number; transform: ImageTransform; printFileName?: boolean }): number {
-  if (!d.printFileName) return 0;
-  return 0.1 + d.heightInches * d.transform.s * 0.05;
+// Name-stamp disabled. Returning 0
+// unconditionally (instead of gating on d.printFileName) also fixes it for designs restored
+// from saved state that already have printFileName: true.
+function getStampExtra(_d: { heightInches: number; transform: ImageTransform; printFileName?: boolean }): number {
+  return 0;
 }
 
 function getEffectiveHeight(d: { heightInches: number; transform: ImageTransform; printFileName?: boolean }): number {

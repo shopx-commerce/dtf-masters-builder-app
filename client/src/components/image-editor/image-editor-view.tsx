@@ -332,7 +332,8 @@ export default function ImageEditorView() {
                           <Plus className="w-2.5 h-2.5" strokeWidth={3} />
                         </button>
                       </div>
-                      <button
+                      {/* Name-stamp toggle disabled */}
+                      {false && <button
                         onClick={(e) => {
                           e.stopPropagation();
                           const hasPrint = first.printFileName ?? false;
@@ -344,7 +345,7 @@ export default function ImageEditorView() {
                         title={first.printFileName ? t("editor.printNameOn") : t("editor.printName")}
                       >
                         <Stamp className="w-3 h-3" />
-                      </button>
+                      </button>}
                       <button
                         onClick={(e) => { e.stopPropagation(); handleDeleteGroup(row.designs.map(d => d.id)); }}
                         className="p-0.5 rounded hover:bg-gray-200 text-red-500 hover:text-red-600 transition-colors flex-shrink-0"

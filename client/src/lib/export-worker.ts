@@ -22,6 +22,10 @@ interface ExportInput {
   exportDpi: number;
 }
 
+// Name-stamp disabled.
+// designs restored from saved state with printFileName: true don't render it either.
+const NAME_STAMP_ENABLED = false;
+
 interface PrerenderedDesign {
   bitmap: ImageBitmap;
   left: number;
@@ -117,7 +121,7 @@ async function prerenderDesigns(
     ctx.rotate((d.rotation * Math.PI) / 180);
     ctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
     ctx.drawImage(d.bitmap, -bounds.drawW / 2, -bounds.drawH / 2, bounds.drawW, bounds.drawH);
-    if (d.printFileName && d.name) {
+    if (NAME_STAMP_ENABLED && d.printFileName && d.name) {
       ctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
       const marginPx = 0.1 * exportDpi;
       const fontSize = Math.max(8, Math.round(bounds.drawH * 0.045));
@@ -405,7 +409,7 @@ async function runExportLegacy(input: ExportInput): Promise<Uint8Array> {
     ctx.rotate((design.rotation * Math.PI) / 180);
     ctx.scale(design.flipX ? -1 : 1, design.flipY ? -1 : 1);
     ctx.drawImage(design.bitmap, -drawW / 2, -drawH / 2, drawW, drawH);
-    if (design.printFileName && design.name) {
+    if (NAME_STAMP_ENABLED && design.printFileName && design.name) {
       ctx.scale(design.flipX ? -1 : 1, design.flipY ? -1 : 1);
       const marginPx = 0.1 * exportDpi;
       const fontSize = Math.max(8, Math.round(drawH * 0.045));
