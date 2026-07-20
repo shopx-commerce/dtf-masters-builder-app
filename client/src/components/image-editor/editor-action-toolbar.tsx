@@ -148,36 +148,29 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
         : t("controls.addToCart");
   const cartButtonTitle = !canAddToCart ? t("controls.uploadFirst") : cartButtonLabel;
 
-  const row1ScrollRef = useRef<HTMLDivElement>(null);
-  const row1DragRef = useRef<{ startX: number; startScrollLeft: number } | null>(null);
-  const handleRow1MouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    const el = row1ScrollRef.current;
+  const actionsScrollRef = useRef<HTMLDivElement>(null);
+  const actionsDragRef = useRef<{ startX: number; startScrollLeft: number } | null>(null);
+  const handleActionsMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    const el = actionsScrollRef.current;
     if (!el) return;
-    row1DragRef.current = { startX: e.clientX, startScrollLeft: el.scrollLeft };
+    actionsDragRef.current = { startX: e.clientX, startScrollLeft: el.scrollLeft };
   };
-  const handleRow1MouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    const drag = row1DragRef.current;
-    const el = row1ScrollRef.current;
+  const handleActionsMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const drag = actionsDragRef.current;
+    const el = actionsScrollRef.current;
     if (!drag || !el) return;
     el.scrollLeft = drag.startScrollLeft - (e.clientX - drag.startX);
   };
-  const stopRow1Drag = () => {
-    row1DragRef.current = null;
+  const stopActionsDrag = () => {
+    actionsDragRef.current = null;
   };
 
   return (
     <>
   {/* Top bar: three rows on mobile, wraps on desktop when metric to avoid overlap */}
   <div className="flex-shrink-0 flex flex-col lg:flex-row lg:flex-wrap lg:items-center gap-1.5 lg:gap-2 bg-white border-b border-gray-200 px-2 py-1 lg:px-3 lg:py-1.5">
-    {/* Row 1: Upload, file info, Auto-Arrange, Undo/Redo/Dup/Del — scrolls horizontally instead of wrapping when it doesn't fit */}
-    <div
-      ref={row1ScrollRef}
-      onMouseDown={handleRow1MouseDown}
-      onMouseMove={handleRow1MouseMove}
-      onMouseUp={stopRow1Drag}
-      onMouseLeave={stopRow1Drag}
-      className="native-scroll-hidden flex w-full flex-nowrap items-center gap-1.5 lg:gap-2 min-w-0 overflow-x-auto select-none cursor-grab active:cursor-grabbing"
-    >
+    {/* Row 1: Upload, file info, Auto-Arrange, Undo/Redo/Dup/Del */}
+    <div className="flex items-center gap-1.5 lg:gap-2 min-w-0 flex-wrap flex-shrink-0">
       <UploadSection
         onImageUpload={handleFileUploadUnified}
         onBatchStart={handleBatchStart}
@@ -303,7 +296,14 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
           </div>
         )}
       </div>
-      <div className="flex min-w-0 items-center justify-end gap-0.5 flex-wrap">
+      <div
+        ref={actionsScrollRef}
+        onMouseDown={handleActionsMouseDown}
+        onMouseMove={handleActionsMouseMove}
+        onMouseUp={stopActionsDrag}
+        onMouseLeave={stopActionsDrag}
+        className="native-scroll-hidden flex min-w-0 flex-1 flex-nowrap items-center justify-end gap-0.5 overflow-x-auto select-none cursor-grab active:cursor-grabbing"
+      >
         <button
           onClick={handleUndo}
           disabled={!canUndo()}
