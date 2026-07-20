@@ -250,7 +250,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       };
 
       // Skip re-export/re-upload on update when nothing rendered has actually changed.
-      const existingProduction = (initialDesignState as { production?: { url?: string | null; key?: string | null } } | null)?.production;
+      const existingProduction = (initialDesignState as { production?: { url?: string | null; key?: string | null; previewUrl?: string | null } } | null)?.production;
 
       const roundSig = (v: unknown) => {
         const n = Number(v);
@@ -339,12 +339,14 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       const onUploadProgress = (msg: string) => setAddToCartProgressLabel(msg);
 
       let productionUrl: string | null = null;
+      let cartPreviewUrl: string | null = null;
       let uploadedProductionKey: string | null = productionKey || null;
       let exportBufferForUpload = exportWorkerBuffer;
 
       if (canReuseProduction && existingProduction?.url) {
         // Nothing affecting the sheet changed — point at the already-uploaded production PNG.
         productionUrl = String(existingProduction.url);
+        cartPreviewUrl = existingProduction.previewUrl ? String(existingProduction.previewUrl) : productionUrl;
         uploadedProductionKey = existingProduction.key ? String(existingProduction.key) : uploadedProductionKey;
         setAddToCartProgressLabel(undefined);
       } else if (uploadInBuilder) {
@@ -362,6 +364,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
             uploadOpts,
           );
           productionUrl = uploaded.productionUrl;
+          cartPreviewUrl = uploaded.cartPreviewUrl || uploaded.productionUrl;
           uploadedProductionKey = uploaded.key || uploadedProductionKey;
           exportBufferForUpload = null;
         } catch (uploadErr) {
@@ -387,10 +390,11 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
           ? {
               productionUrl,
               productionKey: uploadedProductionKey || undefined,
+              cartPreviewUrl: cartPreviewUrl || productionUrl,
             }
           : {}),
         ...(isEditMode && existingProduction?.url && !productionUrl
-          ? { productionUrl: String(existingProduction.url) }
+          ? { productionUrl: String(existingProduction.url), cartPreviewUrl: existingProduction.previewUrl ? String(existingProduction.previewUrl) : String(existingProduction.url) }
           : {}),
         builderVersion: (import.meta as unknown as { env?: { VITE_APP_VERSION?: string } })?.env?.VITE_APP_VERSION || "builder-unversioned",
       };

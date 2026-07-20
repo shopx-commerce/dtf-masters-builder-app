@@ -16,6 +16,7 @@ export type R2UploadResult = {
   productionUrl: string;
   key: string | null;
   previewUrl: string | null;
+  cartPreviewUrl: string | null;
 };
 
 export type R2UploadOptions = {
@@ -334,6 +335,7 @@ export async function uploadProductionToR2(
     productionUrl: prod,
     key: done.key ? String(done.key) : null,
     previewUrl: prod,
+    cartPreviewUrl: done.cartPreviewUrl ? String(done.cartPreviewUrl) : prod,
   };
 }
 
