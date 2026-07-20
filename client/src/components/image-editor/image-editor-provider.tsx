@@ -72,10 +72,9 @@ function useImageEditorModel(props: ImageEditorProps) {
     profile: bag.profile,
     onAddToCart: bag.handleAddToCart,
     hasVariantId: !!(bag.initialVariantId || bag.shopifyVariants?.length),
+    isEditMode: bag.isEditMode,
     isAddingToCart: bag.isAddingToCart,
     isProcessing: bag.isProcessing,
-    addToCartLabel: bag.isEditMode ? "Update Design" : undefined,
-    addingStatusLabel: bag.isEditMode ? "Updating" : undefined,
   };
 
   return { ...bag, actionToolbarProps };

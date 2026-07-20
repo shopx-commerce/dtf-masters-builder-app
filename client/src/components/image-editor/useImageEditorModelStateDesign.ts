@@ -692,7 +692,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
 
   const handleDuplicateDesign = useCallback((count: number = 1) => {
     if (selectedDesignIds.size > 1) {
-      duplicateSelectedGroupAndArrange();
+      handleDuplicateSelectedRef.current();
       return;
     }
     if (!selectedDesignId || count < 1) return;
@@ -716,7 +716,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     setDesigns(prev => [...prev, ...newDesigns]);
     setSelectedDesignId(newDesigns[newDesigns.length - 1].id);
     setDuplicateCount(1);
-  }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight, selectedDesignIds, duplicateSelectedGroupAndArrange]);
+  }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight, selectedDesignIds]);
 
   const handleDuplicateAndArrange = useCallback((count: number) => {
     if (selectedDesignIds.size > 1) {
