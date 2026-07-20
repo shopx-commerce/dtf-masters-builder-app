@@ -678,7 +678,20 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     return false;
   }, [designs, artboardWidth, artboardHeight]);
 
+  const handleDuplicateSelectedRef = useRef<() => string[]>(() => []);
+
+  const duplicateSelectedGroupAndArrange = useCallback(() => {
+    const newIds = handleDuplicateSelectedRef.current();
+    if (newIds.length > 0) {
+      setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true }), 0);
+    }
+  }, []);
+
   const handleDuplicateDesign = useCallback((count: number = 1) => {
+    if (selectedDesignIds.size > 1) {
+      duplicateSelectedGroupAndArrange();
+      return;
+    }
     if (!selectedDesignId || count < 1) return;
     const design = designs.find(d => d.id === selectedDesignId);
     if (!design) return;
@@ -700,9 +713,13 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     setDesigns(prev => [...prev, ...newDesigns]);
     setSelectedDesignId(newDesigns[newDesigns.length - 1].id);
     setDuplicateCount(1);
-  }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight]);
+  }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight, selectedDesignIds, duplicateSelectedGroupAndArrange]);
 
   const handleDuplicateAndArrange = useCallback((count: number) => {
+    if (selectedDesignIds.size > 1) {
+      duplicateSelectedGroupAndArrange();
+      return;
+    }
     if (!selectedDesignId || count < 1) return;
     const design = designs.find(d => d.id === selectedDesignId);
     if (!design) return;
@@ -727,7 +744,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     requestAnimationFrame(() => {
       handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true });
     });
-  }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight]);
+  }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight, selectedDesignIds, duplicateSelectedGroupAndArrange]);
 
   const handleDuplicateSelected = useCallback((): string[] => {
     const toDup = designs.filter(d => selectedDesignIds.has(d.id));
@@ -751,6 +768,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     else setSelectedDesignId(newIds[newIds.length - 1]);
     return newIds;
   }, [designs, selectedDesignIds, saveSnapshot, artboardWidth, artboardHeight]);
+  handleDuplicateSelectedRef.current = handleDuplicateSelected;
 
   const handleDuplicateById = useCallback((designId: string) => {
     const design = designs.find(d => d.id === designId);
