@@ -316,7 +316,14 @@ export default function ControlsSection({
                             textValue={label}
                             className={`tabular-nums ${lang !== 'en' ? 'text-[10px]' : 'text-xs'}`}
                           >
-                            {label}
+                            <span className="flex items-center justify-between gap-3 w-full">
+                              <span>{label}</span>
+                              {recommendedArtboardHeight === h && (
+                                <span className="text-[10px] text-blue-600 font-medium shrink-0">
+                                  {t("controls.currentBounds")}
+                                </span>
+                              )}
+                            </span>
                           </SelectItem>
                         );
                       })}
@@ -356,7 +363,14 @@ export default function ControlsSection({
                           textValue={label}
                           className={`tabular-nums ${lang !== 'en' ? 'text-[10px]' : 'text-xs'}`}
                         >
-                          {label}
+                          <span className="flex items-center justify-between gap-3 w-full">
+                            <span>{label}</span>
+                            {recommendedArtboardHeight === h && (
+                              <span className="text-[10px] text-blue-600 font-medium shrink-0">
+                                {t("controls.currentBounds")}
+                              </span>
+                            )}
+                          </span>
                         </SelectItem>
                       );
                     })}
@@ -366,11 +380,6 @@ export default function ControlsSection({
             </div>
           )}
         </div>
-        {recommendedArtboardHeight != null && recommendedArtboardHeight === artboardHeight && (
-          <div className="border-t border-blue-100/60 bg-blue-50/40 px-2 pb-1.5 pt-0 text-[10px] font-medium leading-snug text-blue-600 sm:px-3 sm:pb-2">
-            {t("controls.currentBounds")}
-          </div>
-        )}
       </div>
 
       {enableFluorescent && imageInfo && fluorPanelContainer && createPortal(
