@@ -74,10 +74,9 @@ export type EditorActionToolbarProps = {
   profile: ProfileConfig;
   onAddToCart?: () => void;
   hasVariantId?: boolean;
+  isEditMode?: boolean;
   isAddingToCart?: boolean;
   isProcessing?: boolean;
-  addToCartLabel?: string;
-  addingStatusLabel?: string;
 };
 
 export default function EditorActionToolbar(props: EditorActionToolbarProps) {
@@ -131,22 +130,21 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
     profile,
     onAddToCart,
     hasVariantId,
+    isEditMode,
     isAddingToCart,
     isProcessing,
-    addToCartLabel,
-    addingStatusLabel,
   } = props;
   const metric = useMetric(lang);
   const canAddToCart = !!activeImageInfo || designs.length > 0;
   const cartButtonDisabled = !!isProcessing || !canAddToCart;
   const cartButtonBusy = !!isAddingToCart || !!isProcessing;
   const cartButtonLabel = !canAddToCart
-    ? (addToCartLabel || t("controls.addToCart"))
+    ? t("controls.addToCart")
     : isAddingToCart
-      ? (addingStatusLabel || t("controls.addingToCart"))
+      ? t("controls.addingToCart")
       : isProcessing
         ? t("editor.processing")
-        : (addToCartLabel || t("controls.addToCart"));
+        : t("controls.addToCart");
   const cartButtonTitle = !canAddToCart ? t("controls.uploadFirst") : cartButtonLabel;
 
   return (
@@ -312,28 +310,28 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
         >
           <Trash2 className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
         </button>
-        {isLgUp && selectedVariantPrice != null && (
+        {isLgUp && !isEditMode && hasVariantId && onAddToCart && (
           <>
             <div className="w-px h-4 bg-gray-200 mx-0.5 flex-shrink-0" aria-hidden />
-            <span className="shrink-0 whitespace-nowrap rounded-full border border-emerald-600 bg-white px-2 py-0.5 text-[11px] font-bold leading-none text-emerald-600 tabular-nums lg:text-xs">
-              {formatVariantPriceForDisplay(selectedVariantPrice)}
-            </span>
+            <button
+              onClick={onAddToCart}
+              disabled={cartButtonDisabled}
+              className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md bg-gradient-to-r from-emerald-500 to-green-600 px-2.5 py-1.5 text-[11px] font-semibold text-white shadow-sm transition-all hover:from-emerald-600 hover:to-green-700 disabled:pointer-events-none disabled:opacity-50 lg:text-xs"
+              title={cartButtonTitle}
+            >
+              {cartButtonBusy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <ShoppingCart className="h-3.5 w-3.5" />
+              )}
+              <span>{cartButtonLabel}</span>
+            </button>
           </>
         )}
-        {isLgUp && hasVariantId && onAddToCart && (
-          <button
-            onClick={onAddToCart}
-            disabled={cartButtonDisabled}
-            className="ml-1 flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md bg-gradient-to-r from-emerald-500 to-green-600 px-2.5 py-1.5 text-[11px] font-semibold text-white shadow-sm transition-all hover:from-emerald-600 hover:to-green-700 disabled:pointer-events-none disabled:opacity-50 lg:text-xs"
-            title={cartButtonTitle}
-          >
-            {cartButtonBusy ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <ShoppingCart className="h-3.5 w-3.5" />
-            )}
-            <span>{cartButtonLabel}</span>
-          </button>
+        {isLgUp && selectedVariantPrice != null && (
+          <span className="ml-1 shrink-0 whitespace-nowrap rounded-full border border-emerald-600 bg-white px-2 py-0.5 text-[11px] font-bold leading-none text-emerald-600 tabular-nums lg:text-xs">
+            {formatVariantPriceForDisplay(selectedVariantPrice)}
+          </span>
         )}
         {isMobile && (
           <button
