@@ -187,7 +187,7 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
   {/* Top bar: three rows on mobile, wraps on desktop when metric to avoid overlap */}
   <div className="flex-shrink-0 flex flex-col lg:flex-row lg:flex-wrap lg:items-center gap-1.5 lg:gap-2 bg-white border-b border-gray-200 px-2 py-1 lg:px-3 lg:py-1.5">
     {/* Row 1: Upload, file info, Auto-Arrange, Undo/Redo/Dup/Del */}
-    <div className="flex items-center gap-1.5 lg:gap-2 min-w-0 flex-wrap flex-shrink-0">
+    <div className="flex items-center gap-1.5 lg:gap-2 min-w-0 flex-nowrap flex-shrink-0">
       <UploadSection
         onImageUpload={handleFileUploadUnified}
         onBatchStart={handleBatchStart}
@@ -213,7 +213,9 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
           onMouseUp={stopActionsDrag}
           onMouseLeave={stopActionsDrag}
           onScroll={updateScrollFade}
-          className="native-scroll-hidden flex flex-nowrap items-center gap-1 overflow-x-auto select-none cursor-grab active:cursor-grabbing"
+          className={`native-scroll-hidden flex flex-nowrap items-center gap-1 overflow-x-auto ${
+            canScrollLeft || canScrollRight ? 'select-none cursor-grab active:cursor-grabbing' : ''
+          }`}
         >
           <div className="flex flex-shrink-0 items-center gap-1">
             <button
@@ -321,7 +323,6 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
               </button>
             </div>
           )}
-          <div className="min-w-[8px] flex-1" aria-hidden />
           <div className="flex flex-shrink-0 items-center gap-0.5">
             <button
               onClick={handleUndo}
@@ -354,6 +355,9 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
             >
               <Trash2 className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
             </button>
+          </div>
+          {/* Add to Cart + price — right-aligned via margin-left:auto, inside the scrollable region */}
+          <div className="ml-auto flex flex-shrink-0 items-center gap-0.5">
             {isLgUp && !isEditMode && hasVariantId && onAddToCart && (
               <>
                 <div className="w-px h-4 bg-gray-200 mx-0.5 flex-shrink-0" aria-hidden />
@@ -381,7 +385,7 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
               <button
                 onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2 })}
                 disabled={designs.length < 2 && selectedDesignIds.size < 2}
-                className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap font-medium shadow-sm min-h-[36px] ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ml-auto ${
+                className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap font-medium shadow-sm min-h-[36px] ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ${
                   designs.length >= 2 || selectedDesignIds.size >= 2
                     ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
                     : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
