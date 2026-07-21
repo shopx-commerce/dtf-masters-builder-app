@@ -152,8 +152,9 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
   {/* Top bar: three rows on mobile, wraps on desktop when metric to avoid overlap */}
   <div className="flex-shrink-0 flex flex-col lg:flex-row lg:flex-wrap lg:items-center gap-1.5 lg:gap-2 bg-white border-b border-gray-200 px-2 py-1 lg:px-3 lg:py-1.5">
     {/* Row 1: Upload, file info, Auto-Arrange, Undo/Redo/Dup/Del */}
-    <div className="flex items-center gap-1.5 lg:gap-2 min-w-0 flex-wrap flex-shrink-0">
-      <UploadSection 
+    <div className="flex items-center gap-1.5 lg:gap-2 min-w-0 flex-wrap flex-shrink-0 lg:basis-full lg:flex-nowrap lg:items-start">
+      <div className="contents lg:flex lg:flex-1 lg:min-w-0 lg:flex-wrap lg:items-center lg:gap-2">
+      <UploadSection
         onImageUpload={handleFileUploadUnified}
         onBatchStart={handleBatchStart}
         imageInfo={activeImageInfo}
@@ -310,29 +311,6 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
         >
           <Trash2 className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
         </button>
-        {isLgUp && !isEditMode && hasVariantId && onAddToCart && (
-          <>
-            <div className="w-px h-4 bg-gray-200 mx-0.5 flex-shrink-0" aria-hidden />
-            <button
-              onClick={onAddToCart}
-              disabled={cartButtonDisabled}
-              className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md bg-gradient-to-r from-emerald-500 to-green-600 px-2.5 py-1.5 text-[11px] font-semibold text-white shadow-sm transition-all hover:from-emerald-600 hover:to-green-700 disabled:pointer-events-none disabled:opacity-50 lg:text-xs"
-              title={cartButtonTitle}
-            >
-              {cartButtonBusy ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <ShoppingCart className="h-3.5 w-3.5" />
-              )}
-              <span>{cartButtonLabel}</span>
-            </button>
-          </>
-        )}
-        {isLgUp && selectedVariantPrice != null && (
-          <span className="ml-1 shrink-0 whitespace-nowrap rounded-full border border-emerald-600 bg-white px-2 py-0.5 text-[11px] font-bold leading-none text-emerald-600 tabular-nums lg:text-xs">
-            {formatVariantPriceForDisplay(selectedVariantPrice)}
-          </span>
-        )}
         {isMobile && (
           <button
             onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2 })}
@@ -349,6 +327,34 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
           </button>
         )}
       </div>
+      </div>
+      {isLgUp && ((!isEditMode && hasVariantId && onAddToCart) || selectedVariantPrice != null) && (
+        <div className="flex flex-shrink-0 items-center gap-0.5 lg:gap-1">
+          {!isEditMode && hasVariantId && onAddToCart && (
+            <>
+              <div className="w-px h-4 bg-gray-200 mx-0.5 flex-shrink-0" aria-hidden />
+              <button
+                onClick={onAddToCart}
+                disabled={cartButtonDisabled}
+                className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md bg-gradient-to-r from-emerald-500 to-green-600 px-2.5 py-1.5 text-[11px] font-semibold text-white shadow-sm transition-all hover:from-emerald-600 hover:to-green-700 disabled:pointer-events-none disabled:opacity-50 lg:text-xs"
+                title={cartButtonTitle}
+              >
+                {cartButtonBusy ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ShoppingCart className="h-3.5 w-3.5" />
+                )}
+                <span>{cartButtonLabel}</span>
+              </button>
+            </>
+          )}
+          {selectedVariantPrice != null && (
+            <span className="shrink-0 whitespace-nowrap rounded-full border border-emerald-600 bg-white px-2 py-0.5 text-[11px] font-bold leading-none text-emerald-600 tabular-nums lg:text-xs">
+              {formatVariantPriceForDisplay(selectedVariantPrice)}
+            </span>
+          )}
+        </div>
+      )}
     </div>
     {/* Row 2: Size, DPI, Margin, Rotate, Align — always on its own line */}
     <div className="flex items-center gap-1.5 lg:gap-2 flex-wrap lg:basis-full">
