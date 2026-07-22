@@ -681,18 +681,32 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     return false;
   }, [designs, artboardWidth, artboardHeight]);
 
-  const handleDuplicateSelectedRef = useRef<() => string[]>(() => []);
-
-  const duplicateSelectedGroupAndArrange = useCallback(() => {
-    const newIds = handleDuplicateSelectedRef.current();
-    if (newIds.length > 0) {
-      setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true }), 0);
-    }
-  }, []);
+  const handleDuplicateSelected = useCallback((): string[] => {
+    const toDup = designs.filter(d => selectedDesignIds.has(d.id));
+    if (toDup.length === 0) return [];
+    const newIds: string[] = [];
+    const newDesigns: DesignItem[] = toDup.map((d, i) => {
+      const newId = crypto.randomUUID();
+      newIds.push(newId);
+      const base = d.name.replace(/ copy( \d+)?$/, '');
+      const offsetT = { ...d.transform, nx: d.transform.nx + 0.03 + i * 0.01, ny: d.transform.ny };
+      const { nx, ny } = clampDesignToArtboard({ ...d, transform: offsetT }, artboardWidth, artboardHeight);
+      return { ...d, id: newId, name: base, transform: { ...d.transform, nx, ny }, printFileName: false };
+    });
+    multiDragAccumRef.current = null;
+    multiResizeStartRef.current = null;
+    multiRotateStartRef.current = null;
+    saveSnapshot();
+    setDesigns(prev => [...prev, ...newDesigns]);
+    setSelectedDesignIds(new Set(newIds));
+    if (newIds.length === 1) setSelectedDesignId(newIds[0]);
+    else setSelectedDesignId(newIds[newIds.length - 1]);
+    return newIds;
+  }, [designs, selectedDesignIds, saveSnapshot, artboardWidth, artboardHeight]);
 
   const handleDuplicateDesign = useCallback((count: number = 1) => {
     if (selectedDesignIds.size > 1) {
-      handleDuplicateSelectedRef.current();
+      handleDuplicateSelected();
       return;
     }
     if (!selectedDesignId || count < 1) return;
@@ -716,11 +730,14 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     setDesigns(prev => [...prev, ...newDesigns]);
     setSelectedDesignId(newDesigns[newDesigns.length - 1].id);
     setDuplicateCount(1);
-  }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight, selectedDesignIds]);
+  }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight, selectedDesignIds, handleDuplicateSelected]);
 
   const handleDuplicateAndArrange = useCallback((count: number) => {
     if (selectedDesignIds.size > 1) {
-      duplicateSelectedGroupAndArrange();
+      const newIds = handleDuplicateSelected();
+      if (newIds.length > 0) {
+        setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true }), 0);
+      }
       return;
     }
     if (!selectedDesignId || count < 1) return;
@@ -747,31 +764,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     requestAnimationFrame(() => {
       handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true });
     });
-  }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight, selectedDesignIds, duplicateSelectedGroupAndArrange]);
-
-  const handleDuplicateSelected = useCallback((): string[] => {
-    const toDup = designs.filter(d => selectedDesignIds.has(d.id));
-    if (toDup.length === 0) return [];
-    const newIds: string[] = [];
-    const newDesigns: DesignItem[] = toDup.map((d, i) => {
-      const newId = crypto.randomUUID();
-      newIds.push(newId);
-      const base = d.name.replace(/ copy( \d+)?$/, '');
-      const offsetT = { ...d.transform, nx: d.transform.nx + 0.03 + i * 0.01, ny: d.transform.ny };
-      const { nx, ny } = clampDesignToArtboard({ ...d, transform: offsetT }, artboardWidth, artboardHeight);
-      return { ...d, id: newId, name: base, transform: { ...d.transform, nx, ny }, printFileName: false };
-    });
-    multiDragAccumRef.current = null;
-    multiResizeStartRef.current = null;
-    multiRotateStartRef.current = null;
-    saveSnapshot();
-    setDesigns(prev => [...prev, ...newDesigns]);
-    setSelectedDesignIds(new Set(newIds));
-    if (newIds.length === 1) setSelectedDesignId(newIds[0]);
-    else setSelectedDesignId(newIds[newIds.length - 1]);
-    return newIds;
-  }, [designs, selectedDesignIds, saveSnapshot, artboardWidth, artboardHeight]);
-  handleDuplicateSelectedRef.current = handleDuplicateSelected;
+  }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight, selectedDesignIds, handleDuplicateSelected]);
 
   const handleDuplicateById = useCallback((designId: string) => {
     const design = designs.find(d => d.id === designId);
