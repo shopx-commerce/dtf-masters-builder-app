@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import ImageEditor from "@/components/image-editor";
 import { type ProfileConfig, HOT_PEEL_PROFILE } from "@/lib/profiles";
+import type { InitialDesignState } from "@/components/image-editor/types";
 import { Link } from "wouter";
 import { ArrowLeft, Upload, X } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
@@ -21,7 +22,7 @@ interface ShopifyVariant {
 
 interface VariantConfig {
   configured: boolean;
-  source?: "proxy" | "storefront";
+  source?: "proxy" | "storefront" | "storefront-ajax";
   artboardWidth?: number;
   gangsheetHeights?: number[];
   selectedHeight?: number;
@@ -35,16 +36,54 @@ function getRawParams() {
   return Object.fromEntries(new URLSearchParams(window.location.search).entries());
 }
 
+function normalizeDesignStatePayload(json: unknown): InitialDesignState | null {
+  if (!json || typeof json !== "object") return null;
+  const root = json as Record<string, unknown>;
+  if (typeof root.error === "string" && root.error.trim()) return null;
+  const nested =
+    root.state && typeof root.state === "object"
+      ? (root.state as Record<string, unknown>)
+      : null;
+  const state = (nested || root) as InitialDesignState;
+  if (!Array.isArray(state.layers)) return null;
+  const rawVersion = state.version ?? root.version ?? 1;
+  const version = Number.isFinite(Number(rawVersion)) ? Number(rawVersion) : 1;
+  return {
+    ...state,
+    designId:
+      state.designId ??
+      (typeof root.designId === "string" ? root.designId : null),
+    version,
+  };
+}
+
+function resolveStateUrl(stateUrl: string | null, stateKey: string | null): string | null {
+  if (stateUrl && String(stateUrl).trim()) return String(stateUrl).trim();
+  if (!stateKey || !String(stateKey).trim()) return null;
+  const fromEnv = (import.meta as unknown as { env?: { VITE_R2_PUBLIC_BASE_URL?: string } })?.env
+    ?.VITE_R2_PUBLIC_BASE_URL;
+  const base = String(fromEnv || "").trim().replace(/\/$/, "");
+  if (!base) return null;
+  const key = String(stateKey).trim().replace(/^\/+/, "");
+  return `${base}/${key}`;
+}
+
 export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMakerProps) {
   const { t } = useLanguage();
 
   const rawParams = getRawParams();
   const ctxToken = rawParams["ctx"] ?? null;
   const variantId = rawParams["variant"] ?? rawParams["variant_id"] ?? null;
+  const productId = rawParams["product_id"] ?? rawParams["productId"] ?? null;
+  const productHandle = rawParams["product_handle"] ?? rawParams["productHandle"] ?? null;
   const quantity = rawParams["quantity"] ?? null;
   const shopDomain = rawParams["shop"] ?? null;
+  const designId = rawParams["designId"] ?? null;
+  const stateKey = rawParams["stateKey"] ?? null;
+  const stateUrl = resolveStateUrl(rawParams["stateUrl"] ?? null, stateKey);
+  const isAdminEditMode = Boolean(stateUrl || designId || stateKey);
   /** Opened from Shopify (proxy / product) — skip landing-style chrome and upload gate */
-  const embedFromShopify = !!(ctxToken || shopDomain);
+  const embedFromShopify = !!(ctxToken || shopDomain || isAdminEditMode);
   /** Opt-in only: ?storefront=1 fetches sizes from Storefront API (needs env vars). Default is builder_context only. */
   const useStorefront =
     rawParams["storefront"] === "1" || rawParams["storefront"] === "true";
@@ -52,24 +91,79 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
   const allowEditor =
     Boolean(ctxToken) ||
     Boolean(shopDomain) ||
+    isAdminEditMode ||
     (Boolean(variantId) && useStorefront);
   const [variantConfig, setVariantConfig] = useState<VariantConfig | null>(null);
+  const [initialDesignState, setInitialDesignState] = useState<InitialDesignState | null>(null);
+  const [designStateLoadError, setDesignStateLoadError] = useState<string | null>(null);
+  const [loadingDesignState, setLoadingDesignState] = useState(Boolean(stateUrl || stateKey));
+  const [effectiveVariantId, setEffectiveVariantId] = useState<string | null>(variantId);
+  const [effectiveShopDomain, setEffectiveShopDomain] = useState<string | null>(shopDomain);
+  const [effectiveQuantity, setEffectiveQuantity] = useState<number | null>(
+    quantity ? parseInt(quantity, 10) || 1 : null,
+  );
   /** Full-screen loader only for optional Storefront fetch — never block UI for ?ctx= (proxy already minted ctx; we hydrate variants in background). */
   const [loading, setLoading] = useState(!!variantId && useStorefront);
+
+  const storefrontVariantQuery = (vid: string) => {
+    const q = new URLSearchParams({ variant: vid });
+    if (productId) q.set("product_id", productId);
+    if (productHandle) q.set("product_handle", productHandle);
+    return `/api/storefront-variant-config?${q.toString()}`;
+  };
 
   useEffect(() => {
     // Primary flow: proxy → redirect with ?ctx=… — hydrate sizes/prices without blocking the editor shell
     if (ctxToken) {
+      const hydrateFromCtx = (data: VariantConfig) => {
+        const hasHeights = Array.isArray(data.gangsheetHeights) && data.gangsheetHeights.length > 0;
+        if (hasHeights) {
+          setVariantConfig({ ...data, configured: true, source: data.source ?? "proxy" });
+          return;
+        }
+        const vid = variantId || effectiveVariantId;
+        if (!vid) {
+          setVariantConfig({ ...data, configured: true, source: data.source ?? "proxy" });
+          return;
+        }
+        fetch(storefrontVariantQuery(vid))
+          .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+          .then((extra: VariantConfig) => {
+            if (Array.isArray(extra.gangsheetHeights) && extra.gangsheetHeights.length > 0) {
+              setVariantConfig({ ...extra, configured: true, source: "storefront-ajax" });
+            } else {
+              console.warn("[builder] ctx missing gangsheetHeights; storefront ajax also empty", { data, extra });
+              setVariantConfig({ ...data, configured: true, source: data.source ?? "proxy" });
+            }
+          })
+          .catch((err) => {
+            console.error("[builder] storefront variant-config fallback failed:", err);
+            setVariantConfig({ ...data, configured: true, source: data.source ?? "proxy" });
+          });
+      };
+
       fetch(`/api/builder-context/${encodeURIComponent(ctxToken)}`)
         .then((r) => {
           if (!r.ok) throw new Error(String(r.status));
           return r.json();
         })
-        .then((data: VariantConfig) => {
-          setVariantConfig({ ...data, configured: true, source: "proxy" });
-        })
+        .then((data: VariantConfig) => hydrateFromCtx(data))
         .catch((err) => {
           console.error("[builder] ctx fetch error:", err);
+          const vid = variantId || effectiveVariantId;
+          if (vid) {
+            fetch(storefrontVariantQuery(vid))
+              .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+              .then((extra: VariantConfig) => {
+                if (Array.isArray(extra.gangsheetHeights) && extra.gangsheetHeights.length > 0) {
+                  setVariantConfig({ ...extra, configured: true, source: "storefront-ajax" });
+                } else {
+                  setVariantConfig({ configured: false, error: "Invalid or expired ctx" });
+                }
+              })
+              .catch(() => setVariantConfig({ configured: false, error: "Invalid or expired ctx" }));
+            return;
+          }
           setVariantConfig({ configured: false, error: "Invalid or expired ctx" });
         });
       return;
@@ -92,7 +186,66 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
     }
 
     setLoading(false);
-  }, [ctxToken, variantId, useStorefront]);
+  }, [ctxToken, variantId, useStorefront, productId, productHandle]);
+
+  useEffect(() => {
+    if (!stateUrl && !stateKey) return;
+    let cancelled = false;
+    setLoadingDesignState(true);
+    setDesignStateLoadError(null);
+    const loaderUrl = stateUrl
+      ? `/api/fetch-json?url=${encodeURIComponent(stateUrl)}`
+      : stateKey
+        ? `/api/design-state?stateKey=${encodeURIComponent(String(stateKey))}`
+        : null;
+    if (!loaderUrl) {
+      setLoadingDesignState(false);
+      return;
+    }
+    fetch(loaderUrl)
+      .then((r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        return r.json();
+      })
+      .then((json) => {
+        if (cancelled) return;
+        const normalized = normalizeDesignStatePayload(json);
+        if (!normalized) {
+          throw new Error(
+            typeof (json as { error?: string })?.error === "string"
+              ? (json as { error: string }).error
+              : "Design state JSON is missing layers",
+          );
+        }
+        setInitialDesignState(normalized);
+        const fromStateVariant = normalized.references?.productVariantId;
+        const fromStateShop = (normalized as { shop?: string }).shop;
+        const fromStateQty = Number(normalized.settings?.quantity);
+        if (!effectiveVariantId && fromStateVariant) {
+          setEffectiveVariantId(String(fromStateVariant));
+        }
+        if (!effectiveShopDomain && fromStateShop) {
+          setEffectiveShopDomain(String(fromStateShop));
+        }
+        if (!effectiveQuantity && Number.isFinite(fromStateQty) && fromStateQty > 0) {
+          setEffectiveQuantity(Math.floor(fromStateQty));
+        }
+      })
+      .catch((err) => {
+        console.error("[builder] design state fetch error:", err);
+        if (!cancelled) {
+          setDesignStateLoadError(
+            err instanceof Error ? err.message : "Failed to load saved design",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingDesignState(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [stateUrl, stateKey]);
 
   const resolvedWidth = variantConfig?.configured ? variantConfig.artboardWidth : undefined;
   const resolvedHeight = variantConfig?.configured ? variantConfig.selectedHeight : undefined;
@@ -100,6 +253,7 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
   const resolvedVariants = variantConfig?.configured ? variantConfig.variants : undefined;
   /** Wait for `/api/builder-context` before mounting the editor so artboard size isn’t briefly wrong (first variant / default). */
   const waitingForCtx = Boolean(ctxToken) && variantConfig === null;
+  const waitingForEditState = Boolean(stateUrl || stateKey) && loadingDesignState;
 
   if (loading) {
     return (
@@ -245,21 +399,32 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
       )}
 
       <main className="flex-1 min-h-0">
-        {waitingForCtx ? (
+        {designStateLoadError ? (
+          <div className="h-full flex items-center justify-center p-6">
+            <div className="max-w-md rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+              <p className="font-semibold">Could not load saved design</p>
+              <p className="mt-1">{designStateLoadError}</p>
+            </div>
+          </div>
+        ) : waitingForCtx || waitingForEditState ? (
           <div className="h-full flex items-center justify-center">
             <div className="w-8 h-8 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" aria-hidden />
           </div>
         ) : (
           <ImageEditor
+            key={`${designId || "new"}-${initialDesignState?.version ?? 0}-${resolvedHeights?.join("x") ?? "sizes"}`}
             profile={profile}
             initialWidth={resolvedWidth}
             initialHeight={resolvedHeight}
             initialGangsheetHeights={resolvedHeights}
-            initialQuantity={quantity ? parseInt(quantity, 10) || 1 : 1}
+            initialQuantity={effectiveQuantity || 1}
             shopifyVariants={resolvedVariants}
-            variantId={variantId}
-            shopDomain={shopDomain}
+            variantId={effectiveVariantId}
+            shopDomain={effectiveShopDomain}
             embedFromShopify={embedFromShopify}
+            initialDesignState={initialDesignState}
+            initialDesignId={designId}
+            isEditMode={isAdminEditMode}
           />
         )}
       </main>

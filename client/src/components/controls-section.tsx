@@ -53,6 +53,9 @@ interface ControlsSectionProps {
   onAddToCart?: () => void;
   hasVariantId?: boolean;
   isAddingToCart?: boolean;
+  addToCartLabel?: string;
+  addingStatusLabel?: string;
+  lockGangsheetSize?: boolean;
 }
 
 const DEFAULT_HEIGHTS: number[] = [];
@@ -80,6 +83,9 @@ export default function ControlsSection({
   onAddToCart,
   hasVariantId = false,
   isAddingToCart = false,
+  addToCartLabel,
+  addingStatusLabel,
+  lockGangsheetSize = false,
 }: ControlsSectionProps) {
   const { t, lang } = useLanguage();
   const isMobile = useIsMobile();
@@ -288,12 +294,62 @@ export default function ControlsSection({
               <div className="flex min-w-0 items-center gap-0.5 sm:gap-1">
                 <span className={`shrink-0 font-semibold text-gray-700 tabular-nums ${lang === 'en' ? 'text-[10px] sm:text-xs' : 'text-[10px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
                 <span className={`shrink-0 text-gray-600 ${lang === 'en' ? 'text-[10px] sm:text-xs' : 'text-[10px]'}`}>×</span>
+                {lockGangsheetSize ? (
+                  <span className={`h-6 min-w-[3.5rem] shrink-0 rounded border border-gray-200 bg-gray-100 px-1.5 py-0.5 text-center font-semibold tabular-nums text-gray-900 sm:h-7 sm:min-w-[4.5rem] sm:px-2 ${lang === 'en' ? 'text-[10px] sm:text-xs' : 'text-[10px]'}`}>{formatLength(artboardHeight, lang)}{lang === "en" ? '"' : ""}</span>
+                ) : (
+                  <Select
+                    value={String(artboardHeight)}
+                    onValueChange={(v) => onArtboardHeightChange?.(parseFloat(v))}
+                  >
+                    <SelectTrigger
+                      className={`h-6 w-[3.5rem] shrink-0 gap-0.5 border-gray-200 bg-gray-100 pl-1.5 pr-1 font-semibold tabular-nums text-gray-900 sm:h-7 sm:w-[4.5rem] sm:pl-2 sm:pr-1.5 [&>span]:min-w-0 [&>span]:truncate [&>svg]:h-3 [&>svg]:w-3 [&>svg]:shrink-0 sm:[&>svg]:h-3.5 sm:[&>svg]:w-3.5 ${lang === 'en' ? 'text-[10px] sm:text-xs' : 'text-[10px]'}`}
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="z-[100]" position="popper" sideOffset={4}>
+                      {gangsheetHeights.map((h) => {
+                        const label = `${formatLength(h, lang)}${lang === "en" ? '"' : ""}`;
+                        return (
+                          <SelectItem
+                            key={h}
+                            value={String(h)}
+                            textValue={label}
+                            className={`tabular-nums ${lang !== 'en' ? 'text-[10px]' : 'text-xs'}`}
+                          >
+                            <span className="flex items-center justify-between gap-3 w-full">
+                              <span>{label}</span>
+                              {recommendedArtboardHeight === h && (
+                                <span className="text-[10px] text-blue-600 font-medium shrink-0">
+                                  {t("controls.currentBounds")}
+                                </span>
+                              )}
+                            </span>
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+              {selectedVariantPrice != null && (
+                <span className="ml-0.5 shrink-0 whitespace-nowrap rounded-full border border-emerald-600 bg-white px-1.5 py-[1px] text-[9px] font-bold leading-tight text-emerald-600 tabular-nums sm:px-2 sm:py-0.5 sm:text-[10px]">
+                  {formatVariantPriceForDisplay(selectedVariantPrice)}
+                </span>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-1 ml-auto shrink-0 max-w-[min(12rem,46%)]">
+              <span className={`font-semibold text-gray-700 tabular-nums shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
+              <span className={`text-gray-600 shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>×</span>
+              {lockGangsheetSize ? (
+                <span className={`h-7 min-w-[4.5rem] rounded border border-gray-200 bg-gray-100 px-2 py-1 text-center font-semibold tabular-nums text-gray-900 shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>{formatLength(artboardHeight, lang)}{lang === "en" ? '"' : ""}</span>
+              ) : (
                 <Select
                   value={String(artboardHeight)}
                   onValueChange={(v) => onArtboardHeightChange?.(parseFloat(v))}
                 >
                   <SelectTrigger
-                    className={`h-6 w-[3.5rem] shrink-0 gap-0.5 border-gray-200 bg-gray-100 pl-1.5 pr-1 font-semibold tabular-nums text-gray-900 sm:h-7 sm:w-[4.5rem] sm:pl-2 sm:pr-1.5 [&>span]:min-w-0 [&>span]:truncate [&>svg]:h-3 [&>svg]:w-3 [&>svg]:shrink-0 sm:[&>svg]:h-3.5 sm:[&>svg]:w-3.5 ${lang === 'en' ? 'text-[10px] sm:text-xs' : 'text-[10px]'}`}
+                    className={`h-7 w-[4.5rem] shrink-0 pl-2 pr-1.5 gap-0.5 font-semibold text-gray-900 bg-gray-100 border-gray-200 tabular-nums [&>span]:min-w-0 [&>span]:truncate [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}
                   >
                     <SelectValue />
                   </SelectTrigger>
@@ -307,56 +363,23 @@ export default function ControlsSection({
                           textValue={label}
                           className={`tabular-nums ${lang !== 'en' ? 'text-[10px]' : 'text-xs'}`}
                         >
-                          {label}
+                          <span className="flex items-center justify-between gap-3 w-full">
+                            <span>{label}</span>
+                            {recommendedArtboardHeight === h && (
+                              <span className="text-[10px] text-blue-600 font-medium shrink-0">
+                                {t("controls.currentBounds")}
+                              </span>
+                            )}
+                          </span>
                         </SelectItem>
                       );
                     })}
                   </SelectContent>
                 </Select>
-              </div>
-              {selectedVariantPrice != null && (
-                <span className="ml-0.5 shrink-0 whitespace-nowrap rounded-full border border-emerald-600 bg-white px-1.5 py-[1px] text-[9px] font-bold leading-tight text-emerald-600 tabular-nums sm:px-2 sm:py-0.5 sm:text-[10px]">
-                  {formatVariantPriceForDisplay(selectedVariantPrice)}
-                </span>
               )}
-            </div>
-          ) : (
-            <div className="flex items-center gap-1 ml-auto shrink-0 max-w-[min(12rem,46%)]">
-              <span className={`font-semibold text-gray-700 tabular-nums shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
-              <span className={`text-gray-600 shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>×</span>
-              <Select
-                value={String(artboardHeight)}
-                onValueChange={(v) => onArtboardHeightChange?.(parseFloat(v))}
-              >
-                <SelectTrigger
-                  className={`h-7 w-[4.5rem] shrink-0 pl-2 pr-1.5 gap-0.5 font-semibold text-gray-900 bg-gray-100 border-gray-200 tabular-nums [&>span]:min-w-0 [&>span]:truncate [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="z-[100]" position="popper" sideOffset={4}>
-                  {gangsheetHeights.map((h) => {
-                    const label = `${formatLength(h, lang)}${lang === "en" ? '"' : ""}`;
-                    return (
-                      <SelectItem
-                        key={h}
-                        value={String(h)}
-                        textValue={label}
-                        className={`tabular-nums ${lang !== 'en' ? 'text-[10px]' : 'text-xs'}`}
-                      >
-                        {label}
-                      </SelectItem>
-                    );
-                  })}
-                </SelectContent>
-              </Select>
             </div>
           )}
         </div>
-        {recommendedArtboardHeight != null && recommendedArtboardHeight === artboardHeight && (
-          <div className="border-t border-blue-100/60 bg-blue-50/40 px-2 pb-1.5 pt-0 text-[10px] font-medium leading-snug text-blue-600 sm:px-3 sm:pb-2">
-            {t("controls.currentBounds")}
-          </div>
-        )}
       </div>
 
       {enableFluorescent && imageInfo && fluorPanelContainer && createPortal(
@@ -535,14 +558,14 @@ export default function ControlsSection({
                     ? t("controls.addingToCart")
                     : isProcessing
                       ? t("editor.processing")
-                      : t("controls.addToCart")
+                      : (addToCartLabel || t("controls.addToCart"))
               }
               className="flex-1 h-10 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white rounded-lg shadow-lg shadow-emerald-500/25 font-medium disabled:opacity-50"
             >
               {isAddingToCart ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
-                  {t("controls.addingToCart")}
+                  {addingStatusLabel || t("controls.addingToCart")}
                 </>
               ) : isProcessing ? (
                 <>
@@ -552,7 +575,7 @@ export default function ControlsSection({
               ) : (
                 <>
                   <ShoppingCart className="w-5 h-5 mr-2" />
-                  {t("controls.addToCart")}
+                  {addToCartLabel || t("controls.addToCart")}
                 </>
               )}
             </Button>

@@ -1889,7 +1889,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const handleTouchStart = useCallback((e: React.TouchEvent) => {
       if ((e.target as HTMLElement).closest('[data-scrollbar]')) return;
       if (e.touches.length === 2) {
-        e.preventDefault();
+        if (e.nativeEvent.cancelable) e.preventDefault();
         isPinchingRef.current = true;
         isPanningRef.current = false;
         const dx = e.touches[1].clientX - e.touches[0].clientX;
@@ -1900,7 +1900,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         return;
       }
       if (e.touches.length !== 1) return;
-      e.preventDefault();
+      if (e.nativeEvent.cancelable) e.preventDefault();
       if (isHorizOverflow() && !moveModeRef.current) {
         const local = canvasToLocal(e.touches[0].clientX, e.touches[0].clientY);
         const handleHit = selectedDesignId ? hitTestHandles(local.x, local.y) : null;
@@ -1917,7 +1917,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
     const handleTouchMove = useCallback((e: React.TouchEvent) => {
       if (isPinchingRef.current && e.touches.length === 2) {
-        e.preventDefault();
+        if (e.nativeEvent.cancelable) e.preventDefault();
         const dx = e.touches[1].clientX - e.touches[0].clientX;
         const dy = e.touches[1].clientY - e.touches[0].clientY;
         const dist = Math.sqrt(dx * dx + dy * dy);
@@ -1931,7 +1931,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         return;
       }
       if (e.touches.length !== 1) return;
-      e.preventDefault();
+      if (e.nativeEvent.cancelable) e.preventDefault();
       if (isPanningRef.current) {
         const dx = e.touches[0].clientX - panStartRef.current.x;
         const dy = e.touches[0].clientY - panStartRef.current.y;
@@ -2260,6 +2260,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           const rawPanX = oldPx + cursorX * (1 / newZoom - 1 / oldZoom);
           const rawPanY = oldPy + cursorY * (1 / newZoom - 1 / oldZoom);
           const clamped = clampPanValue(rawPanX, rawPanY, newZoom);
+          const dims = previewDimsRef.current;
 
           setZoom(newZoom);
           setPanX(clamped.x);

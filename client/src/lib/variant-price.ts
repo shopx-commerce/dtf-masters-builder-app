@@ -18,8 +18,18 @@ export function getSelectedVariantPrice(
 }
 
 /** Plain-text display: "$29.34" (symbol only; strips trailing currency words from API strings). */
+export function normalizeShopifyPriceForDisplay(raw: string | null | undefined): string | null {
+  if (raw == null || raw === "") return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  if (/^\d+\.\d+$/.test(s)) return s;
+  if (/^\d+$/.test(s)) return (Number(s) / 100).toFixed(2);
+  return s;
+}
+
 export function formatVariantPriceForDisplay(raw: string): string {
-  const t = raw.trim().replace(/\s+(USD|EUR|GBP|CAD|AUD)\s*$/i, '').trim();
-  if (!t) return '';
-  return t.startsWith('$') ? t : `$${t}`;
+  const normalized = normalizeShopifyPriceForDisplay(raw) ?? raw;
+  const t = normalized.trim().replace(/\s+(USD|EUR|GBP|CAD|AUD)\s*$/i, '').trim();
+  const out = !t ? '' : (t.startsWith('$') ? t : `$${t}`);
+  return out;
 }
