@@ -34,9 +34,11 @@ export const es: Record<string, string> = {
   "landing.specialty.press": "325°F • 15s • pelar completamente en frío",
 
   "editor.back": "Volver",
+  "editor.noProductSelected": "Ningún producto seleccionado",
   "editor.tips": "¿Tienes sugerencias o ideas para mejorar la app? ¡Envíalas!",
   "editor.layers": "Capas",
   "editor.addDesigns": "Agregar Diseños",
+  "editor.closeBuilder": "Cerrar editor",
   "editor.addDesignTitle": "Agregar otra imagen",
   "editor.processing": "Procesando...",
   "editor.processingDesign": "Procesando tu diseño",
@@ -94,6 +96,8 @@ export const es: Record<string, string> = {
   "controls.designs": "{count} diseño",
   "controls.designsPlural": "{count} diseños",
   "controls.uploadFirst": "Sube una imagen primero",
+  "controls.addToCart": "Añadir al carrito",
+  "controls.addingToCart": "Añadiendo al carrito",
   "controls.recommended": "Recomendado",
   "controls.currentBounds": "límites actuales",
 

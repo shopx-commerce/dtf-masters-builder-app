@@ -1,4 +1,5 @@
-import { useEffect, useRef, forwardRef, useImperativeHandle, useState, useCallback, useMemo } from "react";
+import { useEffect, useLayoutEffect, useRef, forwardRef, useImperativeHandle, useState, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { ZoomIn, ZoomOut, RotateCcw, ScanSearch, Focus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/lib/i18n";
@@ -28,6 +29,33 @@ function getResizeCursor(handleId: string, rotationDeg: number): string {
   return 'nw-resize';
 }
 
+/** CSS pixel size of the preview “paper” from the gray viewport and artboard aspect (same math as resize handler). */
+function computePreviewDimensions(
+  availW: number,
+  availH: number,
+  artboardWidth: number,
+  artboardHeight: number,
+): { w: number; h: number } | null {
+  if (availW <= 0 || availH <= 0 || artboardHeight <= 0) return null;
+  const artboardAspect = artboardWidth / artboardHeight;
+  // On narrow mobile preview + side panel layouts, a hard 200px minimum can overflow.
+  const minEdge = isNarrowViewport() ? 120 : 200;
+  let w: number;
+  let h: number;
+  if (availW / availH > artboardAspect) {
+    h = Math.round(Math.max(minEdge, availH));
+    w = Math.round(h * artboardAspect);
+  } else {
+    w = Math.round(Math.max(minEdge, availW));
+    h = Math.round(w / artboardAspect);
+  }
+  return { w, h };
+}
+
+function isNarrowViewport(): boolean {
+  return typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches;
+}
+
 interface PreviewSectionProps {
   imageInfo: ImageInfo | null;
   resizeSettings: ResizeSettings;
@@ -50,10 +78,11 @@ interface PreviewSectionProps {
   spotPreviewData?: { enabled: boolean; colors: Array<{ hex: string; rgb: { r: number; g: number; b: number }; spotWhite?: boolean; spotGloss?: boolean; spotFluorY?: boolean; spotFluorM?: boolean; spotFluorG?: boolean; spotFluorOrange?: boolean }> };
   selectionZoomActive?: boolean;
   onSelectionZoomChange?: (active: boolean) => void;
+  bottomToolbarContainer?: HTMLElement | null;
 }
 
 const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
-  ({ imageInfo, resizeSettings, artboardWidth = 24.5, artboardHeight = 12, designTransform, onTransformChange, designs = [], selectedDesignId, selectedDesignIds = new Set(), onSelectDesign, onMultiSelect, onMultiDragDelta, onMultiResizeDelta, onMultiRotateDelta, onDuplicateSelected, onInteractionEnd, onExpandArtboard, onDesignContextMenu, spotPreviewData, selectionZoomActive: selectionZoomActiveProp, onSelectionZoomChange }, ref) => {
+  ({ imageInfo, resizeSettings, artboardWidth = 24.5, artboardHeight = 12, designTransform, onTransformChange, designs = [], selectedDesignId, selectedDesignIds = new Set(), onSelectDesign, onMultiSelect, onMultiDragDelta, onMultiResizeDelta, onMultiRotateDelta, onDuplicateSelected, onInteractionEnd, onExpandArtboard, onDesignContextMenu, spotPreviewData, selectionZoomActive: selectionZoomActiveProp, onSelectionZoomChange, bottomToolbarContainer }, ref) => {
     const { toast } = useToast();
     const { t, lang } = useLanguage();
     const isMobile = useIsMobile();
@@ -101,27 +130,54 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const canvasAreaRef = useRef<HTMLDivElement>(null);
     const dpiScaleRef = useRef(BASE_DPI_SCALE);
     const lastImageRef = useRef<string | null>(null);
-    const [previewDims, setPreviewDims] = useState({ width: 360, height: 360 });
+    /** Start at 0×0 so we never paint a wrong aspect (e.g. 360×360) before the first measure — that was the visible “snap”. */
+    const [previewDims, setPreviewDims] = useState({ width: 0, height: 0 });
     const previewDimsRef = useRef(previewDims);
     previewDimsRef.current = previewDims;
+    /** Skip noisy sub-pixel changes from ResizeObserver / mobile toolbar. */
+    const lastStablePreviewDimsRef = useRef<{ w: number; h: number } | null>(null);
+    /** Only auto–fit zoom when preview size or artboard actually changes (not on every parent re-render). */
+    const lastViewportFitSigRef = useRef<string>('');
     const spotPulseRef = useRef(1);
     const spotAnimFrameRef = useRef<number | null>(null);
     const spotOverlayCacheRef = useRef<{ key: string; canvas: HTMLCanvasElement } | null>(null);
     const createSpotOverlayCanvasRef = useRef<((source?: HTMLImageElement | HTMLCanvasElement) => HTMLCanvasElement | null) | null>(null);
 
+    /** Minimum zoom = fit entire sheet in the gray preview viewport (canvas area), never using the paper box (same as previewDims — that wrongly kept zoom ~1 and looked “zoomed in”). */
     const getMinZoom = useCallback(() => {
-      const container = containerRef.current;
-      if (!container) return ZOOM_MIN_ABSOLUTE;
+      const area = canvasAreaRef.current;
       const dims = previewDimsRef.current;
+      if (!area || dims.width <= 0 || dims.height <= 0) return ZOOM_MIN_ABSOLUTE;
       const padFraction = 0.03;
       const padX = Math.max(4, Math.round(dims.width * padFraction));
       const padY = Math.max(4, Math.round(dims.height * padFraction));
-      const availW = container.clientWidth - padX * 2;
-      const availH = container.clientHeight - padY * 2;
-      if (availW <= 0 || availH <= 0 || dims.width <= 0 || dims.height <= 0) return ZOOM_MIN_ABSOLUTE;
-      const fitScale = Math.min(availW / dims.width, availH / dims.height);
+      const availW = area.clientWidth - padX * 2;
+      const availH = area.clientHeight - padY * 2;
+      if (availW <= 0 || availH <= 0) return ZOOM_MIN_ABSOLUTE;
+      const raw = Math.min(availW / dims.width, availH / dims.height);
+      const fitScale = Math.min(1, raw);
       return Math.max(ZOOM_MIN_ABSOLUTE, Math.round(fitScale * 20) / 20);
     }, []);
+
+    const syncPreviewSizeFromWrapper = useCallback(() => {
+      const wrapper = canvasAreaRef.current;
+      if (!wrapper) return;
+      const availW = wrapper.clientWidth - 48;
+      const availH = wrapper.clientHeight - 48;
+      const computed = computePreviewDimensions(availW, availH, artboardWidth, artboardHeight);
+      if (!computed) return;
+      const { w, h } = computed;
+      const prev = lastStablePreviewDimsRef.current;
+      const eps = isNarrowViewport() ? 8 : 5;
+      if (prev && Math.abs(w - prev.w) < eps && Math.abs(h - prev.h) < eps) return;
+      lastStablePreviewDimsRef.current = { w, h };
+      const fitWidthZoom = availW / Math.max(1, w);
+      const baseDPI = fitWidthZoom > 1.5 ? Math.ceil(fitWidthZoom * 1.25) : BASE_DPI_SCALE;
+      dpiScaleRef.current = Math.max(BASE_DPI_SCALE, baseDPI);
+      previewDimsRef.current = { width: w, height: h };
+      setPreviewDims({ width: w, height: h });
+    }, [artboardWidth, artboardHeight]);
+
     const minZoomRef = useRef(1);
 
     // True when artboard width overflows viewport (left-click panning takes priority over design interaction)
@@ -137,30 +193,43 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     }, [isHorizOverflow]);
 
 
+    const getOverscrollPx = useCallback((axis: 'x' | 'y') => {
+      const el = canvasAreaRef.current;
+      const dims = previewDimsRef.current;
+      const v = axis === 'x'
+        ? (el ? el.clientWidth : dims.width)
+        : (el ? el.clientHeight : dims.height);
+      return Math.min(120, Math.max(48, v * 0.3));
+    }, []);
+
     const clampPanValue = useCallback((px: number, py: number, z: number) => {
       const dims = previewDimsRef.current;
       const el = canvasAreaRef.current;
       const vw = el ? el.clientWidth : dims.width;
       const vh = el ? el.clientHeight : dims.height;
-      const maxPanX = Math.max(0, dims.width / 2 - vw / (2 * z));
-      const maxPanY = Math.max(0, dims.height / 2 - vh / (2 * z));
+      const overflowX = dims.width / 2 - vw / (2 * z);
+      const overflowY = dims.height / 2 - vh / (2 * z);
+      const maxPanX = overflowX > 0 ? overflowX + getOverscrollPx('x') / z : 0;
+      const maxPanY = overflowY > 0 ? overflowY + getOverscrollPx('y') / z : 0;
       return {
         x: Math.max(-maxPanX, Math.min(maxPanX, px)),
         y: Math.max(-maxPanY, Math.min(maxPanY, py)),
       };
-    }, []);
+    }, [getOverscrollPx]);
 
     const getMaxPan = useCallback((axis: 'x' | 'y', z: number) => {
       const dims = previewDimsRef.current;
       const el = canvasAreaRef.current;
       if (axis === 'x') {
         const vw = el ? el.clientWidth : dims.width;
-        return Math.max(0, dims.width / 2 - vw / (2 * z));
+        const overflow = dims.width / 2 - vw / (2 * z);
+        return overflow > 0 ? overflow + getOverscrollPx('x') / z : 0;
       } else {
         const vh = el ? el.clientHeight : dims.height;
-        return Math.max(0, dims.height / 2 - vh / (2 * z));
+        const overflow = dims.height / 2 - vh / (2 * z);
+        return overflow > 0 ? overflow + getOverscrollPx('y') / z : 0;
       }
-    }, []);
+    }, [getOverscrollPx]);
 
     const getScrollMetrics = useCallback((axis: 'x' | 'y', z: number) => {
       const dims = previewDimsRef.current;
@@ -1820,7 +1889,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const handleTouchStart = useCallback((e: React.TouchEvent) => {
       if ((e.target as HTMLElement).closest('[data-scrollbar]')) return;
       if (e.touches.length === 2) {
-        e.preventDefault();
+        if (e.nativeEvent.cancelable) e.preventDefault();
         isPinchingRef.current = true;
         isPanningRef.current = false;
         const dx = e.touches[1].clientX - e.touches[0].clientX;
@@ -1831,7 +1900,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         return;
       }
       if (e.touches.length !== 1) return;
-      e.preventDefault();
+      if (e.nativeEvent.cancelable) e.preventDefault();
       if (isHorizOverflow() && !moveModeRef.current) {
         const local = canvasToLocal(e.touches[0].clientX, e.touches[0].clientY);
         const handleHit = selectedDesignId ? hitTestHandles(local.x, local.y) : null;
@@ -1848,7 +1917,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
     const handleTouchMove = useCallback((e: React.TouchEvent) => {
       if (isPinchingRef.current && e.touches.length === 2) {
-        e.preventDefault();
+        if (e.nativeEvent.cancelable) e.preventDefault();
         const dx = e.touches[1].clientX - e.touches[0].clientX;
         const dy = e.touches[1].clientY - e.touches[0].clientY;
         const dist = Math.sqrt(dx * dx + dy * dy);
@@ -1862,7 +1931,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         return;
       }
       if (e.touches.length !== 1) return;
-      e.preventDefault();
+      if (e.nativeEvent.cancelable) e.preventDefault();
       if (isPanningRef.current) {
         const dx = e.touches[0].clientX - panStartRef.current.x;
         const dy = e.touches[0].clientY - panStartRef.current.y;
@@ -1896,37 +1965,34 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       handleInteractionEnd();
     }, [handleInteractionEnd]);
     
-    // Fit to View: calculate zoom to fit canvas within container and reset pan
+    // Fit entire sheet in the gray preview viewport (same behavior as changing sheet size — not the old paper-box math).
     const fitToView = useCallback(() => {
-      if (!containerRef.current) return;
-      const viewPadding = Math.max(4, Math.round(Math.min(previewDims.width, previewDims.height) * 0.03));
-      const containerWidth = containerRef.current.clientWidth - viewPadding * 2;
-      const containerHeight = containerRef.current.clientHeight - viewPadding * 2;
-      const scaleX = containerWidth / previewDims.width;
-      const scaleY = containerHeight / previewDims.height;
-      const fitZoom = Math.min(scaleX, scaleY);
-      setZoom(Math.max(minZoomRef.current, Math.min(zoomMaxRef.current, Math.round(fitZoom * 20) / 20)));
+      const area = canvasAreaRef.current;
+      if (!area) return;
+      const dims = previewDimsRef.current;
+      if (dims.width <= 0 || dims.height <= 0) return;
+      suppressTransitionRef.current = true;
+      const padX = Math.max(4, Math.round(dims.width * 0.03));
+      const padY = Math.max(4, Math.round(dims.height * 0.03));
+      const availW = area.clientWidth - padX * 2;
+      const availH = area.clientHeight - padY * 2;
+      if (availW <= 0 || availH <= 0) {
+        suppressTransitionRef.current = false;
+        return;
+      }
+      const raw = Math.min(availW / dims.width, availH / dims.height);
+      const fitZoom = Math.min(1, raw);
+      const z = Math.max(ZOOM_MIN_ABSOLUTE, Math.min(zoomMaxRef.current, Math.round(fitZoom * 20) / 20));
+      minZoomRef.current = z;
+      setZoom(z);
       setPanX(0);
       setPanY(0);
-    }, [previewDims.height, previewDims.width]);
-
-    // Fit Width: zoom so the full artboard width fills the viewport, pan to top
-    const fitWidth = useCallback(() => {
-      const el = canvasAreaRef.current;
-      if (!el) return;
-      const availW = el.clientWidth - 24;
-      const vh = el.clientHeight;
-      const widthZoom = availW / Math.max(1, previewDims.width);
-      const newZoom = Math.max(minZoomRef.current, Math.min(zoomMaxRef.current, Math.round(widthZoom * 20) / 20));
-      // Pan so artboard top aligns with viewport top:
-      // (-h/2 + panY) * zoom = -vh/2  →  panY = h/2 - vh/(2*zoom)
-      const topPanY = previewDims.height / 2 - vh / (2 * newZoom);
-      const maxPanY = Math.max(0, previewDims.height / 2 - vh / (2 * newZoom));
-      const clampedPanY = Math.max(-maxPanY, Math.min(maxPanY, topPanY));
-      setZoom(newZoom);
-      setPanX(0);
-      setPanY(clampedPanY);
-    }, [previewDims.width, previewDims.height]);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          suppressTransitionRef.current = false;
+        });
+      });
+    }, []);
 
     // Reset view to fit the full gangsheet in view
     const resetView = useCallback(() => {
@@ -2095,16 +2161,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           const z = zoomRef.current;
           const rawPx = panStartRef.current.px + dx / z;
           const rawPy = panStartRef.current.py + dy / z;
-          const dims = previewDimsRef.current;
-          const el = canvasAreaRef.current;
-          const vw = el ? el.clientWidth : dims.width;
-          const vh = el ? el.clientHeight : dims.height;
-          const maxPanX = Math.max(0, dims.width / 2 - vw / (2 * z));
-          const maxPanY = Math.max(0, dims.height / 2 - vh / (2 * z));
-          queuePanStateCommit(
-            Math.max(-maxPanX, Math.min(maxPanX, rawPx)),
-            Math.max(-maxPanY, Math.min(maxPanY, rawPy)),
-          );
+          const clamped = clampPanValue(rawPx, rawPy, z);
+          queuePanStateCommit(clamped.x, clamped.y);
           return;
         }
         pendingMoveRef.current = { cx: e.clientX, cy: e.clientY, alt: e.altKey };
@@ -2161,19 +2219,17 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       };
     }, []);
 
-    const prevArtboardHeightRef = useRef(artboardHeight);
+    const prevArtboardSigRef = useRef<string | null>(null);
     useEffect(() => {
-      if (prevArtboardHeightRef.current !== artboardHeight) {
-        prevArtboardHeightRef.current = artboardHeight;
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          if (artboardHeight > artboardWidth * 2) {
-            fitWidth();
-          } else {
-            fitToView();
-          }
-        }));
-      }
-    }, [artboardHeight, artboardWidth, fitToView, fitWidth]);
+      const sig = `${artboardWidth},${artboardHeight}`;
+      if (prevArtboardSigRef.current === sig) return;
+      prevArtboardSigRef.current = sig;
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          fitToView();
+        }),
+      );
+    }, [artboardWidth, artboardHeight, fitToView]);
 
     useEffect(() => {
       const el = canvasAreaRef.current;
@@ -2203,17 +2259,12 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           const oldPy = panYRef.current;
           const rawPanX = oldPx + cursorX * (1 / newZoom - 1 / oldZoom);
           const rawPanY = oldPy + cursorY * (1 / newZoom - 1 / oldZoom);
+          const clamped = clampPanValue(rawPanX, rawPanY, newZoom);
           const dims = previewDimsRef.current;
-          const vw = el.clientWidth;
-          const vh = el.clientHeight;
-          const maxPx = Math.max(0, dims.width / 2 - vw / (2 * newZoom));
-          const maxPy = Math.max(0, dims.height / 2 - vh / (2 * newZoom));
-          const clampedPanX = Math.max(-maxPx, Math.min(maxPx, rawPanX));
-          const clampedPanY = Math.max(-maxPy, Math.min(maxPy, rawPanY));
 
           setZoom(newZoom);
-          setPanX(clampedPanX);
-          setPanY(clampedPanY);
+          setPanX(clamped.x);
+          setPanY(clamped.y);
           if (!selectionZoomActiveRef.current && !isPanningRef.current) {
             el.style.cursor = (newZoom * dims.width > el.clientWidth * 1.05 && !moveModeRef.current) ? 'grab' : 'default';
           }
@@ -2222,22 +2273,16 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
         // Plain wheel: scroll/pan (Shift+wheel → horizontal)
         const z = zoomRef.current;
-        const dims = previewDimsRef.current;
-        const vw = el.clientWidth;
-        const vh = el.clientHeight;
         const rawDx = e.shiftKey ? e.deltaY : e.deltaX;
         const rawDy = e.shiftKey ? 0 : e.deltaY;
         const newPanX = panXRef.current - rawDx / z;
         const newPanY = panYRef.current - rawDy / z;
-        const maxPx = Math.max(0, dims.width / 2 - vw / (2 * z));
-        const maxPy = Math.max(0, dims.height / 2 - vh / (2 * z));
-        const clampedPanX = Math.max(-maxPx, Math.min(maxPx, newPanX));
-        const clampedPanY = Math.max(-maxPy, Math.min(maxPy, newPanY));
-        if (clampedPanX === panXRef.current && clampedPanY === panYRef.current) return;
-        panXRef.current = clampedPanX;
-        panYRef.current = clampedPanY;
-        setPanX(clampedPanX);
-        setPanY(clampedPanY);
+        const clamped = clampPanValue(newPanX, newPanY, z);
+        if (clamped.x === panXRef.current && clamped.y === panYRef.current) return;
+        panXRef.current = clamped.x;
+        panYRef.current = clamped.y;
+        setPanX(clamped.x);
+        setPanY(clamped.y);
       };
       el.addEventListener('wheel', onWheel, { passive: false });
       return () => {
@@ -2245,61 +2290,143 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         if (wheelTimeoutRef.current) clearTimeout(wheelTimeoutRef.current);
       };
     }, []);
-    
-    // Reset zoom only on the very first design (empty → 1 design transition)
-    const hasEverHadDesignRef = useRef(false);
+
     useEffect(() => {
       if (!imageInfo) {
         lastImageRef.current = null;
         return;
       }
-      
+
       const imageKey = `${imageInfo.image.src}-${imageInfo.image.width}-${imageInfo.image.height}`;
       if (lastImageRef.current === imageKey) return;
       lastImageRef.current = imageKey;
+    }, [imageInfo]);
 
-      if (!hasEverHadDesignRef.current) {
-        hasEverHadDesignRef.current = true;
-        requestAnimationFrame(() => fitToView());
+    // Desktop: measure before paint. Mobile: skip — the preview flex area often has a *smaller* height on the first
+    // layout pass (parent column, safe-area, pb-16), then grows a frame later → “small sheet then jumps bigger”.
+    // First mobile measure runs in useEffect after a short rAF chain instead.
+    useLayoutEffect(() => {
+      if (isNarrowViewport()) return;
+      lastStablePreviewDimsRef.current = null;
+      syncPreviewSizeFromWrapper();
+    }, [syncPreviewSizeFromWrapper]);
+
+    // Same “minimized” fit as after changing sheet size, but before paint (no zoom-in-then-snap). Does not run on every render.
+    // On narrow: quantize the signature so Safari/RO 1–6px wobble doesn’t re-run fit+pan reset (felt as “bounce”).
+    useLayoutEffect(() => {
+      if (previewDims.width <= 0 || previewDims.height <= 0) return;
+      const w = previewDims.width;
+      const h = previewDims.height;
+      const sig = isNarrowViewport()
+        ? `${Math.round(w / 8) * 8}x${Math.round(h / 8) * 8}@${artboardWidth}x${artboardHeight}`
+        : `${w}x${h}@${artboardWidth}x${artboardHeight}`;
+      if (lastViewportFitSigRef.current === sig) return;
+      lastViewportFitSigRef.current = sig;
+      const area = canvasAreaRef.current;
+      if (!area) return;
+      suppressTransitionRef.current = true;
+      const dims = previewDimsRef.current;
+      const padX = Math.max(4, Math.round(dims.width * 0.03));
+      const padY = Math.max(4, Math.round(dims.height * 0.03));
+      const availW = area.clientWidth - padX * 2;
+      const availH = area.clientHeight - padY * 2;
+      if (availW <= 0 || availH <= 0) {
+        suppressTransitionRef.current = false;
+        return;
       }
-    }, [imageInfo, fitToView]);
+      const raw = Math.min(availW / dims.width, availH / dims.height);
+      const fitZoom = Math.min(1, raw);
+      const z = Math.max(ZOOM_MIN_ABSOLUTE, Math.min(zoomMaxRef.current, Math.round(fitZoom * 20) / 20));
+      minZoomRef.current = z;
+      setZoom(z);
+      setPanX(0);
+      setPanY(0);
+      const clearSuppress = () => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            suppressTransitionRef.current = false;
+          });
+        });
+      };
+      if (isNarrowViewport()) {
+        requestAnimationFrame(clearSuppress);
+      } else {
+        clearSuppress();
+      }
+    }, [previewDims.width, previewDims.height, artboardWidth, artboardHeight]);
 
     useEffect(() => {
       const wrapper = canvasAreaRef.current;
       if (!wrapper) return;
-      const updateSize = () => {
-        const availW = wrapper.clientWidth - 48;
-        const availH = wrapper.clientHeight - 48;
-        if (availW <= 0 || availH <= 0) return;
-        const artboardAspect = artboardWidth / artboardHeight;
-        let w: number, h: number;
-        if (availW / availH > artboardAspect) {
-          h = Math.round(Math.max(200, availH));
-          w = Math.round(h * artboardAspect);
-        } else {
-          w = Math.round(Math.max(200, availW));
-          h = Math.round(w / artboardAspect);
-        }
 
-        const fitWidthZoom = availW / Math.max(1, w);
-        const baseDPI = fitWidthZoom > 1.5
-          ? Math.ceil(fitWidthZoom * 1.25)
-          : BASE_DPI_SCALE;
-        dpiScaleRef.current = Math.max(BASE_DPI_SCALE, baseDPI);
-
-        setPreviewDims({ width: w, height: h });
-        requestAnimationFrame(() => { minZoomRef.current = getMinZoom(); });
-      };
-      updateSize();
+      let cancelled = false;
       let resizeRafId: number | null = null;
-      const observer = new ResizeObserver(() => {
+      let resizeDebounceId: ReturnType<typeof setTimeout> | null = null;
+
+      const runSync = () => {
+        if (cancelled) return;
         if (resizeRafId != null) return;
-        resizeRafId = requestAnimationFrame(() => { resizeRafId = null; updateSize(); });
+        resizeRafId = requestAnimationFrame(() => {
+          resizeRafId = null;
+          syncPreviewSizeFromWrapper();
+        });
+      };
+
+      const scheduleResize = () => {
+        const ms = isNarrowViewport() ? 150 : 50;
+        if (resizeDebounceId != null) clearTimeout(resizeDebounceId);
+        resizeDebounceId = setTimeout(() => {
+          resizeDebounceId = null;
+          runSync();
+        }, ms);
+      };
+
+      const observer = new ResizeObserver(() => {
+        scheduleResize();
       });
-      observer.observe(wrapper);
-      return () => { observer.disconnect(); if (resizeRafId != null) cancelAnimationFrame(resizeRafId); };
-    }, [artboardWidth, artboardHeight]);
-    
+
+      const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+      const onVisualViewport = () => {
+        scheduleResize();
+      };
+
+      const narrow = isNarrowViewport();
+      let bootstrapOuterRaf: number | null = null;
+
+      const attachResizeListeners = () => {
+        observer.observe(wrapper);
+        if (vv) vv.addEventListener('resize', onVisualViewport);
+      };
+
+      if (narrow) {
+        // Wait until flex + insets + parent padding have settled; avoid RO firing first with a too-small height.
+        bootstrapOuterRaf = requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              if (cancelled) return;
+              lastStablePreviewDimsRef.current = null;
+              syncPreviewSizeFromWrapper();
+              attachResizeListeners();
+            });
+          });
+        });
+      } else {
+        syncPreviewSizeFromWrapper();
+        attachResizeListeners();
+      }
+
+      return () => {
+        cancelled = true;
+        observer.disconnect();
+        if (resizeDebounceId != null) clearTimeout(resizeDebounceId);
+        if (resizeRafId != null) cancelAnimationFrame(resizeRafId);
+        if (vv) {
+          vv.removeEventListener('resize', onVisualViewport);
+        }
+        if (bootstrapOuterRaf != null) cancelAnimationFrame(bootstrapOuterRaf);
+      };
+    }, [syncPreviewSizeFromWrapper]);
+
     useImperativeHandle(ref, () => {
       const canvas = canvasRef.current;
       if (!canvas) return null as any;
@@ -2496,7 +2623,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     }, [artboardWidth, artboardHeight]);
 
     useEffect(() => {
-      if (!canvasRef.current || (!imageInfo && designs.length === 0)) return;
+      if (!canvasRef.current) return;
 
       const doRender = () => {
       try {
@@ -2504,6 +2631,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       if (!canvas) return;
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
+      if (previewDims.width <= 0 || previewDims.height <= 0) return;
 
       const maxBufferArea = 8_000_000;
       const effectiveDPI = Math.max(BASE_DPI_SCALE, dpiScaleRef.current * zoomDpiTier);
@@ -2940,16 +3068,19 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
           className="flex-1 min-h-0 flex items-center justify-center bg-gray-100 p-3 relative overflow-hidden cursor-default"
-          style={{ userSelect: 'none', touchAction: 'none' }}
+          style={{ userSelect: 'none', touchAction: 'none', overscrollBehavior: 'none' }}
         >
-          <div className="relative" style={{ paddingBottom: Math.abs(zoom - 1) < 0.03 ? 16 : 0, paddingRight: Math.abs(zoom - 1) < 0.03 ? 14 : 0 }}>
+          {previewDims.width > 0 && previewDims.height > 0 ? (
+          <>
+          <div className="relative" style={{ paddingBottom: 16, paddingRight: 24 }}>
             <div 
               ref={containerRef}
-              className={`relative flex items-center justify-center ${Math.abs(zoom - 1) < 0.03 ? 'rounded-lg border border-gray-300' : ''}`}
+              className="relative flex items-center justify-center"
               style={{ 
                 width: previewDims.width,
                 height: previewDims.height,
                 backgroundColor: 'transparent',
+                marginLeft: isMobile ? 6 : 0,
               }}
             >
               <canvas 
@@ -2961,12 +3092,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                   border: '3px solid #ffffff',
                   outline: '2px solid #000000',
                   boxSizing: 'content-box',
-                  maxWidth: '100%',
-                  maxHeight: '100%',
                   transform: `scale(${zoom}) translate(${panX}px, ${panY}px)`,
                   transformOrigin: 'center',
                   willChange: 'transform',
-                  transition: isWheelZoomingRef.current || isPanningRef.current || suppressTransitionRef.current || activeScrollAxis ? 'none' : 'transform 0.15s ease-out',
+                  transition: isMobile || isWheelZoomingRef.current || isPanningRef.current || suppressTransitionRef.current || activeScrollAxis ? 'none' : 'transform 0.15s ease-out',
                   pointerEvents: 'none',
                 }}
               />
@@ -2979,16 +3108,12 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
 
             </div>
-            {Math.abs(zoom - 1) < 0.03 && (
-              <div className="absolute bottom-0 left-0 right-3.5 flex justify-center pointer-events-none">
-                <span className={`text-gray-600 font-medium tracking-wide ${lang === 'en' ? 'text-[10px]' : 'text-[9px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
-              </div>
-            )}
-            {Math.abs(zoom - 1) < 0.03 && (
-              <div className="absolute right-0 top-0 bottom-4 flex items-center pointer-events-none">
-                <span className={`text-gray-600 font-medium tracking-wide ${lang === 'en' ? 'text-[10px]' : 'text-[9px]'}`} style={{ writingMode: 'vertical-rl' }}>{formatLength(artboardHeight, lang)}{lang === "en" ? '"' : ""}</span>
-              </div>
-            )}
+            <div className="absolute bottom-0 left-0 right-3.5 flex justify-center pointer-events-none">
+              <span className={`text-gray-600 font-medium tracking-wide ${lang === 'en' ? 'text-[10px]' : 'text-[9px]'}`} style={{ transform: 'translateY(2px)' }}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
+            </div>
+            <div className="absolute right-1 top-0 bottom-4 flex items-center pointer-events-none">
+              <span className={`text-gray-600 font-medium tracking-wide ${lang === 'en' ? 'text-[10px]' : 'text-[9px]'}`} style={{ writingMode: 'vertical-rl' }}>{formatLength(artboardHeight, lang)}{lang === "en" ? '"' : ""}</span>
+            </div>
           </div>
           {/* Horizontal scrollbar */}
           {(() => {
@@ -3210,11 +3335,14 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
               {dragPerfText}
             </div>
           )}
+          </>
+          ) : null}
         </div>
 
         {/* Bottom toolbar */}
-        <div className="flex-shrink-0 flex items-center justify-between gap-2 bg-gray-100 border-t border-gray-200 px-2 py-1.5 lg:px-3 lg:py-1.5 min-w-0">
-              <div className="flex items-center gap-1.5 min-w-0 overflow-x-auto overflow-y-hidden flex-1 [scrollbar-width:thin]">
+        {(bottomToolbarContainer ? createPortal(
+        <div className={`flex-shrink-0 flex items-center gap-2 bg-gray-100 border-t border-gray-200 px-2 py-1.5 lg:px-3 lg:py-1.5 min-w-0 ${isMobile ? 'justify-start overflow-x-auto [scrollbar-width:thin]' : 'justify-between'}`}>
+              <div className={`flex items-center gap-1.5 min-w-0 px-1 ${isMobile ? 'flex-shrink-0' : 'flex-1 overflow-x-auto overflow-y-hidden [scrollbar-width:thin]'}`}>
                 {selectedDesignId && designTransform && (
                   <>
                     {!isMobile && (
@@ -3369,7 +3497,134 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                   />
                 ))}
               </div>
+            </div>,
+            bottomToolbarContainer
+          ) : (
+            <div className={`flex-shrink-0 flex items-center gap-2 bg-gray-100 border-t border-gray-200 px-2 py-1.5 lg:px-3 lg:py-1.5 min-w-0 ${isMobile ? 'justify-start overflow-x-auto [scrollbar-width:thin]' : 'justify-between'}`}>
+              <div className={`flex items-center gap-1.5 min-w-0 px-1 ${isMobile ? 'flex-shrink-0' : 'flex-1 overflow-x-auto overflow-y-hidden [scrollbar-width:thin]'}`}>
+                {selectedDesignId && designTransform && (
+                  <>
+                    {!isMobile && (
+                      <>
+                        {editingRotation ? (
+                          <input
+                            type="number"
+                            className="w-12 h-5 bg-gray-100 text-[11px] text-gray-900 text-center rounded border border-gray-300 outline-none"
+                            value={rotationInput}
+                            autoFocus
+                            onChange={(e) => setRotationInput(e.target.value)}
+                            onBlur={() => {
+                              setEditingRotation(false);
+                              const val = parseFloat(rotationInput);
+                              if (!isNaN(val) && onTransformChange) {
+                                onTransformChange({ ...designTransform, rotation: ((val % 360) + 360) % 360 });
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                            }}
+                          />
+                        ) : (
+                          <span
+                            className="text-[11px] text-gray-600 font-medium cursor-pointer hover:text-gray-900 tabular-nums"
+                            title={t("preview.editRotation")}
+                            onClick={() => {
+                              setRotationInput(String(Math.round(designTransform.rotation || 0)));
+                              setEditingRotation(true);
+                            }}
+                          >
+                            {Math.round(designTransform.rotation || 0)}°
+                          </span>
+                        )}
+                        <div className="w-px h-3.5 bg-gray-300" />
+                      </>
+                    )}
+                  </>
+                )}
+                {isMobile && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={resetView}
+                    className="min-w-[40px] min-h-[40px] h-8 px-2 hover:bg-gray-200 rounded text-gray-600 whitespace-nowrap text-[11px] flex items-center justify-center"
+                    title={t("preview.resetView")}
+                  >
+                    <RotateCcw className="h-3.5 w-3.5 mr-1 flex-shrink-0" />
+                    {t("preview.reset")}
+                  </Button>
+                )}
+                <div className="flex items-center gap-0 flex-shrink-0 items-center">
+                  <Button variant="ghost" size="sm" className="min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 h-8 w-8 sm:h-7 sm:w-7 p-0 hover:bg-gray-200 rounded flex items-center justify-center" onClick={() => {
+                    const newZ = Math.max(zoom / ZOOM_BUTTON_FACTOR, minZoomRef.current);
+                    const clamped = clampPanValue(panX, panY, newZ);
+                    setZoom(newZ);
+                    queuePanStateCommit(clamped.x, clamped.y);
+                    if (canvasAreaRef.current) {
+                      const el = canvasAreaRef.current;
+                      el.style.cursor = (newZ * previewDims.width > el.clientWidth * 1.05 && !moveMode) ? 'grab' : 'default';
+                    }
+                  }} title={t("preview.zoomOut")}>
+                    <ZoomOut className="h-4 w-4 text-gray-600" />
+                  </Button>
+                  <span className="text-[11px] text-gray-600 min-w-[32px] text-center font-medium tabular-nums px-0.5">{Math.round(zoom * 100)}%</span>
+                  <Button variant="ghost" size="sm" className="min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 h-8 w-8 sm:h-7 sm:w-7 p-0 hover:bg-gray-200 rounded flex items-center justify-center" onClick={() => {
+                    const newZ = Math.min(zoom * ZOOM_BUTTON_FACTOR, zoomMax);
+                    const clamped = clampPanValue(panX, panY, newZ);
+                    setZoom(newZ);
+                    queuePanStateCommit(clamped.x, clamped.y);
+                    if (canvasAreaRef.current) {
+                      const el = canvasAreaRef.current;
+                      el.style.cursor = (newZ * previewDims.width > el.clientWidth * 1.05 && !moveMode) ? 'grab' : 'default';
+                    }
+                  }} title={t("preview.zoomIn")}>
+                    <ZoomIn className="h-4 w-4 text-gray-600" />
+                  </Button>
+                </div>
+                <div className="w-px h-3.5 bg-gray-300" />
+                {!isMobile && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSelectionZoomActive(prev => !prev)}
+                    className={`h-6 px-1.5 hover:bg-gray-200 rounded whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ${selectionZoomActive ? 'bg-cyan-500/20 text-cyan-400' : 'text-gray-600'} flex items-center`}
+                    title={t("preview.selectionZoom")}
+                  >
+                    <ScanSearch className="h-2.5 w-2.5 mr-0.5 flex-shrink-0" />
+                    {t("preview.selectToZoom")}
+                  </Button>
+                )}
+                {!isMobile && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={resetView}
+                    className={`h-6 px-1.5 hover:bg-gray-200 rounded text-gray-600 whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'}`}
+                    title={t("preview.resetView")}
+                  >
+                    <RotateCcw className="h-2.5 w-2.5 mr-0.5 flex-shrink-0" />
+                    {t("preview.reset")}
+                  </Button>
+                )}
+                {selectedDesignId && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={zoomToSelected}
+                    className={`${isMobile ? 'min-w-[36px] min-h-[36px] h-8 w-8 p-0 justify-center' : 'h-6 px-1.5'} hover:bg-gray-200 rounded text-gray-600 whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} flex items-center`}
+                    title={t("preview.focusTitle")}
+                  >
+                    <Focus className={`${isMobile ? 'h-4 w-4' : 'h-2.5 w-2.5 mr-0.5'} flex-shrink-0`} />
+                    {!isMobile && t("preview.focus")}
+                  </Button>
+                )}
+              </div>
+              <div className={`flex items-center ${isMobile ? 'gap-1.5' : 'gap-1'} flex-shrink-0`}>
+                {[{ color: 'transparent', label: 'Transparent' }, { color: '#ffffff', label: 'White' }, { color: '#d1d5db', label: 'Light Gray' }, { color: '#6b7280', label: 'Gray' }, { color: '#000000', label: 'Black' }].map(({ color, label }) => (
+                  <button key={color} onClick={() => setPreviewBgColor(color)} className={`rounded-full border-2 transition-all ${previewBgColor === color ? 'border-cyan-400 scale-110' : 'border-gray-300 hover:border-gray-500'}`} title={label} style={{ width: isMobile ? 22 : 18, height: isMobile ? 22 : 18, background: color === 'transparent' ? 'repeating-conic-gradient(#ccc 0% 25%, #fff 0% 50%) 50% / 6px 6px' : color }} />
+                ))}
+              </div>
             </div>
+          ))}
 
         {/* Keyboard shortcut hints */}
         <div className="hidden lg:flex flex-shrink-0 items-center justify-center gap-4 bg-gray-100/90 border-t border-gray-200/80 px-3 py-0.5 text-[9px] text-gray-600">
