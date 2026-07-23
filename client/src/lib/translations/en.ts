@@ -42,6 +42,8 @@ export const en: Record<string, string> = {
   "editor.addDesignTitle": "Add another image",
   "editor.processing": "Processing...",
   "editor.processingDesign": "Processing your design",
+  "editor.addingToCartModal": "Adding to Cart...",
+  "editor.updatingDesignModal": "Updating your design...",
   "editor.optimizing": "Optimizing for the best print quality...",
   "editor.autoArrange": "Auto-Arrange",
   "editor.autoArrangeAll": "Auto-arrange all designs on gangsheet",
