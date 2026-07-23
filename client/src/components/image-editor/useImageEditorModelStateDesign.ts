@@ -52,6 +52,8 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   const [isAddingToCart, setIsAddingToCart] = useState(false);
   const [isUpdateFlow, setIsUpdateFlow] = useState(false);
   const [addToCartProgressLabel, setAddToCartProgressLabel] = useState<string | undefined>();
+  /** Synchronous re-entrancy guard for handleAddToCart; reset wherever isAddingToCart resets. */
+  const addToCartInFlightRef = useRef(false);
   const {
     addToCartStallTimeoutRef,
     lastAddToCartPngBytesRef,
@@ -63,6 +65,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     setIsAddingToCart,
     setIsProcessing,
     setIsUpdateFlow,
+    addToCartInFlightRef,
     setAddToCartProgressLabel,
   });
   const [isUploading, setIsUploading] = useState(false);
@@ -678,7 +681,34 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     return false;
   }, [designs, artboardWidth, artboardHeight]);
 
+  const handleDuplicateSelected = useCallback((): string[] => {
+    const toDup = designs.filter(d => selectedDesignIds.has(d.id));
+    if (toDup.length === 0) return [];
+    const newIds: string[] = [];
+    const newDesigns: DesignItem[] = toDup.map((d, i) => {
+      const newId = crypto.randomUUID();
+      newIds.push(newId);
+      const base = d.name.replace(/ copy( \d+)?$/, '');
+      const offsetT = { ...d.transform, nx: d.transform.nx + 0.03 + i * 0.01, ny: d.transform.ny };
+      const { nx, ny } = clampDesignToArtboard({ ...d, transform: offsetT }, artboardWidth, artboardHeight);
+      return { ...d, id: newId, name: base, transform: { ...d.transform, nx, ny }, printFileName: false };
+    });
+    multiDragAccumRef.current = null;
+    multiResizeStartRef.current = null;
+    multiRotateStartRef.current = null;
+    saveSnapshot();
+    setDesigns(prev => [...prev, ...newDesigns]);
+    setSelectedDesignIds(new Set(newIds));
+    if (newIds.length === 1) setSelectedDesignId(newIds[0]);
+    else setSelectedDesignId(newIds[newIds.length - 1]);
+    return newIds;
+  }, [designs, selectedDesignIds, saveSnapshot, artboardWidth, artboardHeight]);
+
   const handleDuplicateDesign = useCallback((count: number = 1) => {
+    if (selectedDesignIds.size > 1) {
+      handleDuplicateSelected();
+      return;
+    }
     if (!selectedDesignId || count < 1) return;
     const design = designs.find(d => d.id === selectedDesignId);
     if (!design) return;
@@ -700,9 +730,16 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     setDesigns(prev => [...prev, ...newDesigns]);
     setSelectedDesignId(newDesigns[newDesigns.length - 1].id);
     setDuplicateCount(1);
-  }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight]);
+  }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight, selectedDesignIds, handleDuplicateSelected]);
 
   const handleDuplicateAndArrange = useCallback((count: number) => {
+    if (selectedDesignIds.size > 1) {
+      const newIds = handleDuplicateSelected();
+      if (newIds.length > 0) {
+        setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true }), 0);
+      }
+      return;
+    }
     if (!selectedDesignId || count < 1) return;
     const design = designs.find(d => d.id === selectedDesignId);
     if (!design) return;
@@ -727,30 +764,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     requestAnimationFrame(() => {
       handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true });
     });
-  }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight]);
-
-  const handleDuplicateSelected = useCallback((): string[] => {
-    const toDup = designs.filter(d => selectedDesignIds.has(d.id));
-    if (toDup.length === 0) return [];
-    const newIds: string[] = [];
-    const newDesigns: DesignItem[] = toDup.map((d, i) => {
-      const newId = crypto.randomUUID();
-      newIds.push(newId);
-      const base = d.name.replace(/ copy( \d+)?$/, '');
-      const offsetT = { ...d.transform, nx: d.transform.nx + 0.03 + i * 0.01, ny: d.transform.ny };
-      const { nx, ny } = clampDesignToArtboard({ ...d, transform: offsetT }, artboardWidth, artboardHeight);
-      return { ...d, id: newId, name: base, transform: { ...d.transform, nx, ny }, printFileName: false };
-    });
-    multiDragAccumRef.current = null;
-    multiResizeStartRef.current = null;
-    multiRotateStartRef.current = null;
-    saveSnapshot();
-    setDesigns(prev => [...prev, ...newDesigns]);
-    setSelectedDesignIds(new Set(newIds));
-    if (newIds.length === 1) setSelectedDesignId(newIds[0]);
-    else setSelectedDesignId(newIds[newIds.length - 1]);
-    return newIds;
-  }, [designs, selectedDesignIds, saveSnapshot, artboardWidth, artboardHeight]);
+  }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight, selectedDesignIds, handleDuplicateSelected]);
 
   const handleDuplicateById = useCallback((designId: string) => {
     const design = designs.find(d => d.id === designId);
@@ -1008,5 +1022,5 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
 
 
   // Base editor state; arrange/upload/export/cart hooks extend this bag in image-editor-provider.
-  return { onDesignUploaded, profile, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode, toast, t, lang, isMobile, isLgUp, imageInfo, setImageInfo, resizeSettings, setResizeSettings, isProcessing, setIsProcessing, isAddingToCart, setIsAddingToCart, isUpdateFlow, setIsUpdateFlow, addToCartProgressLabel, setAddToCartProgressLabel, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, refreshAddToCartStallTimeout, isUploading, setIsUploading, uploadProgress, setUploadProgress, artboardWidth, setArtboardWidth, artboardHeight, setArtboardHeight, artboardWidthRef, artboardHeightRef, contentFillCacheRef, handleAutoArrangeRef, quantity, setQuantity, designGap, setDesignGap, duplicateCount, setDuplicateCount, clampDuplicateCount, parseDuplicateCount, handleDuplicateCountKeyDown, designTransform, setDesignTransform, designs, setDesigns, selectedDesignId, setSelectedDesignId, selectedDesignIds, setSelectedDesignIds, mobilePanel, setMobilePanel, showDesignInfo, setShowDesignInfo, selectionZoomActive, setSelectionZoomActive, editingLayerName, setEditingLayerName, editingNameValue, setEditingNameValue, clipboardRef, proportionalLock, setProportionalLock, designInfoRef, sidebarFileRef, headerUploadInputRef, canvasRef, downloadContainer, setDownloadContainer, spotPreviewData, setSpotPreviewData, fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer, copySpotSelectionsRef, contextMenu, setContextMenu, cropModalDesignId, setCropModalDesignId, pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo, mountedRef, designsRef, nudgeSnapshotSavedRef, nudgeTimeoutRef, thumbnailCacheRef, assetDataUrlCacheRef, restoredLayerAssetRef, multiDragAccumRef, multiResizeStartRef, multiRotateStartRef, snapshotCacheRef, getSnapshot, saveSnapshot, applySnapshot, handleUndo, handleRedo, handleInteractionEnd, selectedDesign, activeImageInfo, activeDesignTransform, activeWidthInches, activeHeightInches, activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, handleSelectDesign, handleMultiSelect, getLayerThumbnail, handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta, handleEffectiveSizeChange, isArtboardFull, handleDuplicateDesign, handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleCopySelected, handlePaste, handleDeleteGroup, handleDeleteDesign, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleCanvasContextMenu };
+  return { onDesignUploaded, profile, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode, toast, t, lang, isMobile, isLgUp, imageInfo, setImageInfo, resizeSettings, setResizeSettings, isProcessing, setIsProcessing, isAddingToCart, setIsAddingToCart, isUpdateFlow, setIsUpdateFlow, addToCartProgressLabel, setAddToCartProgressLabel, addToCartInFlightRef, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, refreshAddToCartStallTimeout, isUploading, setIsUploading, uploadProgress, setUploadProgress, artboardWidth, setArtboardWidth, artboardHeight, setArtboardHeight, artboardWidthRef, artboardHeightRef, contentFillCacheRef, handleAutoArrangeRef, quantity, setQuantity, designGap, setDesignGap, duplicateCount, setDuplicateCount, clampDuplicateCount, parseDuplicateCount, handleDuplicateCountKeyDown, designTransform, setDesignTransform, designs, setDesigns, selectedDesignId, setSelectedDesignId, selectedDesignIds, setSelectedDesignIds, mobilePanel, setMobilePanel, showDesignInfo, setShowDesignInfo, selectionZoomActive, setSelectionZoomActive, editingLayerName, setEditingLayerName, editingNameValue, setEditingNameValue, clipboardRef, proportionalLock, setProportionalLock, designInfoRef, sidebarFileRef, headerUploadInputRef, canvasRef, downloadContainer, setDownloadContainer, spotPreviewData, setSpotPreviewData, fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer, copySpotSelectionsRef, contextMenu, setContextMenu, cropModalDesignId, setCropModalDesignId, pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo, mountedRef, designsRef, nudgeSnapshotSavedRef, nudgeTimeoutRef, thumbnailCacheRef, assetDataUrlCacheRef, restoredLayerAssetRef, multiDragAccumRef, multiResizeStartRef, multiRotateStartRef, snapshotCacheRef, getSnapshot, saveSnapshot, applySnapshot, handleUndo, handleRedo, handleInteractionEnd, selectedDesign, activeImageInfo, activeDesignTransform, activeWidthInches, activeHeightInches, activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, handleSelectDesign, handleMultiSelect, getLayerThumbnail, handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta, handleEffectiveSizeChange, isArtboardFull, handleDuplicateDesign, handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleCopySelected, handlePaste, handleDeleteGroup, handleDeleteDesign, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleCanvasContextMenu };
 }

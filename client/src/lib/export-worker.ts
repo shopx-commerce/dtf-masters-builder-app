@@ -171,6 +171,61 @@ function drawPrerenderedOnStrip(
   }
 }
 
+type FilterScratch = { sub: Uint8Array; up: Uint8Array; avg: Uint8Array; paeth: Uint8Array };
+
+function paethPredictor(a: number, b: number, c: number): number {
+  const p = a + b - c;
+  const pa = p >= a ? p - a : a - p;
+  const pb = p >= b ? p - b : b - p;
+  const pc = p >= c ? p - c : c - p;
+  if (pa <= pb && pa <= pc) return a;
+  if (pb <= pc) return b;
+  return c;
+}
+
+// Picks the PNG filter (None/Sub/Up/Average/Paeth) that compresses smallest for this row — lossless.
+function filterRowAdaptive(
+  cur: Uint8ClampedArray,
+  prev: Uint8Array,
+  bpp: number,
+  rowBytes: number,
+  scratch: FilterScratch,
+  out: Uint8Array,
+  outOff: number,
+) {
+  const { sub, up, avg, paeth } = scratch;
+  let sNone = 0, sSub = 0, sUp = 0, sAvg = 0, sPaeth = 0;
+  for (let i = 0; i < rowBytes; i++) {
+    const x = cur[i];
+    const a = i >= bpp ? cur[i - bpp] : 0;
+    const b = prev[i];
+    const c = i >= bpp ? prev[i - bpp] : 0;
+
+    sNone += x < 128 ? x : 256 - x;
+
+    const vs = (x - a) & 0xff; sub[i] = vs; sSub += vs < 128 ? vs : 256 - vs;
+    const vu = (x - b) & 0xff; up[i] = vu; sUp += vu < 128 ? vu : 256 - vu;
+    const vg = (x - ((a + b) >> 1)) & 0xff; avg[i] = vg; sAvg += vg < 128 ? vg : 256 - vg;
+    const vp = (x - paethPredictor(a, b, c)) & 0xff; paeth[i] = vp; sPaeth += vp < 128 ? vp : 256 - vp;
+  }
+
+  let best = 0, bestSum = sNone;
+  if (sSub < bestSum) { best = 1; bestSum = sSub; }
+  if (sUp < bestSum) { best = 2; bestSum = sUp; }
+  if (sAvg < bestSum) { best = 3; bestSum = sAvg; }
+  if (sPaeth < bestSum) { best = 4; }
+
+  out[outOff] = best;
+  const d = outOff + 1;
+  switch (best) {
+    case 0: out.set(cur, d); break;
+    case 1: out.set(sub, d); break;
+    case 2: out.set(up, d); break;
+    case 3: out.set(avg, d); break;
+    default: out.set(paeth, d); break;
+  }
+}
+
 async function writeEmptyRows(
   writer: WritableStreamDefaultWriter<Uint8Array>,
   outW: number,
@@ -191,22 +246,22 @@ async function writeEmptyRows(
 async function writeStripRows(
   writer: WritableStreamDefaultWriter<Uint8Array>,
   pixels: Uint8ClampedArray,
-  outW: number,
   stripH: number,
   filteredRowLen: number,
   rowBytes: number,
+  bpp: number,
+  prevRow: Uint8Array,
+  scratch: FilterScratch,
 ) {
   for (let startRow = 0; startRow < stripH; startRow += BATCH_ROWS) {
     const endRow = Math.min(startRow + BATCH_ROWS, stripH);
     const batchCount = endRow - startRow;
     const batch = new Uint8Array(batchCount * filteredRowLen);
     for (let r = 0; r < batchCount; r++) {
-      const off = r * filteredRowLen;
-      batch[off] = 0;
-      batch.set(
-        pixels.subarray((startRow + r) * rowBytes, (startRow + r + 1) * rowBytes),
-        off + 1,
-      );
+      const rowIdx = startRow + r;
+      const cur = pixels.subarray(rowIdx * rowBytes, (rowIdx + 1) * rowBytes);
+      filterRowAdaptive(cur, prevRow, bpp, rowBytes, scratch, batch, r * filteredRowLen);
+      prevRow.set(cur); // this row is the "up" reference for the next
     }
     await writer.write(batch);
   }
@@ -254,6 +309,16 @@ async function buildPngStreaming(input: ExportInput): Promise<Uint8Array> {
   const filteredRowLen = 1 + rowBytes;
   const emptyRow = new Uint8Array(filteredRowLen);
 
+  // Adaptive-filter state, reused across all rows/strips to avoid per-row allocation.
+  const bpp = 4; // RGBA, 8-bit
+  const prevRow = new Uint8Array(rowBytes); // "up" reference; starts as zeros (transparent)
+  const scratch: FilterScratch = {
+    sub: new Uint8Array(rowBytes),
+    up: new Uint8Array(rowBytes),
+    avg: new Uint8Array(rowBytes),
+    paeth: new Uint8Array(rowBytes),
+  };
+
   let stripCanvas: OffscreenCanvas | null = null;
   let stripCtx: OffscreenCanvasRenderingContext2D | null = null;
 
@@ -262,6 +327,7 @@ async function buildPngStreaming(input: ExportInput): Promise<Uint8Array> {
 
     if (!stripHasContent(prerendered, stripY, stripH)) {
       await writeEmptyRows(writer, outW, stripH, emptyRow, filteredRowLen);
+      prevRow.fill(0); // the rows just written are fully transparent (zero)
       continue;
     }
 
@@ -275,7 +341,7 @@ async function buildPngStreaming(input: ExportInput): Promise<Uint8Array> {
     drawPrerenderedOnStrip(ctx, prerendered, stripY, stripH);
 
     const imageData = ctx.getImageData(0, 0, outW, stripH);
-    await writeStripRows(writer, imageData.data, outW, stripH, filteredRowLen, rowBytes);
+    await writeStripRows(writer, imageData.data, stripH, filteredRowLen, rowBytes, bpp, prevRow, scratch);
   }
 
   if (stripCanvas) {

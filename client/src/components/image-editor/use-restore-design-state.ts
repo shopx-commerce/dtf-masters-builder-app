@@ -45,13 +45,20 @@ async function loadImageFromPublicUrl(
   const blob = await response.blob();
   const objUrl = URL.createObjectURL(blob);
   try {
-    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve(img);
+    const img = new Image();
+    // Armed before .src is set, so a decode failure can't fire `error` before we're listening.
+    const eventSettled = new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
       img.onerror = () => reject(new Error("Image decode failed"));
-      img.src = objUrl;
     });
-    return { image, blob };
+    img.src = objUrl;
+    // Async decode keeps large restores off the main thread; falls back to the events above.
+    try {
+      await img.decode();
+    } catch {
+      await eventSettled;
+    }
+    return { image: img, blob };
   } finally {
     URL.revokeObjectURL(objUrl);
   }

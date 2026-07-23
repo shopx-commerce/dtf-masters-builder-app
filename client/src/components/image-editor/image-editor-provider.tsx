@@ -70,6 +70,11 @@ function useImageEditorModel(props: ImageEditorProps) {
     GANGSHEET_HEIGHTS: bag.GANGSHEET_HEIGHTS,
     recommendedArtboardHeight: bag.recommendedArtboardHeight,
     profile: bag.profile,
+    onAddToCart: bag.handleAddToCart,
+    hasVariantId: !!(bag.initialVariantId || bag.shopifyVariants?.length),
+    isEditMode: bag.isEditMode,
+    isAddingToCart: bag.isAddingToCart,
+    isProcessing: bag.isProcessing,
   };
 
   return { ...bag, actionToolbarProps };

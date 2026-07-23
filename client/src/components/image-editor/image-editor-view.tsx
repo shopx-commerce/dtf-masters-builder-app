@@ -8,7 +8,7 @@ import { formatDimensions, formatLength, useMetric, getUnitSuffix } from "@/lib/
 import {
   ArrowDownLeft, ArrowDownRight, ArrowUpLeft, ArrowUpRight, Copy, ChevronDown, ChevronUp,
   Droplets, FlipHorizontal2, FlipVertical2, Layers, LayoutGrid, Link, Loader2, Minus, Plus, RotateCw,
-  Stamp, Trash2, Undo2, Redo2, Unlink, XCircle,
+  Trash2, Undo2, Redo2, Unlink, XCircle,
 } from "lucide-react";
 import { useImageEditorContext } from "./image-editor-context";
 
@@ -332,19 +332,6 @@ export default function ImageEditorView() {
                           <Plus className="w-2.5 h-2.5" strokeWidth={3} />
                         </button>
                       </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const hasPrint = first.printFileName ?? false;
-                          setDesigns(prev => prev.map(d =>
-                            row.designs.some(rd => rd.id === d.id) ? { ...d, printFileName: !hasPrint } : d
-                          ));
-                        }}
-                        className={`p-0.5 rounded transition-colors flex-shrink-0 ${first.printFileName ? 'text-cyan-500 hover:text-cyan-600 bg-cyan-50' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-200'}`}
-                        title={first.printFileName ? t("editor.printNameOn") : t("editor.printName")}
-                      >
-                        <Stamp className="w-3 h-3" />
-                      </button>
                       <button
                         onClick={(e) => { e.stopPropagation(); handleDeleteGroup(row.designs.map(d => d.id)); }}
                         className="p-0.5 rounded hover:bg-gray-200 text-red-500 hover:text-red-600 transition-colors flex-shrink-0"
