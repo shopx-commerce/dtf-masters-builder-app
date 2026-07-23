@@ -38,6 +38,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
     assetDataUrlCacheRef,
     restoredLayerAssetRef,
     fileToDataUrl,
+    addToCartInFlightRef,
   } = bag;
 
   const buildDesignStatePayload = useCallback(async () => {
@@ -159,10 +160,12 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
   ]);
 
   const handleAddToCart = useCallback(async () => {
+    if (addToCartInFlightRef.current) return;
     if (designsRef.current.length === 0) {
       toast({ title: "No designs", description: "Add at least one design before adding to cart.", variant: "destructive" });
       return;
     }
+    addToCartInFlightRef.current = true;
     setIsAddingToCart(true);
     setIsUpdateFlow(isEditMode);
     setIsProcessing(true);
@@ -419,6 +422,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         description: error instanceof Error ? error.message : (isEditMode ? "Could not update design" : "Could not add to cart"),
         variant: "destructive"
       });
+      addToCartInFlightRef.current = false;
       setIsAddingToCart(false);
       setIsUpdateFlow(false);
       setIsProcessing(false);

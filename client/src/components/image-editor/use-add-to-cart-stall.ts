@@ -18,6 +18,7 @@ export function useAddToCartStall({
   setIsProcessing,
   setIsUpdateFlow,
   setAddToCartProgressLabel,
+  addToCartInFlightRef,
 }: {
   toast: ToastFn;
   isUpdateFlow: boolean;
@@ -25,6 +26,7 @@ export function useAddToCartStall({
   setIsProcessing: (v: boolean) => void;
   setIsUpdateFlow: (v: boolean) => void;
   setAddToCartProgressLabel: (v: string | undefined) => void;
+  addToCartInFlightRef: { current: boolean };
 }) {
   const addToCartStallTimeoutRef = useRef<number | null>(null);
   const lastAddToCartPngBytesRef = useRef<number>(0);
@@ -38,6 +40,7 @@ export function useAddToCartStall({
     const minMs = isUpdateFlow ? ADD_TO_CART_STALL_MIN_MS_UPDATE : ADD_TO_CART_STALL_MIN_MS_NEW;
     const stallMs = Math.max(minMs, Math.ceil(mb * ADD_TO_CART_STALL_MS_PER_MB));
     addToCartStallTimeoutRef.current = window.setTimeout(() => {
+      addToCartInFlightRef.current = false;
       setIsAddingToCart(false);
       setIsProcessing(false);
       setIsUpdateFlow(false);
@@ -77,6 +80,7 @@ export function useAddToCartStall({
           addToCartStallTimeoutRef.current = null;
         }
         const wasUpdateFlow = isUpdateFlow;
+        addToCartInFlightRef.current = false;
         setIsAddingToCart(false);
         setIsProcessing(false);
         setIsUpdateFlow(false);
