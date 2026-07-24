@@ -15,7 +15,7 @@ import { useImageEditorContext } from "./image-editor-context";
 export default function ImageEditorView() {
   const {
     t, lang, profile, embedFromShopify, isMobile, isLgUp, isUploading, uploadProgress, isProcessing,
-    isAddingToCart, isEditMode, isDragOver, artboardWidth, artboardHeight,
+    isAddingToCart, isEditMode, isUpdateFlow, isDragOver, artboardWidth, artboardHeight,
     quantity, designGap, duplicateCount, designs, setDesigns, selectedDesignId, setSelectedDesignId,
     selectedDesignIds, setSelectedDesignIds, mobilePanel,
     setMobilePanel, showDesignInfo, setShowDesignInfo, selectionZoomActive, setSelectionZoomActive,
@@ -597,13 +597,17 @@ export default function ImageEditorView() {
         ) : null;
       })()}
 
-      {/* Processing Modal (downloads only — add-to-cart uses the bottom button state) */}
-      {isProcessing && !isAddingToCart && (
+      {/* Processing Modal — covers downloads, edit-link restore, and add-to-cart/update */}
+      {isProcessing && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 max-w-sm mx-4">
             <div className="flex items-center space-x-3">
               <div className="animate-spin rounded-full h-5 w-5 border-2 border-cyan-500 border-t-transparent"></div>
-              <span className="text-white">{t("editor.processing")}</span>
+              <span className="text-white">
+                {isAddingToCart
+                  ? (isUpdateFlow ? t("editor.updatingDesignModal") : t("editor.addingToCartModal"))
+                  : t("editor.processing")}
+              </span>
             </div>
           </div>
         </div>

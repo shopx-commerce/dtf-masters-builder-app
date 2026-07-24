@@ -42,6 +42,8 @@ export const es: Record<string, string> = {
   "editor.addDesignTitle": "Agregar otra imagen",
   "editor.processing": "Procesando...",
   "editor.processingDesign": "Procesando tu diseño",
+  "editor.addingToCartModal": "Añadiendo al carrito...",
+  "editor.updatingDesignModal": "Actualizando tu diseño...",
   "editor.optimizing": "Optimizando para la mejor calidad de impresión...",
   "editor.autoArrange": "Auto-Organizar",
   "editor.autoArrangeAll": "Organizar automáticamente todos los diseños en la hoja",
