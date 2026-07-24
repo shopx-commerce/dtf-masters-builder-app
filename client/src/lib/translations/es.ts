@@ -42,6 +42,8 @@ export const es: Record<string, string> = {
   "editor.addDesignTitle": "Agregar otra imagen",
   "editor.processing": "Procesando...",
   "editor.processingDesign": "Procesando tu diseño",
+  "editor.addingToCartModal": "Añadiendo al carrito...",
+  "editor.updatingDesignModal": "Actualizando tu diseño...",
   "editor.optimizing": "Optimizando para la mejor calidad de impresión...",
   "editor.autoArrange": "Auto-Organizar",
   "editor.autoArrangeAll": "Organizar automáticamente todos los diseños en la hoja",
@@ -97,7 +99,7 @@ export const es: Record<string, string> = {
   "controls.designsPlural": "{count} diseños",
   "controls.uploadFirst": "Sube una imagen primero",
   "controls.addToCart": "Añadir al carrito",
-  "controls.addingToCart": "Añadiendo al carrito…",
+  "controls.addingToCart": "Añadiendo al carrito",
   "controls.recommended": "Recomendado",
   "controls.currentBounds": "límites actuales",
 

@@ -1,9 +1,19 @@
-import type { Express, NextFunction, Request, Response } from "express";
+import type { Express, NextFunction, Request, Response as ExpressResponse } from "express";
 import { createServer, type Server } from "http";
 import multer from "multer";
 import sharp from "sharp";
 import express from "express";
 import { nanoid } from "nanoid";
+
+import { fetchStorefrontVariantList } from "./lib/storefront-variant-config";
+import { normalizeShopifyPrice } from "./lib/shopify-price";
+import {
+  assertSafeExternalUrl,
+  fetchSafeExternalUrl,
+  isAllowedDesignObjectKey,
+  isAllowedDesignStateKey,
+  parseExternalUrl,
+} from "./lib/safe-external-url";
 
 import sgMail from "@sendgrid/mail";
 
@@ -149,7 +159,7 @@ function normalizeBuilderContextPayload(
         if (isNaN(height)) height = pair.height;
       }
     }
-    const price = row.price != null ? String(row.price) : null;
+    const price = row.price != null ? normalizeShopifyPrice(row.price) : null;
     const sku = row.sku != null ? String(row.sku) : null;
     return {
       id,
@@ -244,7 +254,6 @@ function storeBuilderContextFromBody(body: Record<string, unknown>): string {
     ...(shopTop || shopFromContext ? { shop: shopTop ?? shopFromContext } : {}),
   };
   builderContextStore.set(token, { at: Date.now(), payload });
-  console.log('[builder-context] stored', token.slice(0, 8) + '…', payload.variants?.length, 'variants');
   return token;
 }
 
@@ -274,6 +283,140 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
 
+  async function fetchViaR2ApiIfPossible(target: URL): Promise<Response | null> {
+    assertSafeExternalUrl(target.toString());
+    const accountId = String(process.env.R2_ACCOUNT_ID || "").trim();
+    const apiToken = String(process.env.R2_API_TOKEN || "").trim();
+    const bucketName = String(process.env.R2_BUCKET_NAME || "stickers").trim();
+    if (!accountId || !apiToken || !bucketName) return null;
+    const host = target.host.toLowerCase();
+    const looksLikeR2Public = host.endsWith(".r2.dev") || host.includes(".r2.cloudflarestorage.com");
+    if (!looksLikeR2Public) return null;
+    const key = target.pathname.replace(/^\/+/, "");
+    if (!key) return null;
+    const encodedKey = key.split("/").map((seg) => encodeURIComponent(seg)).join("/");
+    const apiUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/r2/buckets/${encodeURIComponent(bucketName)}/objects/${encodedKey}`;
+    return fetch(apiUrl, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+      },
+    });
+  }
+
+  async function fetchR2ObjectByKey(key: string): Promise<Response | null> {
+    const accountId = String(process.env.R2_ACCOUNT_ID || "").trim();
+    const apiToken = String(process.env.R2_API_TOKEN || "").trim();
+    const bucketName = String(process.env.R2_BUCKET_NAME || "stickers").trim();
+    const cleanKey = String(key || "").trim().replace(/^\/+/, "");
+    if (!accountId || !apiToken || !bucketName || !cleanKey) return null;
+    const encodedKey = cleanKey.split("/").map((seg) => encodeURIComponent(seg)).join("/");
+    const apiUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/r2/buckets/${encodeURIComponent(bucketName)}/objects/${encodedKey}`;
+    return fetch(apiUrl, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+      },
+    });
+  }
+
+  app.get("/api/fetch-json", async (req, res) => {
+    const target = parseExternalUrl(req.query.url);
+    if (!target) {
+      return res.status(400).json({ error: "Valid http/https url is required" });
+    }
+    try {
+      assertSafeExternalUrl(target.toString());
+      const upstream = (await fetchViaR2ApiIfPossible(target)) || (await fetchSafeExternalUrl(target.toString()));
+      if (!upstream.ok) {
+        return res.status(502).json({ error: `Upstream returned ${upstream.status}` });
+      }
+      const json = await upstream.json();
+      return res.json(json);
+    } catch (err) {
+      console.error("[fetch-json] error:", err);
+      const message = err instanceof Error ? err.message : "Failed to fetch JSON";
+      const status = message.includes("not allowed") ? 403 : 500;
+      return res.status(status).json({ error: message });
+    }
+  });
+
+  app.get("/api/fetch-binary", async (req, res) => {
+    const target = parseExternalUrl(req.query.url);
+    if (!target) {
+      return res.status(400).json({ error: "Valid http/https url is required" });
+    }
+    try {
+      assertSafeExternalUrl(target.toString());
+      const upstream = (await fetchViaR2ApiIfPossible(target)) || (await fetchSafeExternalUrl(target.toString()));
+      if (!upstream.ok) {
+        return res.status(502).json({ error: `Upstream returned ${upstream.status}` });
+      }
+      const contentType = upstream.headers.get("content-type") || "application/octet-stream";
+      const cacheControl = upstream.headers.get("cache-control") || "public, max-age=300";
+      const body = Buffer.from(await upstream.arrayBuffer());
+      res.setHeader("content-type", contentType);
+      res.setHeader("cache-control", cacheControl);
+      return res.status(200).send(body);
+    } catch (err) {
+      console.error("[fetch-binary] error:", err);
+      const message = err instanceof Error ? err.message : "Failed to fetch binary";
+      const status = message.includes("not allowed") ? 403 : 500;
+      return res.status(status).json({ error: message });
+    }
+  });
+
+  app.get("/api/design-state", async (req, res) => {
+    const stateKey = String(req.query.stateKey || "").trim();
+    if (!stateKey) {
+      return res.status(400).json({ error: "stateKey is required" });
+    }
+    if (!isAllowedDesignStateKey(stateKey)) {
+      return res.status(403).json({ error: "stateKey not allowed" });
+    }
+    try {
+      const upstream = await fetchR2ObjectByKey(stateKey);
+      if (!upstream) {
+        return res.status(500).json({ error: "R2 credentials are not configured on builder app" });
+      }
+      if (!upstream.ok) {
+        return res.status(502).json({ error: `R2 object read failed (${upstream.status})` });
+      }
+      const json = await upstream.json();
+      return res.json(json);
+    } catch (err) {
+      console.error("[design-state] error:", err);
+      return res.status(500).json({ error: "Failed to load design state" });
+    }
+  });
+
+  app.get("/api/r2-object", async (req, res) => {
+    const key = String(req.query.key || "").trim();
+    if (!key) {
+      return res.status(400).json({ error: "key is required" });
+    }
+    if (!isAllowedDesignObjectKey(key)) {
+      return res.status(403).json({ error: "key not allowed" });
+    }
+    try {
+      const upstream = await fetchR2ObjectByKey(key);
+      if (!upstream) {
+        return res.status(500).json({ error: "R2 credentials are not configured on builder app" });
+      }
+      if (!upstream.ok) {
+        return res.status(502).json({ error: `R2 object read failed (${upstream.status})` });
+      }
+      const contentType = upstream.headers.get("content-type") || "application/octet-stream";
+      const body = Buffer.from(await upstream.arrayBuffer());
+      res.setHeader("content-type", contentType);
+      res.setHeader("cache-control", "public, max-age=300");
+      return res.status(200).send(body);
+    } catch (err) {
+      console.error("[r2-object] error:", err);
+      return res.status(500).json({ error: "Failed to load object" });
+    }
+  });
+
   /**
    * Shopify proxy JSON entrypoint.
    * Body: variant, quantity, shop (optional), builder_path, builder_context (object | JSON string).
@@ -288,9 +431,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const v = body.variant ?? body.variant_id;
       const qn = body.quantity;
       const shop = body.shop;
+      const productId = body.product_id ?? body.productId;
+      const productHandle = body.product_handle ?? body.productHandle;
       if (v != null) q.set('variant', String(v));
       if (qn != null) q.set('quantity', String(qn));
       if (shop != null) q.set('shop', String(shop));
+      if (productId != null) q.set('product_id', String(productId));
+      if (productHandle != null) q.set('product_handle', String(productHandle));
       const rawPath = body.builder_path ?? body.builderPath ?? '/uv-dtf';
       const normalizedPath =
         typeof rawPath === 'string' && rawPath.trim() !== ''
@@ -318,7 +465,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     limits: { fieldSize: 15 * 1024 * 1024 },
   }).none();
 
-  function multipartFormIfNeeded(req: Request, res: Response, next: NextFunction) {
+  function multipartFormIfNeeded(req: Request, res: ExpressResponse, next: NextFunction) {
     const ct = req.headers['content-type'] ?? '';
     if (ct.includes('multipart/form-data')) {
       return formMultipart(req, res, next);
@@ -359,6 +506,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(404).json({ error: 'Context expired or not found', configured: false });
     }
     return res.json(entry.payload);
+  });
+
+  app.get("/api/storefront-variant-config", async (req, res) => {
+    const variantId = String(req.query.variant ?? req.query.variant_id ?? "").trim();
+    const productId = String(req.query.product_id ?? req.query.productId ?? "").trim();
+    const productHandle = String(req.query.product_handle ?? req.query.productHandle ?? "").trim();
+    if (!variantId) {
+      return res.status(400).json({ configured: false, error: "variant or variant_id param required" });
+    }
+    try {
+      const raw = await fetchStorefrontVariantList(variantId, { productId, productHandle });
+      if (!raw) {
+        return res.status(502).json({
+          configured: false,
+          error: "Could not load variants (pass product_id/product_handle; set SHOP_CUSTOM_DOMAIN on builder)",
+        });
+      }
+      const normalized = normalizeBuilderContextPayload(
+        raw as unknown as Record<string, unknown>,
+        variantId,
+      );
+      return res.json({ ...normalized, source: "storefront-ajax" });
+    } catch (err) {
+      console.error("[storefront-variant-config] error:", err);
+      return res.status(500).json({ configured: false, error: "Failed to load variant config" });
+    }
   });
 
   // ── Optional: Storefront API (only used when client passes ?storefront=1 — not needed for builder_context flow)
@@ -416,8 +589,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       allHeights.sort((a, b) => a - b);
-
-      console.log(`[Shopify] Product: "${variant.product?.title}" | Variants (${variantList.length}):`, variantList);
 
       return res.json({
         configured: true,
