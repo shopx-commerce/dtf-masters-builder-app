@@ -126,20 +126,20 @@ export default function ImageEditorView() {
         )}
         {isMobile && (
           <div className="flex-shrink-0 border-b border-gray-200 bg-white px-2 py-1.5">
-            <div className="grid grid-cols-2 gap-1 rounded-md bg-gray-100 p-1">
+            <div className="grid grid-cols-2 gap-1.5">
               <button
                 type="button"
                 onClick={() => setMobilePanel("controls")}
-                className={`rounded px-2 py-1 text-xs font-medium transition-colors ${mobilePanel === "controls" ? "bg-white text-gray-900 shadow-sm" : "text-gray-600"}`}
+                className={`rounded px-2 py-1 text-xs font-bold tracking-wide transition-colors ${mobilePanel === "controls" ? "bg-violet-600 text-white shadow-md shadow-violet-200" : "bg-violet-100 text-violet-400"}`}
               >
-                Controls
+                🎛️ Controls
               </button>
               <button
                 type="button"
                 onClick={() => setMobilePanel("preview")}
-                className={`rounded px-2 py-1 text-xs font-medium transition-colors ${mobilePanel === "preview" ? "bg-white text-gray-900 shadow-sm" : "text-gray-600"}`}
+                className={`rounded px-2 py-1 text-xs font-bold tracking-wide transition-colors ${mobilePanel === "preview" ? "bg-cyan-500 text-white shadow-md shadow-cyan-200" : "bg-cyan-100 text-cyan-400"}`}
               >
-                Preview
+                👁️ Preview
               </button>
             </div>
           </div>
