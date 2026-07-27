@@ -42,3 +42,9 @@ waitForPort = 5000
 
 [agent]
 integrations = ["github:1.0.0"]
+
+[userenv]
+
+[userenv.shared]
+R2_PUBLIC_BASE_URL = "https://media.anynest.app"
+VITE_R2_PUBLIC_BASE_URL = "https://media.anynest.app"
