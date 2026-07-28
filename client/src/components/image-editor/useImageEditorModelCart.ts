@@ -410,14 +410,15 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         designState = await buildDesignStatePayload();
       } else {
         if (productionIsPdf) {
-          const [pdf, ds] = await Promise.all([exportProductionPdf(), buildDesignStatePayload()]);
+          const [pdf, fluorescentDesignState] = await Promise.all([exportProductionPdf(), buildDesignStatePayload()]);
           productionBlob = pdf;
+          designState = fluorescentDesignState;
         } else {
-          const [exp, ds] = await Promise.all([exportProductionPng(), buildDesignStatePayload()]);
+          const [exp, pngDesignState] = await Promise.all([exportProductionPng(), buildDesignStatePayload()]);
           productionBlob = exp.pngBlob;
           exportWorkerBuffer = exp.exportWorkerBuffer;
+          designState = pngDesignState;
         }
-        designState = ds;
       }
       // Reset to 0 on reuse so the stall-timeout watchdog isn't fed a stale byte count.
       lastAddToCartPngBytesRef.current = productionBlob ? productionBlob.size : 0;
