@@ -123,11 +123,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     selectionZoomActiveRef.current = selectionZoomActive;
     const [moveMode, setMoveMode] = useState(false);
     const moveModeRef = useRef(false);
-    useEffect(() => {
-      if (canvasAreaRef.current && wandDeleteActive) {
-        canvasAreaRef.current.style.cursor = "crosshair";
-      }
-    }, [wandDeleteActive]);
+    const wandDeleteActiveRef = useRef(wandDeleteActive);
+    wandDeleteActiveRef.current = wandDeleteActive;
+    const onWandDeactivateRef = useRef(onWandDeactivate);
+    onWandDeactivateRef.current = onWandDeactivate;
     moveModeRef.current = moveMode;
     const isSelectionZoomDragging = useRef(false);
     const suppressTransitionRef = useRef(false);
@@ -199,6 +198,13 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       if (isHorizOverflow() && !moveModeRef.current) return 'grab';
       return 'default';
     }, [isHorizOverflow]);
+
+    useEffect(() => {
+      const area = canvasAreaRef.current;
+      if (!area) return;
+      if (wandDeleteActive) area.style.cursor = "crosshair";
+      else if (!selectionZoomActiveRef.current) area.style.cursor = getIdleCursor();
+    }, [wandDeleteActive, getIdleCursor]);
 
 
     const getOverscrollPx = useCallback((axis: 'x' | 'y') => {
@@ -1741,7 +1747,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     }, [selectedDesignId, onTransformChange, canvasToLocal, hitTestHandles]);
 
     const handleMouseMove = useCallback((e: React.MouseEvent) => {
-      if (selectionZoomActiveRef.current) return;
+      if (wandDeleteActiveRef.current || selectionZoomActiveRef.current) return;
       if (isPanningRef.current) {
         const dx = e.clientX - panStartRef.current.x;
         const dy = e.clientY - panStartRef.current.y;
@@ -1809,6 +1815,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     }, []);
 
     const handleMouseLeave = useCallback(() => {
+      if (wandDeleteActiveRef.current) return;
       isKeyboardScopeActiveRef.current = false;
       spaceDownRef.current = false;
       const hasActiveInteraction = isPanningRef.current || isDraggingRef.current || isResizingRef.current || isRotatingRef.current || isMultiDragRef.current || isMultiResizeRef.current || isMultiRotateRef.current || isMarqueeRef.current;
@@ -1928,7 +1935,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       if ((e.target as HTMLElement).closest('[data-scrollbar]')) return;
       if (e.touches.length === 2) {
         if (e.nativeEvent.cancelable) e.preventDefault();
-        if (wandDeleteActive) onWandDeactivate?.();
+        if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
         isPinchingRef.current = true;
         isPanningRef.current = false;
         const dx = e.touches[1].clientX - e.touches[0].clientX;
@@ -1992,6 +1999,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       }
       if (e.touches.length !== 1) return;
       if (e.nativeEvent.cancelable) e.preventDefault();
+      if (wandDeleteActiveRef.current) return;
       if (isPanningRef.current) {
         const dx = e.touches[0].clientX - panStartRef.current.x;
         const dy = e.touches[0].clientY - panStartRef.current.y;
@@ -2299,6 +2307,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
         // Ctrl/Cmd+wheel OR pinch-to-zoom (browsers set ctrlKey for pinch): ZOOM
         if (e.ctrlKey || e.metaKey) {
+          if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
           isWheelZoomingRef.current = true;
           if (wheelTimeoutRef.current) clearTimeout(wheelTimeoutRef.current);
           wheelTimeoutRef.current = setTimeout(() => { isWheelZoomingRef.current = false; }, 200);
@@ -3446,7 +3455,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={resetView}
+                    onClick={() => {
+                      if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
+                      resetView();
+                    }}
                     className="min-w-[40px] min-h-[40px] h-8 px-2 hover:bg-gray-200 rounded text-gray-600 whitespace-nowrap text-[11px] flex items-center justify-center"
                     title={t("preview.resetView")}
                   >
@@ -3460,6 +3472,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                     size="sm"
                     className="min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 h-8 w-8 sm:h-7 sm:w-7 p-0 hover:bg-gray-200 rounded flex items-center justify-center"
                     onClick={() => {
+                      if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
                       const newZ = Math.max(zoom / ZOOM_BUTTON_FACTOR, minZoomRef.current);
                       const clamped = clampPanValue(panX, panY, newZ);
                       setZoom(newZ);
@@ -3481,6 +3494,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                     size="sm"
                     className="min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 h-8 w-8 sm:h-7 sm:w-7 p-0 hover:bg-gray-200 rounded flex items-center justify-center"
                     onClick={() => {
+                      if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
                       const newZ = Math.min(zoom * ZOOM_BUTTON_FACTOR, zoomMax);
                       const clamped = clampPanValue(panX, panY, newZ);
                       setZoom(newZ);
@@ -3512,7 +3526,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                   <Button 
                     variant="ghost"
                     size="sm"
-                    onClick={resetView}
+                    onClick={() => {
+                      if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
+                      resetView();
+                    }}
                     className={`h-6 px-1.5 hover:bg-gray-200 rounded text-gray-600 whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'}`}
                     title={t("preview.resetView")}
                   >
@@ -3615,6 +3632,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                 )}
                 <div className="flex items-center gap-0 flex-shrink-0 items-center">
                   <Button variant="ghost" size="sm" className="min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 h-8 w-8 sm:h-7 sm:w-7 p-0 hover:bg-gray-200 rounded flex items-center justify-center" onClick={() => {
+                    if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
                     const newZ = Math.max(zoom / ZOOM_BUTTON_FACTOR, minZoomRef.current);
                     const clamped = clampPanValue(panX, panY, newZ);
                     setZoom(newZ);
@@ -3628,6 +3646,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                   </Button>
                   <span className="text-[11px] text-gray-600 min-w-[32px] text-center font-medium tabular-nums px-0.5">{Math.round(zoom * 100)}%</span>
                   <Button variant="ghost" size="sm" className="min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 h-8 w-8 sm:h-7 sm:w-7 p-0 hover:bg-gray-200 rounded flex items-center justify-center" onClick={() => {
+                    if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
                     const newZ = Math.min(zoom * ZOOM_BUTTON_FACTOR, zoomMax);
                     const clamped = clampPanValue(panX, panY, newZ);
                     setZoom(newZ);

@@ -131,7 +131,10 @@ export default function ImageEditorView() {
             <div className="grid grid-cols-2 gap-1.5">
               <button
                 type="button"
-                onClick={() => setMobilePanel("controls")}
+                onClick={() => {
+                  setMobilePanel("controls");
+                  setWandDeleteModeActive(false);
+                }}
                 className={`rounded px-2 py-1 text-xs font-bold tracking-wide transition-colors ${mobilePanel === "controls" ? "bg-violet-600 text-white shadow-md shadow-violet-200" : "bg-violet-100 text-violet-400"}`}
               >
                 🎛️ Controls
@@ -184,8 +187,12 @@ export default function ImageEditorView() {
             onRemoveWhiteBackground={handleRemoveWhiteBackground}
             wandDeleteActive={wandDeleteModeActive}
             onWandDeleteToggle={() => {
-              setWandDeleteModeActive((active) => !active);
-              if (!wandDeleteModeActive) setMobilePanel("preview");
+              const nextActive = !wandDeleteModeActive;
+              setWandDeleteModeActive(nextActive);
+              if (nextActive) {
+                setSelectionZoomActive(false);
+                setMobilePanel("preview");
+              }
             }}
             wandTolerance={wandTolerance}
             onWandToleranceChange={setWandTolerance}
@@ -396,7 +403,10 @@ export default function ImageEditorView() {
                   onDesignContextMenu={handleCanvasContextMenu}
                   spotPreviewData={profile.enableFluorescent ? spotPreviewData : undefined}
                   selectionZoomActive={selectionZoomActive}
-                  onSelectionZoomChange={setSelectionZoomActive}
+                  onSelectionZoomChange={(active) => {
+                    setSelectionZoomActive(active);
+                    if (active) setWandDeleteModeActive(false);
+                  }}
                   bottomToolbarContainer={mobileToolbarContainer}
                    wandDeleteActive={wandDeleteModeActive}
                    onWandDeleteTap={handleWandDelete}
@@ -547,7 +557,10 @@ export default function ImageEditorView() {
               onDesignContextMenu={handleCanvasContextMenu}
               spotPreviewData={profile.enableFluorescent ? spotPreviewData : undefined}
               selectionZoomActive={selectionZoomActive}
-              onSelectionZoomChange={setSelectionZoomActive}
+              onSelectionZoomChange={(active) => {
+                setSelectionZoomActive(active);
+                if (active) setWandDeleteModeActive(false);
+              }}
               wandDeleteActive={wandDeleteModeActive}
               onWandDeleteTap={handleWandDelete}
               onWandDeactivate={() => setWandDeleteModeActive(false)}
