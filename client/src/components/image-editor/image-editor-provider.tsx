@@ -3,6 +3,7 @@ import { ImageEditorContext } from "./image-editor-context";
 import { useImageEditorModelStateDesign } from "./useImageEditorModelStateDesign";
 import { useImageEditorModelArrangeKeyboard } from "./useImageEditorModelArrangeKeyboard";
 import { useImageEditorModelUploadCrop } from "./useImageEditorModelUploadCrop";
+import { useImageEditorModelHalftone } from "./useImageEditorModelHalftone";
 import { useImageEditorModelExport } from "./useImageEditorModelExport";
 import { useImageEditorModelCart } from "./useImageEditorModelCart";
 import type { EditorActionToolbarProps } from "./editor-action-toolbar";
@@ -18,9 +19,10 @@ function useImageEditorModel(props: ImageEditorProps) {
   const p0 = useImageEditorModelStateDesign(props);
   const p1 = useImageEditorModelArrangeKeyboard(p0);
   const p2 = useImageEditorModelUploadCrop({ ...p0, ...p1 });
-  const p3 = useImageEditorModelExport({ ...p0, ...p1, ...p2 });
-  const p4 = useImageEditorModelCart({ ...p0, ...p1, ...p2, ...p3 });
-  const bag = { ...p0, ...p1, ...p2, ...p3, ...p4 };
+  const p3 = useImageEditorModelHalftone({ ...p0, ...p1, ...p2 });
+  const p4 = useImageEditorModelExport({ ...p0, ...p1, ...p2, ...p3 });
+  const p5 = useImageEditorModelCart({ ...p0, ...p1, ...p2, ...p3, ...p4 });
+  const bag = { ...p0, ...p1, ...p2, ...p3, ...p4, ...p5 };
 
   const actionToolbarProps: EditorActionToolbarProps = {
     t: bag.t,

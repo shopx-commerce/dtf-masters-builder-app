@@ -7,6 +7,7 @@ import {
   exportWorkerResultToBlob,
 } from "./utils";
 import type { ImageEditorBagAfterUploadCrop } from "./image-editor-hook-bag.types";
+import { thresholdImageInfo } from "./useImageEditorModelHalftone";
 
 export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
   // Only the bag fields handleDownload actually uses are destructured here;
@@ -173,11 +174,31 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
 
         let pngBlob: Blob;
 
+        // ── Pre-clean halftoned designs ─────────────────────────────────────────
+        // Halftoned designs have binary alpha. However, when drawn at a scaled or
+        // rotated size on a canvas, bilinear interpolation reintroduces fringe
+        // pixels.  We eliminate this by re-thresholding the source image first,
+        // then using nearest-neighbour scaling (alphaThresholded flag, already set).
+        const halftoneCleanMap = new Map<string, import("@/lib/types").ImageInfo>();
+        await Promise.all(
+          designs
+            .filter(d => d.halftoned)
+            .map(async d => {
+              const cleaned = await thresholdImageInfo(d.imageInfo);
+              if (cleaned) halftoneCleanMap.set(d.id, cleaned);
+            })
+        );
+        const exportSrc = designs.map(d =>
+          halftoneCleanMap.has(d.id)
+            ? { ...d, imageInfo: halftoneCleanMap.get(d.id)! }
+            : d
+        );
+
         if (useWorker) {
           const bitmaps = await Promise.all(
-            designs.map(d => createImageBitmap(d.imageInfo.image))
+            exportSrc.map(d => createImageBitmap(d.imageInfo.image))
           );
-          const exportDesigns = designs.map((d, i) => ({
+          const exportDesigns = exportSrc.map((d, i) => ({
             widthInches: d.widthInches,
             heightInches: d.heightInches,
             nx: d.transform.nx,
@@ -240,7 +261,7 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
           ctx.clearRect(0, 0, outW, outH);
           ctx.imageSmoothingEnabled = true;
           ctx.imageSmoothingQuality = 'high';
-          for (const design of designs) {
+          for (const design of exportSrc) {
             const img = design.imageInfo.image;
             const drawW = Math.max(1, Math.round(design.widthInches * design.transform.s * exportDpi));
             const drawH = Math.max(1, Math.round(design.heightInches * design.transform.s * exportDpi));

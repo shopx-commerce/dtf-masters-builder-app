@@ -33,6 +33,10 @@ export interface DesignItem {
   name: string;
   originalDPI: number;
   alphaThresholded?: boolean;
+  /** Set by the halftone tool. Export pipeline pre-cleans halftoned designs to
+   *  guarantee binary alpha (0 or 255) and uses nearest-neighbour scaling so
+   *  bilinear interpolation cannot reintroduce semi-transparent edge pixels. */
+  halftoned?: boolean;
   printFileName?: boolean;
 }
 
