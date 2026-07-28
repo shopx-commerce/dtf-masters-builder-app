@@ -218,6 +218,64 @@ export default function ImageEditorView() {
             onWandToleranceChange={setWandTolerance}
           />
 
+           {!isMobile && halftoneEnabled && (
+             <div className="relative rounded-lg border border-amber-200 bg-amber-50/40 p-2">
+               <button
+                 onClick={handleOpenHalftoneMenu}
+                 disabled={!selectedDesignId && selectedDesignIds.size === 0}
+                 className={`flex w-full items-center justify-center gap-1 rounded-md border px-2 py-2 text-[11px] font-medium transition-all ${selectedDesignId || selectedDesignIds.size > 0 ? "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`}
+                 title="Halftone: convert design colours to halftone dots for dark-garment DTF"
+               >
+                 <HalftoneIcon className="h-3 w-3" />Halftone
+               </button>
+               {halftoneMenuOpen && (selectedDesignId || selectedDesignIds.size > 0) && (
+                 <div className="absolute left-0 top-full z-50 mt-1 w-48 rounded-md border border-gray-200 bg-white p-2 shadow-lg">
+                   <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">Strength</p>
+                   <div className="mb-2 flex gap-1">
+                     {(['light', 'balanced', 'strong'] as const).map((s) => (
+                       <button
+                         key={s}
+                         onClick={() => setHalftoneStrength(s)}
+                         className={`flex-1 rounded border py-0.5 text-[10px] font-medium capitalize transition-colors ${halftoneStrength === s ? "border-amber-600 bg-amber-500 text-white" : "border-gray-200 bg-gray-50 text-gray-600 hover:bg-amber-50"}`}
+                       >
+                         {s}
+                       </button>
+                     ))}
+                   </div>
+                   <button
+                     onClick={() => {
+                       setHalftoneMenuOpen(false);
+                       const id = selectedDesignId ?? [...selectedDesignIds][0];
+                       if (id) handleApplyHalftone(id, 0, 0, 0, halftoneStrength);
+                     }}
+                     className="mb-1 w-full rounded bg-gray-900 px-2 py-1.5 text-[11px] font-medium text-white hover:bg-gray-700"
+                   >
+                     ⬛ Black garment
+                   </button>
+                   {halftoneTopColors.length > 0 && (
+                     <div className="mt-1 space-y-1">
+                       <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Colour garment</p>
+                       {halftoneTopColors.map((c, i) => (
+                         <button
+                           key={i}
+                           onClick={() => {
+                             setHalftoneMenuOpen(false);
+                             const id = selectedDesignId ?? [...selectedDesignIds][0];
+                             if (id) handleApplyHalftone(id, c.r, c.g, c.b, halftoneStrength);
+                           }}
+                           className="flex w-full items-center gap-2 rounded px-2 py-1 text-[11px] hover:bg-gray-100"
+                         >
+                           <span className="h-3.5 w-3.5 flex-shrink-0 rounded-full border border-gray-200" style={{ background: c.hex }} />
+                           <span className="truncate text-gray-700">{c.name ?? c.hex}</span>
+                         </button>
+                       ))}
+                     </div>
+                   )}
+                 </div>
+               )}
+             </div>
+           )}
+
           {/* Fluorescent panel portal target */}
           {profile.enableFluorescent && <div ref={setFluorPanelContainer} />}
 
