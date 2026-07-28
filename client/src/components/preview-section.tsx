@@ -108,10 +108,6 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const nativeScrollRef = useRef<HTMLDivElement>(null);
     const syncingScrollRef = useRef(false);
     zoomRef.current = zoom;
-    if (!scrollDragRef.current) {
-      panXRef.current = panX;
-      panYRef.current = panY;
-    }
     const [selectionZoomActiveInternal, setSelectionZoomActiveInternal] = useState(false);
     const selectionZoomActive = selectionZoomActiveProp !== undefined ? selectionZoomActiveProp : selectionZoomActiveInternal;
     const setSelectionZoomActive = useCallback((valOrFn: boolean | ((prev: boolean) => boolean)) => {
@@ -1766,8 +1762,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         const rawPx = panStartRef.current.px + dx / zoom;
         const rawPy = panStartRef.current.py + dy / zoom;
         const clamped = clampPanValue(rawPx, rawPy, zoom);
-        setPanX(clamped.x);
-        setPanY(clamped.y);
+        queuePanStateCommit(clamped.x, clamped.y);
         return;
       }
       if (isMarqueeRef.current || isMultiDragRef.current || isMultiResizeRef.current || isMultiRotateRef.current || isDraggingRef.current || isResizingRef.current || isRotatingRef.current) {
@@ -1918,8 +1913,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         const clamped = clampPanValue(newPanX, newPanY, newZoom);
         suppressTransitionRef.current = true;
         setZoom(newZoom);
-        setPanX(clamped.x);
-        setPanY(clamped.y);
+        queuePanStateCommit(clamped.x, clamped.y);
         requestAnimationFrame(() => { suppressTransitionRef.current = false; });
         area.style.cursor = (newZoom * previewDimsRef.current.width > area.clientWidth * 1.05 && !moveModeRef.current) ? 'grab' : 'default';
       };
@@ -1939,6 +1933,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const pinchStartDistRef = useRef(0);
     const pinchStartZoomRef = useRef(1);
     const pinchStartPanRef = useRef({ x: 0, y: 0 });
+    const pinchStartCenterRef = useRef({ x: 0, y: 0 });
     const isPinchingRef = useRef(false);
 
     const handleTouchStart = useCallback((e: React.TouchEvent) => {
@@ -1948,6 +1943,13 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
         isPinchingRef.current = true;
         isPanningRef.current = false;
+        const areaRect = canvasAreaRef.current?.getBoundingClientRect();
+        if (areaRect) {
+          pinchStartCenterRef.current = {
+            x: (e.touches[0].clientX + e.touches[1].clientX) / 2 - (areaRect.left + areaRect.width / 2),
+            y: (e.touches[0].clientY + e.touches[1].clientY) / 2 - (areaRect.top + areaRect.height / 2),
+          };
+        }
         const dx = e.touches[1].clientX - e.touches[0].clientX;
         const dy = e.touches[1].clientY - e.touches[0].clientY;
         pinchStartDistRef.current = Math.sqrt(dx * dx + dy * dy);
@@ -2001,10 +2003,13 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         const ratio = dist / Math.max(1, pinchStartDistRef.current);
         const effectiveMin = minZoomRef.current;
         const newZoom = Math.max(effectiveMin, Math.min(zoomMaxRef.current, pinchStartZoomRef.current * ratio));
-        const clamped = clampPanValue(pinchStartPanRef.current.x, pinchStartPanRef.current.y, newZoom);
+        const anchor = pinchStartCenterRef.current;
+        const startZoom = pinchStartZoomRef.current;
+        const anchoredPanX = pinchStartPanRef.current.x + anchor.x * (1 / newZoom - 1 / startZoom);
+        const anchoredPanY = pinchStartPanRef.current.y + anchor.y * (1 / newZoom - 1 / startZoom);
+        const clamped = clampPanValue(anchoredPanX, anchoredPanY, newZoom);
         setZoom(newZoom);
-        setPanX(clamped.x);
-        setPanY(clamped.y);
+        queuePanStateCommit(clamped.x, clamped.y);
         return;
       }
       if (e.touches.length !== 1) return;
@@ -2063,8 +2068,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const z = Math.max(ZOOM_MIN_ABSOLUTE, Math.min(zoomMaxRef.current, Math.round(fitZoom * 20) / 20));
       minZoomRef.current = z;
       setZoom(z);
-      setPanX(0);
-      setPanY(0);
+      queuePanStateCommit(0, 0);
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           suppressTransitionRef.current = false;
@@ -2113,8 +2117,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const rawPy = -designCenterY;
       const clamped = clampPanValue(rawPx, rawPy, newZoom);
       setZoom(newZoom);
-      setPanX(clamped.x);
-      setPanY(clamped.y);
+      queuePanStateCommit(clamped.x, clamped.y);
       setMoveMode(true);
     }, [selectedDesignId, designs, artboardWidth, artboardHeight, clampPanValue]);
 
@@ -2330,9 +2333,12 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
           const canvas = canvasRef.current;
           if (!canvas) return;
-          const rect = canvas.getBoundingClientRect();
-          const cursorX = e.clientX - (rect.left + rect.width / 2);
-          const cursorY = e.clientY - (rect.top + rect.height / 2);
+          // Anchor against the viewport center, not the transformed canvas
+          // center. The latter moves with pan and causes zoom to pull the
+          // design back toward the page center after hand-panning.
+          const viewportRect = el.getBoundingClientRect();
+          const cursorX = e.clientX - (viewportRect.left + viewportRect.width / 2);
+          const cursorY = e.clientY - (viewportRect.top + viewportRect.height / 2);
 
           const oldPx = panXRef.current;
           const oldPy = panYRef.current;
@@ -2342,8 +2348,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           const dims = previewDimsRef.current;
 
           setZoom(newZoom);
-          setPanX(clamped.x);
-          setPanY(clamped.y);
+          queuePanStateCommit(clamped.x, clamped.y);
           if (!selectionZoomActiveRef.current && !isPanningRef.current) {
             el.style.cursor = (newZoom * dims.width > el.clientWidth * 1.05 && !moveModeRef.current) ? 'grab' : 'default';
           }
@@ -2358,10 +2363,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         const newPanY = panYRef.current - rawDy / z;
         const clamped = clampPanValue(newPanX, newPanY, z);
         if (clamped.x === panXRef.current && clamped.y === panYRef.current) return;
-        panXRef.current = clamped.x;
-        panYRef.current = clamped.y;
-        setPanX(clamped.x);
-        setPanY(clamped.y);
+        queuePanStateCommit(clamped.x, clamped.y);
       };
       el.addEventListener('wheel', onWheel, { passive: false });
       return () => {
@@ -2418,8 +2420,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const z = Math.max(ZOOM_MIN_ABSOLUTE, Math.min(zoomMaxRef.current, Math.round(fitZoom * 20) / 20));
       minZoomRef.current = z;
       setZoom(z);
-      setPanX(0);
-      setPanY(0);
+      queuePanStateCommit(0, 0);
       const clearSuppress = () => {
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
