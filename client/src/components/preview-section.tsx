@@ -128,6 +128,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const onWandDeactivateRef = useRef(onWandDeactivate);
     onWandDeactivateRef.current = onWandDeactivate;
     moveModeRef.current = moveMode;
+    function setPreviewCursor(cursor: string) {
+      const area = canvasAreaRef.current;
+      if (!area) return;
+      area.style.cursor = wandDeleteActiveRef.current ? "crosshair" : cursor;
+    }
     const isSelectionZoomDragging = useRef(false);
     const suppressTransitionRef = useRef(false);
     const selZoomScreenStartRef = useRef<{x: number; y: number}>({x: 0, y: 0});
@@ -202,9 +207,16 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     useEffect(() => {
       const area = canvasAreaRef.current;
       if (!area) return;
-      if (wandDeleteActive) area.style.cursor = "crosshair";
-      else if (!selectionZoomActiveRef.current) area.style.cursor = getIdleCursor();
-    }, [wandDeleteActive, getIdleCursor]);
+      const frame = requestAnimationFrame(() => {
+        if (!canvasAreaRef.current) return;
+        if (wandDeleteActiveRef.current) {
+          canvasAreaRef.current.style.cursor = "crosshair";
+        } else if (!selectionZoomActiveRef.current) {
+          setPreviewCursor(getIdleCursor());
+        }
+      });
+      return () => cancelAnimationFrame(frame);
+    }, [wandDeleteActive, selectionZoomActive, zoom, moveMode, getIdleCursor]);
 
 
     const getOverscrollPx = useCallback((axis: 'x' | 'y') => {
@@ -1158,7 +1170,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           isMultiDragRef.current = true;
           multiDragStartRef.current = { x: clientX, y: clientY };
           altDragDuplicatedRef.current = false;
-          if (canvasAreaRef.current) canvasAreaRef.current.style.cursor = 'move';
+          setPreviewCursor('move');
           return;
         }
 
@@ -1168,7 +1180,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           isMultiDragRef.current = true;
           multiDragStartRef.current = { x: clientX, y: clientY };
           altDragDuplicatedRef.current = false;
-          if (canvasAreaRef.current) canvasAreaRef.current.style.cursor = 'move';
+          setPreviewCursor('move');
           return;
         }
         if (multiHit) {
@@ -1802,9 +1814,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const handleMouseUp = useCallback(() => {
       if (isPanningRef.current) {
         isPanningRef.current = false;
-        if (canvasAreaRef.current) {
-          canvasAreaRef.current.style.cursor = spaceDownRef.current ? 'grab' : getIdleCursor();
-        }
+        setPreviewCursor(spaceDownRef.current ? 'grab' : getIdleCursor());
         return;
       }
       handleInteractionEnd();
@@ -3136,7 +3146,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
-          className="flex-1 min-h-0 flex items-center justify-center bg-gray-100 p-3 relative overflow-hidden cursor-default"
+          data-wand-active={wandDeleteActive ? "true" : "false"}
+          className="preview-canvas-area flex-1 min-h-0 flex items-center justify-center bg-gray-100 p-3 relative overflow-hidden cursor-default"
           style={{ userSelect: 'none', touchAction: 'none', overscrollBehavior: 'none' }}
         >
           {previewDims.width > 0 && previewDims.height > 0 ? (

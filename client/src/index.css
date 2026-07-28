@@ -6,6 +6,12 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Magic Wand must win over zoom/pan cursor writes on desktop and touch preview surfaces. */
+.preview-canvas-area[data-wand-active="true"],
+.preview-canvas-area[data-wand-active="true"] * {
+  cursor: crosshair !important;
+}
+
 :root {
   --background: hsl(0, 0%, 100%);
   --foreground: hsl(0, 0%, 0%);
