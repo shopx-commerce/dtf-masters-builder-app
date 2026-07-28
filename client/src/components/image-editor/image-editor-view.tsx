@@ -1,4 +1,5 @@
 import UploadSection from "../upload-section";
+import { useRef, useState } from "react";
 import PreviewSection from "../preview-section";
 import ControlsSection from "../controls-section";
 import CropModal from "../crop-modal";
@@ -61,6 +62,10 @@ export default function ImageEditorView() {
     parseDuplicateCount, handleDuplicateCountKeyDown, clampDuplicateCount, setArtboardWidth,
     setArtboardHeight, setQuantity,
   } = useImageEditorContext();
+  const [activeSpotChannel, setActiveSpotChannel] = useState<string | null>(null);
+  const [panModeActive, setPanModeActive] = useState(false);
+  const wandAssignRef = useRef<((nx: number, ny: number) => void) | null>(null);
+  const clearActiveChannelRef = useRef<(() => void) | null>(null);
   const halftoneEnabled = profile?.id === "hot-peel" || profile?.id === "fluorescent";
 
   if (!activeImageInfo && !embedFromShopify) {
@@ -195,6 +200,11 @@ export default function ImageEditorView() {
             onSpotPreviewChange={setSpotPreviewData}
             fluorPanelContainer={fluorPanelContainer}
             copySpotSelectionsRef={copySpotSelectionsRef}
+            onActiveChannelChange={setActiveSpotChannel}
+            wandAssignRef={wandAssignRef}
+            panModeActive={panModeActive}
+            onPanModeChange={setPanModeActive}
+            clearActiveChannelRef={clearActiveChannelRef}
             quantity={quantity}
             onQuantityChange={setQuantity}
             shopifyVariants={shopifyVariants}
@@ -210,6 +220,8 @@ export default function ImageEditorView() {
               const nextActive = !wandDeleteModeActive;
               setWandDeleteModeActive(nextActive);
               if (nextActive) {
+                clearActiveChannelRef.current?.();
+                setPanModeActive(false);
                 setSelectionZoomActive(false);
                 setMobilePanel("preview");
               }
@@ -480,10 +492,18 @@ export default function ImageEditorView() {
                   onExpandArtboard={artboardHeight < MAX_ARTBOARD_HEIGHT ? handleExpandArtboard : undefined}
                   onDesignContextMenu={handleCanvasContextMenu}
                   spotPreviewData={profile.enableFluorescent ? spotPreviewData : undefined}
+                  activeSpotChannel={profile.enableFluorescent ? activeSpotChannel : null}
+                  onWandTap={profile.enableFluorescent ? (nx, ny, id) => wandAssignRef.current?.(nx, ny) : undefined}
+                  panModeActive={profile.enableFluorescent ? panModeActive : false}
+                  onPanModeChange={profile.enableFluorescent ? setPanModeActive : undefined}
                   selectionZoomActive={selectionZoomActive}
                   onSelectionZoomChange={(active) => {
                     setSelectionZoomActive(active);
-                    if (active) setWandDeleteModeActive(false);
+                    if (active) {
+                      clearActiveChannelRef.current?.();
+                      setPanModeActive(false);
+                      setWandDeleteModeActive(false);
+                    }
                   }}
                   bottomToolbarContainer={mobileToolbarContainer}
                    wandDeleteActive={wandDeleteModeActive}
@@ -679,10 +699,18 @@ export default function ImageEditorView() {
               onExpandArtboard={artboardHeight < MAX_ARTBOARD_HEIGHT ? handleExpandArtboard : undefined}
               onDesignContextMenu={handleCanvasContextMenu}
               spotPreviewData={profile.enableFluorescent ? spotPreviewData : undefined}
+              activeSpotChannel={profile.enableFluorescent ? activeSpotChannel : null}
+              onWandTap={profile.enableFluorescent ? (nx, ny, id) => wandAssignRef.current?.(nx, ny) : undefined}
+              panModeActive={profile.enableFluorescent ? panModeActive : false}
+              onPanModeChange={profile.enableFluorescent ? setPanModeActive : undefined}
               selectionZoomActive={selectionZoomActive}
               onSelectionZoomChange={(active) => {
                 setSelectionZoomActive(active);
-                if (active) setWandDeleteModeActive(false);
+                if (active) {
+                  clearActiveChannelRef.current?.();
+                  setPanModeActive(false);
+                  setWandDeleteModeActive(false);
+                }
               }}
               wandDeleteActive={wandDeleteModeActive}
               onWandDeleteTap={handleWandDelete}

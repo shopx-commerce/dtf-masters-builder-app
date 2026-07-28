@@ -76,6 +76,10 @@ interface PreviewSectionProps {
   onExpandArtboard?: () => void;
   onDesignContextMenu?: (x: number, y: number, designId: string | null) => void;
   spotPreviewData?: { enabled: boolean; colors: Array<{ hex: string; rgb: { r: number; g: number; b: number }; spotWhite?: boolean; spotGloss?: boolean; spotFluorY?: boolean; spotFluorM?: boolean; spotFluorG?: boolean; spotFluorOrange?: boolean }> };
+  activeSpotChannel?: string | null;
+  onWandTap?: (nx: number, ny: number, designId: string) => void;
+  panModeActive?: boolean;
+  onPanModeChange?: (active: boolean) => void;
   selectionZoomActive?: boolean;
   onSelectionZoomChange?: (active: boolean) => void;
   wandDeleteActive?: boolean;
@@ -85,7 +89,7 @@ interface PreviewSectionProps {
 }
 
 const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
-  ({ imageInfo, resizeSettings, artboardWidth = 24.5, artboardHeight = 12, designTransform, onTransformChange, designs = [], selectedDesignId, selectedDesignIds = new Set(), onSelectDesign, onMultiSelect, onMultiDragDelta, onMultiResizeDelta, onMultiRotateDelta, onDuplicateSelected, onInteractionEnd, onExpandArtboard, onDesignContextMenu, spotPreviewData, selectionZoomActive: selectionZoomActiveProp, onSelectionZoomChange, bottomToolbarContainer, wandDeleteActive = false, onWandDeleteTap, onWandDeactivate }, ref) => {
+  ({ imageInfo, resizeSettings, artboardWidth = 24.5, artboardHeight = 12, designTransform, onTransformChange, designs = [], selectedDesignId, selectedDesignIds = new Set(), onSelectDesign, onMultiSelect, onMultiDragDelta, onMultiResizeDelta, onMultiRotateDelta, onDuplicateSelected, onInteractionEnd, onExpandArtboard, onDesignContextMenu, spotPreviewData, activeSpotChannel, onWandTap, panModeActive = false, onPanModeChange, selectionZoomActive: selectionZoomActiveProp, onSelectionZoomChange, bottomToolbarContainer, wandDeleteActive = false, onWandDeleteTap, onWandDeactivate }, ref) => {
     const { toast } = useToast();
     const { t, lang } = useLanguage();
     const isMobile = useIsMobile();
@@ -121,6 +125,12 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const moveModeRef = useRef(false);
     const wandDeleteActiveRef = useRef(wandDeleteActive);
     wandDeleteActiveRef.current = wandDeleteActive;
+    const activeSpotChannelRef = useRef(activeSpotChannel);
+    activeSpotChannelRef.current = activeSpotChannel;
+    const onWandTapRef = useRef(onWandTap);
+    onWandTapRef.current = onWandTap;
+    const panModeActiveRef = useRef(panModeActive);
+    panModeActiveRef.current = panModeActive;
     const onWandDeactivateRef = useRef(onWandDeactivate);
     onWandDeactivateRef.current = onWandDeactivate;
     moveModeRef.current = moveMode;
@@ -1697,6 +1707,22 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       altKeyRef.current = e.altKey;
       if (selectionZoomActiveRef.current) return;
       if ((e.target as HTMLElement).closest('[data-scrollbar]')) return;
+      if (e.button === 0 && activeSpotChannelRef.current && onWandTapRef.current && !panModeActiveRef.current) {
+        const local = canvasToLocal(e.clientX, e.clientY);
+        const hitId = findDesignAtPoint(local.x, local.y);
+        const design = hitId ? designs.find(d => d.id === hitId) : undefined;
+        const canvas = canvasRef.current;
+        if (hitId && design && canvas) {
+          const rect = computeLayerRect(design.imageInfo.image.width, design.imageInfo.image.height, design.transform, canvas.width, canvas.height, artboardWidth, artboardHeight, design.widthInches, design.heightInches);
+          const cx = rect.x + rect.width / 2, cy = rect.y + rect.height / 2;
+          const rad = -(design.transform.rotation * Math.PI) / 180;
+          const dx = local.x - cx, dy = local.y - cy;
+          const nx = 0.5 + (dx * Math.cos(rad) - dy * Math.sin(rad)) / rect.width;
+          const ny = 0.5 + (dx * Math.sin(rad) + dy * Math.cos(rad)) / rect.height;
+          if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) onWandTapRef.current(nx, ny, hitId);
+        }
+        return;
+      }
       if (e.button === 0 && wandDeleteActive && onWandDeleteTap) {
         const local = canvasToLocal(e.clientX, e.clientY);
         const hitId = findDesignAtPoint(local.x, local.y);
@@ -1959,6 +1985,26 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       }
       if (e.touches.length !== 1) return;
       if (e.nativeEvent.cancelable) e.preventDefault();
+      if (activeSpotChannelRef.current && onWandTapRef.current && !panModeActiveRef.current) {
+        const local = canvasToLocal(e.touches[0].clientX, e.touches[0].clientY);
+        const hitId = findDesignAtPoint(local.x, local.y);
+        const design = hitId ? designs.find(d => d.id === hitId) : undefined;
+        const canvas = canvasRef.current;
+        if (hitId && design && canvas) {
+          const rect = computeLayerRect(
+            design.imageInfo.image.width, design.imageInfo.image.height, design.transform,
+            canvas.width, canvas.height, artboardWidth, artboardHeight,
+            design.widthInches, design.heightInches
+          );
+          const cx = rect.x + rect.width / 2, cy = rect.y + rect.height / 2;
+          const rad = -(design.transform.rotation * Math.PI) / 180;
+          const dx = local.x - cx, dy = local.y - cy;
+          const nx = 0.5 + (dx * Math.cos(rad) - dy * Math.sin(rad)) / rect.width;
+          const ny = 0.5 + (dx * Math.sin(rad) + dy * Math.cos(rad)) / rect.height;
+          if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) onWandTapRef.current(nx, ny, hitId);
+        }
+        return;
+      }
       if (wandDeleteActive && onWandDeleteTap) {
         const local = canvasToLocal(e.touches[0].clientX, e.touches[0].clientY);
         const hitId = findDesignAtPoint(local.x, local.y);

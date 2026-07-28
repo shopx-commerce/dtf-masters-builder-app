@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ResizeSettings, ImageInfo } from "./image-editor";
-import { Download, Layers, FileCheck, Palette, Eye, EyeOff, ChevronDown, Info, ShoppingCart, Sun, Wand2 } from "lucide-react";
+import { Download, Layers, FileCheck, Palette, Eye, EyeOff, ChevronDown, ChevronUp, Info, ShoppingCart, Sun, Wand2, Sparkles, Undo2 } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
 import { formatLength } from "@/lib/format-length";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -13,6 +13,7 @@ import { formatVariantPriceForDisplay, getSelectedVariantPrice } from "@/lib/var
 export interface SpotPreviewData {
   enabled: boolean;
   colors: ExtractedColor[];
+  masks?: { FY: Uint8Array; FM: Uint8Array; FG: Uint8Array; FO: Uint8Array; width: number; height: number };
 }
 
 type ExtractedColor = {
@@ -26,6 +27,18 @@ type ExtractedColor = {
   spotFluorM?: boolean;
   spotFluorG?: boolean;
   spotFluorOrange?: boolean;
+  regions?: Array<{
+    id: number;
+    bbox: { minX: number; minY: number; maxX: number; maxY: number };
+    pixelCount: number;
+    percentage: number;
+    pixelIndices: number[];
+    spotFluorY?: boolean;
+    spotFluorM?: boolean;
+    spotFluorG?: boolean;
+    spotFluorOrange?: boolean;
+  }>;
+  regionMap?: Int32Array;
 };
 
 interface ControlsSectionProps {
@@ -47,6 +60,11 @@ interface ControlsSectionProps {
   onSpotPreviewChange?: (data: SpotPreviewData) => void;
   fluorPanelContainer?: HTMLDivElement | null;
   copySpotSelectionsRef?: React.MutableRefObject<((fromId: string, toIds: string[]) => void) | null>;
+  onActiveChannelChange?: (channel: string | null) => void;
+  wandAssignRef?: React.MutableRefObject<((nx: number, ny: number) => void) | null>;
+  panModeActive?: boolean;
+  onPanModeChange?: (active: boolean) => void;
+  clearActiveChannelRef?: React.MutableRefObject<(() => void) | null>;
   quantity?: number;
   onQuantityChange?: (qty: number) => void;
   shopifyVariants?: Array<{ id: string; title: string; price: string | null; height: number | null }>;
@@ -65,6 +83,24 @@ interface ControlsSectionProps {
 
 const DEFAULT_HEIGHTS: number[] = [];
 
+function autoAssignChannel(rgb: { r: number; g: number; b: number }): 'spotFluorY' | 'spotFluorM' | 'spotFluorG' | 'spotFluorOrange' | null {
+  const values = [rgb.r, rgb.g, rgb.b].map(v => v / 255);
+  const max = Math.max(...values), min = Math.min(...values);
+  const lightness = (max + min) / 2;
+  if (max === min) return null;
+  const saturation = lightness > 0.5 ? (max - min) / (2 - max - min) : (max - min) / (max + min);
+  if (saturation < 0.6 || lightness < 0.08 || lightness > 0.93) return null;
+  let hue = 0;
+  if (max === values[0]) hue = ((values[1] - values[2]) / (max - min) + (values[1] < values[2] ? 6 : 0)) * 60;
+  else if (max === values[1]) hue = ((values[2] - values[0]) / (max - min) + 2) * 60;
+  else hue = ((values[0] - values[1]) / (max - min) + 4) * 60;
+  if (hue >= 45 && hue < 80) return 'spotFluorY';
+  if (hue >= 80 && hue < 165) return 'spotFluorG';
+  if (hue >= 15 && hue < 45) return 'spotFluorOrange';
+  if (hue < 15 || hue >= 285) return 'spotFluorM';
+  return null;
+}
+
 export default function ControlsSection({
   onDownload,
   isProcessing,
@@ -82,6 +118,11 @@ export default function ControlsSection({
   onSpotPreviewChange,
   fluorPanelContainer,
   copySpotSelectionsRef,
+  onActiveChannelChange,
+  wandAssignRef,
+  panModeActive = false,
+  onPanModeChange,
+  clearActiveChannelRef,
   quantity: _quantity = 1,
   onQuantityChange: _onQuantityChange,
   shopifyVariants,
@@ -107,9 +148,14 @@ export default function ControlsSection({
     [shopifyVariants, artboardHeight]
   );
 
-  const [showSpotColors, setShowSpotColors] = useState(false);
+  const [showSpotColors, setShowSpotColors] = useState(true);
+  const [showDetectedColors, setShowDetectedColors] = useState(true);
   const [showFluorInfo, setShowFluorInfo] = useState(false);
   const [extractedColors, setExtractedColors] = useState<ExtractedColor[]>([]);
+  const [activeChannel, setActiveChannel] = useState<'spotFluorY' | 'spotFluorM' | 'spotFluorG' | 'spotFluorOrange' | null>(null);
+  const [autoAssignActive, setAutoAssignActive] = useState(false);
+  const preAutoAssignRef = useRef<ExtractedColor[] | null>(null);
+  const pixelMapRef = useRef<{ pixelMap: Int16Array; width: number; height: number } | null>(null);
   const [spotPreviewEnabled, setSpotPreviewEnabled] = useState(true);
   const spotFluorYName = "FY";
   const spotFluorMName = "FM";
@@ -120,9 +166,17 @@ export default function ControlsSection({
   const prevDesignIdRef = useRef<string | null | undefined>(null);
 
   useEffect(() => {
+    if (clearActiveChannelRef) clearActiveChannelRef.current = () => setActiveChannel(null);
+  }, [clearActiveChannelRef]);
+  useEffect(() => { onActiveChannelChange?.(activeChannel); }, [activeChannel, onActiveChannelChange]);
+
+  useEffect(() => {
     if (!enableFluorescent) return;
 
     let cancelled = false;
+    pixelMapRef.current = null;
+    preAutoAssignRef.current = null;
+    setAutoAssignActive(false);
 
     if (prevDesignIdRef.current && extractedColors.length > 0) {
       spotSelectionsRef.current.set(prevDesignIdRef.current, extractedColors);
@@ -131,15 +185,40 @@ export default function ControlsSection({
 
     if (imageInfo?.image) {
       if (selectedDesignId && spotSelectionsRef.current.has(selectedDesignId)) {
-        setExtractedColors(spotSelectionsRef.current.get(selectedDesignId)!);
+        const saved = spotSelectionsRef.current.get(selectedDesignId)!;
+        setExtractedColors(saved);
+        import("@/lib/color-extractor").then(({ buildPixelMapFromImage }) => {
+          if (cancelled) return;
+          const map = buildPixelMapFromImage(imageInfo.image, saved as any);
+          if (map) pixelMapRef.current = map;
+        }).catch(() => {});
       } else {
         const cacheKey = `${imageInfo.image.width}x${imageInfo.image.height}-${imageInfo.file?.name ?? 'unknown'}-${imageInfo.file?.size ?? 0}`;
         const cached = colorCacheRef.current.get(cacheKey);
         if (cached) {
-          setExtractedColors(cached.map(c => ({ ...c })));
-        } else {
-          import("@/lib/color-extractor").then(({ extractColorsFromImageAsync, extractColorsFromImage }) => {
+          const restored = cached.map(c => ({ ...c }));
+          setExtractedColors(restored);
+          import("@/lib/color-extractor").then(({ buildPixelMapFromImage, detectColorRegionsAsync }) => {
             if (cancelled) return;
+            const map = buildPixelMapFromImage(imageInfo.image, restored as any);
+            if (map) {
+              pixelMapRef.current = map;
+              return detectColorRegionsAsync(map.pixelMap, map.width, map.height, restored as any)
+                .then(() => { if (!cancelled) setExtractedColors([...restored]); });
+            }
+          }).catch(() => {});
+        } else {
+          import("@/lib/color-extractor").then(({ extractColorsFromImageAsync, extractColorsFromImage, buildPixelMapFromImage, detectColorRegionsAsync }) => {
+            if (cancelled) return;
+            const finish = async (colors: ExtractedColor[]) => {
+              if (cancelled) return;
+              const map = buildPixelMapFromImage(imageInfo.image, colors as any);
+              if (map) {
+                pixelMapRef.current = map;
+                await detectColorRegionsAsync(map.pixelMap, map.width, map.height, colors as any);
+              }
+              if (!cancelled) setExtractedColors([...colors]);
+            };
             extractColorsFromImageAsync(imageInfo.image, 999).then(colors => {
               if (cancelled) return;
               if (colors.length === 0) {
@@ -147,7 +226,7 @@ export default function ControlsSection({
                   const fallback = extractColorsFromImage(imageInfo.image, 999);
                   if (fallback.length > 0) {
                     colorCacheRef.current.set(cacheKey, fallback);
-                    setExtractedColors(fallback);
+                    void finish(fallback);
                     return;
                   }
                 } catch { /* sync fallback failed */ }
@@ -157,13 +236,13 @@ export default function ControlsSection({
                 const firstKey = colorCacheRef.current.keys().next().value;
                 if (firstKey) colorCacheRef.current.delete(firstKey);
               }
-              setExtractedColors(colors);
+              void finish(colors);
             }).catch((err) => {
               if (cancelled) return;
               try {
                 const fallback = extractColorsFromImage(imageInfo.image, 999);
                 colorCacheRef.current.set(cacheKey, fallback);
-                setExtractedColors(fallback);
+                void finish(fallback);
               } catch {
                 setExtractedColors([]);
               }
@@ -201,14 +280,55 @@ export default function ControlsSection({
     onSpotPreviewChange?.({ enabled: spotPreviewEnabled, colors: extractedColors });
   }, [spotPreviewEnabled, extractedColors, onSpotPreviewChange, enableFluorescent]);
 
+  const computeChannelMasks = useCallback(() => {
+    const map = pixelMapRef.current;
+    if (!map) return undefined;
+    const masks = {
+      FY: new Uint8Array(map.pixelMap.length),
+      FM: new Uint8Array(map.pixelMap.length),
+      FG: new Uint8Array(map.pixelMap.length),
+      FO: new Uint8Array(map.pixelMap.length),
+      width: map.width,
+      height: map.height,
+    };
+    for (let i = 0; i < map.pixelMap.length; i++) {
+      const color = extractedColors[map.pixelMap[i]];
+      if (!color) continue;
+      const regionIndex = color.regionMap?.[i] ?? -1;
+      const region = regionIndex >= 0 ? color.regions?.[regionIndex] : undefined;
+      const flags = region ?? color;
+      if (flags.spotFluorY) masks.FY[i] = 1;
+      if (flags.spotFluorM) masks.FM[i] = 1;
+      if (flags.spotFluorG) masks.FG[i] = 1;
+      if (flags.spotFluorOrange) masks.FO[i] = 1;
+    }
+    return masks;
+  }, [extractedColors]);
+
+  useEffect(() => {
+    if (!enableFluorescent) return;
+    onSpotPreviewChange?.({
+      enabled: spotPreviewEnabled,
+      colors: extractedColors,
+      masks: computeChannelMasks(),
+    });
+  }, [spotPreviewEnabled, extractedColors, computeChannelMasks, onSpotPreviewChange, enableFluorescent]);
+
   const updateSpotColor = useCallback((index: number, field: 'spotFluorY' | 'spotFluorM' | 'spotFluorG' | 'spotFluorOrange', value: boolean) => {
     setExtractedColors(prev => {
       const updated = prev.map((color, i) => {
         if (i === index) {
+          const regions = color.regions?.map(region => ({
+            ...region,
+            spotFluorY: field === 'spotFluorY' ? value : value ? false : region.spotFluorY,
+            spotFluorM: field === 'spotFluorM' ? value : value ? false : region.spotFluorM,
+            spotFluorG: field === 'spotFluorG' ? value : value ? false : region.spotFluorG,
+            spotFluorOrange: field === 'spotFluorOrange' ? value : value ? false : region.spotFluorOrange,
+          }));
           if (value) {
-            return { ...color, spotFluorY: false, spotFluorM: false, spotFluorG: false, spotFluorOrange: false, [field]: true };
+            return { ...color, spotFluorY: false, spotFluorM: false, spotFluorG: false, spotFluorOrange: false, [field]: true, regions };
           }
-          return { ...color, [field]: value };
+          return { ...color, [field]: value, regions };
         }
         return color;
       });
@@ -218,6 +338,63 @@ export default function ControlsSection({
       return updated;
     });
   }, [selectedDesignId]);
+
+  const handleAutoAssign = useCallback(() => {
+    if (autoAssignActive && preAutoAssignRef.current) {
+      const restored = preAutoAssignRef.current;
+      preAutoAssignRef.current = null;
+      setAutoAssignActive(false);
+      setExtractedColors(restored);
+      if (selectedDesignId) spotSelectionsRef.current.set(selectedDesignId, restored);
+      return;
+    }
+    setExtractedColors(prev => {
+      preAutoAssignRef.current = prev.map(color => ({ ...color, regions: color.regions?.map(region => ({ ...region })) }));
+      const updated = prev.map(color => {
+        const field = autoAssignChannel(color.rgb);
+        const flags = {
+          spotFluorY: field === 'spotFluorY',
+          spotFluorM: field === 'spotFluorM',
+          spotFluorG: field === 'spotFluorG',
+          spotFluorOrange: field === 'spotFluorOrange',
+        };
+        return { ...color, ...flags, regions: color.regions?.map(region => ({ ...region, ...flags })) };
+      });
+      if (selectedDesignId) spotSelectionsRef.current.set(selectedDesignId, updated);
+      return updated;
+    });
+    setAutoAssignActive(true);
+  }, [autoAssignActive, selectedDesignId]);
+
+  const handleWandAssign = useCallback((nx: number, ny: number) => {
+    if (!activeChannel || !pixelMapRef.current) return;
+    const map = pixelMapRef.current;
+    const x = Math.min(map.width - 1, Math.max(0, Math.floor(nx * map.width)));
+    const y = Math.min(map.height - 1, Math.max(0, Math.floor(ny * map.height)));
+    const pixelIndex = y * map.width + x;
+    const colorIndex = map.pixelMap[pixelIndex];
+    if (colorIndex < 0) return;
+    const color = extractedColors[colorIndex];
+    const regionIndex = color?.regionMap?.[pixelIndex] ?? -1;
+    if (color?.regions?.[regionIndex]) {
+      setExtractedColors(prev => {
+        const updated = prev.map((entry, index) => index !== colorIndex ? entry : {
+          ...entry,
+          regions: entry.regions?.map(region => region.id !== color.regions?.[regionIndex]?.id
+            ? region
+            : { ...region, spotFluorY: activeChannel === 'spotFluorY', spotFluorM: activeChannel === 'spotFluorM', spotFluorG: activeChannel === 'spotFluorG', spotFluorOrange: activeChannel === 'spotFluorOrange' }),
+        });
+        if (selectedDesignId) spotSelectionsRef.current.set(selectedDesignId, updated);
+        return updated;
+      });
+    } else {
+      updateSpotColor(colorIndex, activeChannel, true);
+    }
+  }, [activeChannel, extractedColors, selectedDesignId, updateSpotColor]);
+
+  useEffect(() => {
+    if (wandAssignRef) wandAssignRef.current = handleWandAssign;
+  }, [wandAssignRef, handleWandAssign]);
 
   const sortedColorIndices = useMemo(() => {
     const fluorPriority = (c: ExtractedColor) => {
@@ -283,6 +460,12 @@ export default function ControlsSection({
   }, [isPdf, enableFluorescent, getAllDesignSpotColors, onDownload]);
 
   const assignedCount = extractedColors.filter(c => c.spotFluorY || c.spotFluorM || c.spotFluorG || c.spotFluorOrange).length;
+  const fluorChannels = [
+    { field: 'spotFluorY' as const, label: 'FY', color: '#DFFF00' },
+    { field: 'spotFluorM' as const, label: 'FM', color: '#FF00FF' },
+    { field: 'spotFluorG' as const, label: 'FG', color: '#39FF14' },
+    { field: 'spotFluorOrange' as const, label: 'FO', color: '#FF6600' },
+  ];
 
   const INK_NAMES: Record<string, string> = {
     Yellow: t("controls.fluorYellow"),
@@ -470,9 +653,69 @@ export default function ControlsSection({
 
           {showSpotColors && (
             <div className="px-3 pb-2.5 space-y-2">
+              <div className="rounded-lg border border-purple-100 bg-purple-50/60 p-2">
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-600">Color Select Wand</span>
+                  {activeChannel && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveChannel(null)}
+                      className="text-[10px] text-gray-500 hover:text-gray-800"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-4 gap-1">
+                  {fluorChannels.map(channel => (
+                    <button
+                      key={channel.field}
+                      type="button"
+                      onClick={() => {
+                        setActiveChannel(activeChannel === channel.field ? null : channel.field);
+                        onPanModeChange?.(false);
+                      }}
+                      className={`rounded-md border py-1.5 text-[10px] font-bold transition-all ${
+                        activeChannel === channel.field ? "scale-105 ring-2 ring-offset-1" : "opacity-70 hover:opacity-100"
+                      }`}
+                      style={{ backgroundColor: `${channel.color}${activeChannel === channel.field ? "" : "44"}`, borderColor: channel.color, color: "#111", ["--tw-ring-color" as string]: channel.color }}
+                    >
+                      {channel.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-1 text-[9px] text-gray-500">
+                  {activeChannel ? `Tap the preview to assign ${activeChannel.replace("spotFluor", "F")}.` : "Choose an ink, then tap a color in the preview."}
+                </p>
+                {activeChannel && panModeActive && (
+                  <button type="button" onClick={() => onPanModeChange?.(false)} className="mt-1 text-[9px] text-amber-700 underline">
+                    Return to paint mode
+                  </button>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={handleAutoAssign}
+                className="flex w-full items-center justify-center gap-2 rounded-xl py-2 text-[11px] font-bold shadow-sm transition-all hover:brightness-105"
+                style={autoAssignActive
+                  ? { background: "#e5e7eb", color: "#374151" }
+                  : { background: "linear-gradient(135deg, #DFFF00, #39FF14 30%, #FF6600 65%, #FF00FF)", color: "#111" }}
+              >
+                {autoAssignActive ? <Undo2 className="h-3.5 w-3.5" /> : <Sparkles className="h-3.5 w-3.5" />}
+                {autoAssignActive ? "Undo Auto Color" : "Auto Color it for me!"}
+              </button>
+              <div className="border-t border-gray-100 pt-1">
+                <button type="button" onClick={() => setShowDetectedColors(value => !value)} className="flex w-full items-center justify-between py-1 text-left">
+                  <span className="flex items-center gap-1.5 text-[11px] font-semibold text-gray-600">
+                    <Palette className="h-3 w-3 text-gray-400" /> Detected Colors
+                    <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[9px] font-normal">{extractedColors.filter(c => c.percentage >= 0.1).length}</span>
+                  </span>
+                  <ChevronDown className={`h-3.5 w-3.5 text-gray-400 transition-transform ${showDetectedColors ? "rotate-180" : ""}`} />
+                </button>
+              </div>
               {extractedColors.length === 0 ? (
                 <div className="text-xs text-gray-600 italic py-1">{t("controls.noColors")}</div>
-              ) : (
+              ) : showDetectedColors ? (
                 <div className="flex flex-col gap-0.5 max-h-[240px] overflow-y-auto">
                   {sortedColorIndices
                     .filter((idx) => extractedColors[idx].percentage >= 0.5)
@@ -522,7 +765,7 @@ export default function ControlsSection({
                     );
                   })}
                 </div>
-              )}
+              ) : null}
 
             </div>
           )}
