@@ -14,3 +14,9 @@ Auto Color undo state must be stored per design, not as one panel-wide boolean, 
 **Why:** Switching between designs otherwise resets the undo label even though the first design still has its auto-assigned fluorescent colors.
 
 **How to apply:** Keep each design's pre-auto-assignment snapshot keyed by design ID and restore the corresponding snapshot when selection changes.
+
+Embedded production uploads must not fall back to posting the full exported file through the parent add-to-cart message.
+
+**Why:** The storefront proxy's upload endpoint can reject large PDF message bodies with HTTP 413; the signed upload URL or shell R2 relay must carry the file instead.
+
+**How to apply:** Prefer a configured signed upload URL over the legacy shell relay, pass the production format and MIME type, and fail clearly rather than sending an oversized PDF fallback.

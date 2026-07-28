@@ -431,8 +431,13 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       if (!shopDomain) throw new Error('Shop domain missing — open the builder from the storefront product page.');
 
       const filename = `gangsheet-${Date.now()}.${productionIsPdf ? "pdf" : "png"}`;
-      const productionKey =
+      const existingProductionKey =
         isEditMode && existingProduction?.key ? String(existingProduction.key) : undefined;
+      const productionKey =
+        existingProductionKey &&
+        existingProductionKey.toLowerCase().endsWith(productionIsPdf ? ".pdf" : ".png")
+          ? existingProductionKey
+          : undefined;
       const uploadUrl = shellUploadUrlRef.current?.trim() || '';
       const uploadInBuilder = canUseShellRelay() || Boolean(uploadUrl);
       const onUploadProgress = (msg: string) => setAddToCartProgressLabel(msg);
@@ -450,8 +455,10 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         setAddToCartProgressLabel(undefined);
       } else if (uploadInBuilder) {
         const uploadOpts = {
-          objectKey: productionKey,
-          useShellRelay: canUseShellRelay(),
+          objectKey: productionKey || filename,
+          // Prefer the signed upload endpoint when the parent provides one.
+          // The legacy shell relay may still return a PNG URL for PDF uploads.
+          useShellRelay: !uploadUrl && canUseShellRelay(),
           productionFormat: productionIsPdf ? "pdf" as const : "png" as const,
         };
         const uploadBody =
@@ -507,6 +514,11 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
 
       if (!productionUrl) {
         if (!productionBlob || !productionBlob.size) throw new Error("Empty design file");
+        if (canUseShellRelay()) {
+          throw new Error(
+            `The store upload relay did not accept the ${productionIsPdf ? "PDF" : "PNG"} production file. Please refresh the storefront and try again.`,
+          );
+        }
         const productionBuffer = await productionBlob.arrayBuffer();
         const messageWithFile = message as { pngBuffer?: ArrayBuffer; pdfBuffer?: ArrayBuffer; productionMimeType?: string };
         if (productionIsPdf) {
