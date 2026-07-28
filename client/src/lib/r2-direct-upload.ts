@@ -185,6 +185,57 @@ function bodySize(body: R2UploadBody): number {
   return body.byteLength;
 }
 
+function isLegacyDesignUploadUrl(uploadUrl: string): boolean {
+  try {
+    return new URL(uploadUrl, window.location.href).pathname.replace(/\/+$/, "").endsWith("/api/upload-design");
+  } catch {
+    return uploadUrl.replace(/[?#].*$/, "").replace(/\/+$/, "").endsWith("/api/upload-design");
+  }
+}
+
+async function uploadViaLegacyDesignEndpoint(
+  body: R2UploadBody,
+  filename: string,
+  uploadUrl: string,
+  contentType: string,
+  productionFormat: "png" | "pdf",
+  onProgress?: (message: string) => void,
+): Promise<R2UploadResult> {
+  onProgress?.("Uploading print file to store...");
+  const file = body instanceof Blob
+    ? new File([body], filename, { type: contentType })
+    : new File([body instanceof Uint8Array ? body : new Uint8Array(body)], filename, { type: contentType });
+  const form = new FormData();
+  form.append("file", file);
+  form.append("filename", filename);
+  form.append("contentType", contentType);
+  form.append("productionFormat", productionFormat);
+  const response = await builderFetch(uploadUrl, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+    body: form,
+  });
+  const result = await readUploadJson(response, uploadUrl);
+  const productionUrl = String(result.productionUrl || result.url || result.location || "");
+  if (!productionUrl) throw new Error("Store upload returned no production URL");
+  const returnedPath = (() => {
+    try {
+      return new URL(productionUrl, window.location.href).pathname.toLowerCase();
+    } catch {
+      return productionUrl.toLowerCase();
+    }
+  })();
+  if (!returnedPath.endsWith(`.${productionFormat}`)) {
+    throw new Error(`Store upload returned a non-${productionFormat.toUpperCase()} production URL`);
+  }
+  return {
+    productionUrl,
+    key: result.key ? String(result.key) : null,
+    previewUrl: result.previewUrl ? String(result.previewUrl) : productionUrl,
+    cartPreviewUrl: result.cartPreviewUrl ? String(result.cartPreviewUrl) : productionUrl,
+  };
+}
+
 /** Slice upload body without copying the full PNG (Blob.slice is cheap). */
 function bodyPart(body: R2UploadBody, start: number, end: number): Blob | Uint8Array {
   if (body instanceof Blob) return body.slice(start, end);
@@ -325,10 +376,21 @@ export async function uploadProductionToR2(
 
   const contentType = body instanceof Blob && body.type ? body.type : undefined;
   const expectedFormat = options.productionFormat || (contentType === "application/pdf" ? "pdf" : "png");
+  const effectiveContentType = contentType || (expectedFormat === "pdf" ? "application/pdf" : "image/png");
+  if (isLegacyDesignUploadUrl(uploadUrl)) {
+    return uploadViaLegacyDesignEndpoint(
+      body,
+      filename,
+      uploadUrl,
+      effectiveContentType,
+      expectedFormat,
+      onProgress,
+    );
+  }
   onProgress?.("Preparing cloud upload...");
   const meta = await prepareR2DirectUpload(uploadUrl, filename, total, {
     ...options,
-    contentType,
+    contentType: effectiveContentType,
     productionFormat: expectedFormat,
   });
 
