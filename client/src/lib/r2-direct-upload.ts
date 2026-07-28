@@ -253,7 +253,9 @@ export async function uploadPreparedPartsToR2(
 
   if (meta.singlePut && meta.putUrl) {
     onProgress?.("Uploading print file to cloud (1 request)...");
-    const putHeaders = meta.putHeaders || { "Content-Type": "image/png" };
+    const putHeaders = meta.putHeaders || {
+      "Content-Type": body instanceof Blob && body.type ? body.type : "application/octet-stream",
+    };
     const putRes = await fetch(String(meta.putUrl), {
       method: "PUT",
       body: putBody(body),

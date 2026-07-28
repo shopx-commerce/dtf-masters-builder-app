@@ -8,6 +8,7 @@ import {
 } from "./utils";
 import type { ImageEditorBagAfterExport } from "./image-editor-hook-bag.types";
 import type { InitialDesignState } from "./types";
+import type { SpotPreviewData } from "../controls-section";
 
 export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
   // Only the bag fields these two handlers actually use are destructured here;
@@ -39,6 +40,8 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
     restoredLayerAssetRef,
     fileToDataUrl,
     addToCartInFlightRef,
+    profile,
+    spotPreviewData,
   } = bag;
 
   const buildDesignStatePayload = useCallback(async () => {
@@ -252,6 +255,92 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         return { pngBlob, exportWorkerBuffer };
       };
 
+      const exportProductionPdf = async (): Promise<Blob> => {
+        const { PDFDocument, degrees, StandardFonts } = await import("pdf-lib");
+        const { addSpotColorVectorsToPDF } = await import("@/lib/spot-color-vectors");
+        const pdfDoc = await PDFDocument.create();
+        const pageWidthPt = artboardWidth * 72;
+        const pageHeightPt = artboardHeight * 72;
+        const page = pdfDoc.addPage([pageWidthPt, pageHeightPt]);
+        const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+        const exportDpi = EXPORT_DPI;
+
+        for (const design of designsRef.current) {
+          const drawW = Math.max(1, Math.round(design.widthInches * design.transform.s * exportDpi));
+          const drawH = Math.max(1, Math.round(design.heightInches * design.transform.s * exportDpi));
+          const canvas = document.createElement("canvas");
+          canvas.width = drawW;
+          canvas.height = drawH;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) continue;
+          ctx.imageSmoothingEnabled = !design.alphaThresholded;
+          ctx.imageSmoothingQuality = "high";
+          ctx.save();
+          ctx.translate(design.transform.flipX ? drawW : 0, design.transform.flipY ? drawH : 0);
+          ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
+          ctx.drawImage(design.imageInfo.image, 0, 0, drawW, drawH);
+          ctx.restore();
+
+          const dataUrl = canvas.toDataURL("image/png");
+          const base64 = dataUrl.split(",")[1];
+          if (!base64) continue;
+          const pngBytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+          const image = await pdfDoc.embedPng(pngBytes);
+          const widthPt = design.widthInches * design.transform.s * 72;
+          const heightPt = design.heightInches * design.transform.s * 72;
+          const centerX = design.transform.nx * pageWidthPt;
+          const centerY = pageHeightPt - design.transform.ny * pageHeightPt;
+          const rotation = design.transform.rotation ?? 0;
+          const radians = (-rotation * Math.PI) / 180;
+          const cos = Math.cos(radians);
+          const sin = Math.sin(radians);
+
+          page.drawImage(image, {
+            x: centerX - (widthPt / 2) * cos + (heightPt / 2) * sin,
+            y: centerY - (widthPt / 2) * sin - (heightPt / 2) * cos,
+            width: widthPt,
+            height: heightPt,
+            rotate: degrees(-rotation),
+          });
+
+          if (design.printFileName) {
+            const label = design.name.replace(/\.[^/.]+$/, "");
+            const size = Math.max(4, Math.round(0.08 * 72));
+            const margin = 0.02 * 72;
+            const textWidth = font.widthOfTextAtSize(label, size);
+            page.drawText(label, {
+              x: centerX + (widthPt / 2) * cos - (heightPt / 2) * sin - textWidth - margin,
+              y: centerY - (widthPt / 2) * sin - (heightPt / 2) * cos + margin,
+              size,
+              font,
+              rotate: degrees(-rotation),
+            });
+          }
+
+          const colors = (spotPreviewData as SpotPreviewData | undefined)?.colors;
+          if (colors?.some((color) => color.spotFluorY || color.spotFluorM || color.spotFluorG || color.spotFluorOrange)) {
+            const offsetX = design.transform.nx * artboardWidth - (design.widthInches * design.transform.s) / 2;
+            const offsetY = design.transform.ny * artboardHeight - (design.heightInches * design.transform.s) / 2;
+            await addSpotColorVectorsToPDF(
+              pdfDoc,
+              page,
+              design.imageInfo.image,
+              colors,
+              design.widthInches * design.transform.s,
+              design.heightInches * design.transform.s,
+              artboardHeight,
+              offsetX,
+              offsetY,
+              rotation,
+            );
+          }
+          canvas.width = 0;
+          canvas.height = 0;
+        }
+
+        return new Blob([await pdfDoc.save()], { type: "application/pdf" });
+      };
+
       // Skip re-export/re-upload on update when nothing rendered has actually changed.
       const existingProduction = (initialDesignState as { production?: { url?: string | null; key?: string | null; previewUrl?: string | null } } | null)?.production;
 
@@ -306,26 +395,32 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       };
 
       let canReuseProduction = false;
-      if (isEditMode && existingProduction?.url) {
+      if (isEditMode && existingProduction?.url && profile?.id !== "fluorescent") {
         const savedSig = savedContentSig();
         const curSig = currentContentSig();
         canReuseProduction = Boolean(savedSig && curSig && savedSig === curSig);
       }
 
-      let pngBlob: Blob | null = null;
+      let productionBlob: Blob | null = null;
       let exportWorkerBuffer: ArrayBuffer | null = null;
+      const productionIsPdf = profile?.id === "fluorescent";
       let designState: Awaited<ReturnType<typeof buildDesignStatePayload>>;
       if (canReuseProduction) {
         // Only the (small) design-state JSON needs rebuilding — no pixel work at all.
         designState = await buildDesignStatePayload();
       } else {
-        const [exp, ds] = await Promise.all([exportProductionPng(), buildDesignStatePayload()]);
-        pngBlob = exp.pngBlob;
-        exportWorkerBuffer = exp.exportWorkerBuffer;
+        if (productionIsPdf) {
+          const [pdf, ds] = await Promise.all([exportProductionPdf(), buildDesignStatePayload()]);
+          productionBlob = pdf;
+        } else {
+          const [exp, ds] = await Promise.all([exportProductionPng(), buildDesignStatePayload()]);
+          productionBlob = exp.pngBlob;
+          exportWorkerBuffer = exp.exportWorkerBuffer;
+        }
         designState = ds;
       }
       // Reset to 0 on reuse so the stall-timeout watchdog isn't fed a stale byte count.
-      lastAddToCartPngBytesRef.current = pngBlob ? pngBlob.size : 0;
+      lastAddToCartPngBytesRef.current = productionBlob ? productionBlob.size : 0;
 
       const selectedVariant = shopifyVariants?.find((v) => v.height != null && Math.abs(v.height - artboardHeight) < 0.01);
       const vid = selectedVariant?.id || initialVariantId || '';
@@ -334,7 +429,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       if (!vidDigits) throw new Error('No variant ID available');
       if (!shopDomain) throw new Error('Shop domain missing — open the builder from the storefront product page.');
 
-      const filename = 'gangsheet-' + Date.now() + '.png';
+      const filename = `gangsheet-${Date.now()}.${productionIsPdf ? "pdf" : "png"}`;
       const productionKey =
         isEditMode && existingProduction?.key ? String(existingProduction.key) : undefined;
       const uploadUrl = shellUploadUrlRef.current?.trim() || '';
@@ -357,7 +452,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         const uploadBody =
           exportBufferForUpload && exportBufferForUpload.byteLength > 0
             ? new Blob([exportBufferForUpload], { type: "image/png" })
-            : pngBlob;
+            : productionBlob;
         try {
           const uploaded = await uploadProductionToR2(
             uploadBody as Blob,
@@ -389,6 +484,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         dedupId: `${isEditMode ? "upd" : "atc"}-${vidDigits}-${Date.now()}`,
         designState,
         builderUploaded: Boolean(productionUrl),
+        productionFormat: productionIsPdf ? "pdf" : "png",
         ...(productionUrl
           ? {
               productionUrl,
@@ -405,11 +501,18 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       const pngByteLength = lastAddToCartPngBytesRef.current;
 
       if (!productionUrl) {
-        if (!pngBlob || !pngBlob.size) throw new Error("Empty design image");
-        const pngBuffer = await pngBlob.arrayBuffer();
-        (message as { pngBuffer?: ArrayBuffer }).pngBuffer = pngBuffer;
-        window.parent.postMessage(message, '*', [pngBuffer]);
-        refreshAddToCartStallTimeout(pngByteLength || pngBuffer.byteLength);
+        if (!productionBlob || !productionBlob.size) throw new Error("Empty design file");
+        const productionBuffer = await productionBlob.arrayBuffer();
+        const messageWithFile = message as { pngBuffer?: ArrayBuffer; pdfBuffer?: ArrayBuffer; productionMimeType?: string };
+        if (productionIsPdf) {
+          messageWithFile.pdfBuffer = productionBuffer;
+          messageWithFile.productionMimeType = "application/pdf";
+        } else {
+          messageWithFile.pngBuffer = productionBuffer;
+          messageWithFile.productionMimeType = "image/png";
+        }
+        window.parent.postMessage(message, '*', [productionBuffer]);
+        refreshAddToCartStallTimeout(pngByteLength || productionBuffer.byteLength);
       } else {
         window.parent.postMessage(message, '*');
         refreshAddToCartStallTimeout(canReuseProduction ? 0 : pngByteLength);
@@ -431,7 +534,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         addToCartStallTimeoutRef.current = null;
       }
     }
-  }, [artboardWidth, artboardHeight, quantity, shopifyVariants, initialVariantId, shopDomain, toast, refreshAddToCartStallTimeout, buildDesignStatePayload, isEditMode, initialDesignState, setIsAddingToCart, setIsUpdateFlow, setIsProcessing, setAddToCartProgressLabel, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef]);
+  }, [artboardWidth, artboardHeight, quantity, shopifyVariants, initialVariantId, shopDomain, toast, refreshAddToCartStallTimeout, buildDesignStatePayload, isEditMode, initialDesignState, setIsAddingToCart, setIsUpdateFlow, setIsProcessing, setAddToCartProgressLabel, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, profile, spotPreviewData]);
 
   return {
     ...bag,
