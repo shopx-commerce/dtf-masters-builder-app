@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ResizeSettings, ImageInfo } from "./image-editor";
-import { Download, Layers, FileCheck, Palette, Eye, EyeOff, ChevronDown, Info, ShoppingCart } from "lucide-react";
+import { Download, Layers, FileCheck, Palette, Eye, EyeOff, ChevronDown, Info, ShoppingCart, Sun, Wand2 } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
 import { formatLength } from "@/lib/format-length";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -56,6 +56,11 @@ interface ControlsSectionProps {
   addToCartLabel?: string;
   addingStatusLabel?: string;
   lockGangsheetSize?: boolean;
+  onRemoveWhiteBackground?: () => void;
+  wandDeleteActive?: boolean;
+  onWandDeleteToggle?: () => void;
+  wandTolerance?: number;
+  onWandToleranceChange?: (value: number) => void;
 }
 
 const DEFAULT_HEIGHTS: number[] = [];
@@ -86,6 +91,11 @@ export default function ControlsSection({
   addToCartLabel,
   addingStatusLabel,
   lockGangsheetSize = false,
+  onRemoveWhiteBackground,
+  wandDeleteActive = false,
+  onWandDeleteToggle,
+  wandTolerance = 30,
+  onWandToleranceChange,
 }: ControlsSectionProps) {
   const { t, lang } = useLanguage();
   const isMobile = useIsMobile();
@@ -381,6 +391,51 @@ export default function ControlsSection({
           )}
         </div>
       </div>
+
+      {imageInfo && (
+        <div className="rounded-lg border border-gray-200 bg-white p-2">
+          <div className="flex items-center gap-1.5">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onRemoveWhiteBackground}
+              className="flex-1 gap-1 border-amber-200 bg-amber-50 text-[11px] text-amber-700 hover:bg-amber-100"
+              title="Remove contiguous white or off-white background"
+            >
+              <Sun className="h-3.5 w-3.5" />
+              White BG
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onWandDeleteToggle}
+              className={`flex-1 gap-1 text-[11px] ${wandDeleteActive
+                ? "border-fuchsia-600 bg-fuchsia-600 text-white hover:bg-fuchsia-700"
+                : "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-600 hover:bg-fuchsia-100"}`}
+              title={wandDeleteActive ? "Magic Wand active — click a color to erase it" : "Erase a connected color from the selected design"}
+            >
+              <Wand2 className="h-3.5 w-3.5" />
+              {wandDeleteActive ? "Wand ON" : "Magic Wand"}
+            </Button>
+          </div>
+          {wandDeleteActive && (
+            <label className="mt-2 flex items-center gap-2 text-[10px] text-fuchsia-700">
+              <span className="font-medium">Tol</span>
+              <input
+                type="range"
+                min="1"
+                max="100"
+                value={wandTolerance}
+                onChange={(e) => onWandToleranceChange?.(Number(e.target.value))}
+                className="min-w-0 flex-1 accent-fuchsia-600"
+              />
+              <span className="w-6 text-right tabular-nums">{wandTolerance}</span>
+            </label>
+          )}
+        </div>
+      )}
 
       {enableFluorescent && imageInfo && fluorPanelContainer && createPortal(
         <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">

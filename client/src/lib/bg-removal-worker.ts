@@ -15,12 +15,26 @@ function shouldRemovePixel(data: Uint8ClampedArray, index: number, thresholdValu
   return minChannel >= thresholdValue;
 }
 
+function isBlackPixel(data: Uint8ClampedArray, index: number, thresholdValue: number): boolean {
+  const a = data[index + 3];
+  if (a < 128) return true;
+  return Math.max(data[index], data[index + 1], data[index + 2]) <= thresholdValue;
+}
+
+function shouldRemoveBlackPixel(data: Uint8ClampedArray, index: number, thresholdValue: number): boolean {
+  if (data[index + 3] < 128) return false;
+  return Math.max(data[index], data[index + 1], data[index + 2]) <= thresholdValue;
+}
+
 function floodFillFromEdges(
   data: Uint8ClampedArray,
   width: number,
   height: number,
-  thresholdValue: number
+  thresholdValue: number,
+  mode: 'white' | 'black' = 'white'
 ): Set<number> {
+  const isBackground = mode === 'black' ? isBlackPixel : isWhitePixel;
+  const shouldRemove = mode === 'black' ? shouldRemoveBlackPixel : shouldRemovePixel;
   const toRemove = new Set<number>();
   const visited = new Set<number>();
   const queue: number[] = [];
@@ -28,24 +42,24 @@ function floodFillFromEdges(
 
   for (let x = 0; x < width; x++) {
     const topIndex = getIndex(x, 0);
-    if (isWhitePixel(data, topIndex, thresholdValue) && !visited.has(topIndex)) {
+    if (isBackground(data, topIndex, thresholdValue) && !visited.has(topIndex)) {
       queue.push(topIndex);
       visited.add(topIndex);
     }
     const bottomIndex = getIndex(x, height - 1);
-    if (isWhitePixel(data, bottomIndex, thresholdValue) && !visited.has(bottomIndex)) {
+    if (isBackground(data, bottomIndex, thresholdValue) && !visited.has(bottomIndex)) {
       queue.push(bottomIndex);
       visited.add(bottomIndex);
     }
   }
   for (let y = 0; y < height; y++) {
     const leftIndex = getIndex(0, y);
-    if (isWhitePixel(data, leftIndex, thresholdValue) && !visited.has(leftIndex)) {
+    if (isBackground(data, leftIndex, thresholdValue) && !visited.has(leftIndex)) {
       queue.push(leftIndex);
       visited.add(leftIndex);
     }
     const rightIndex = getIndex(width - 1, y);
-    if (isWhitePixel(data, rightIndex, thresholdValue) && !visited.has(rightIndex)) {
+    if (isBackground(data, rightIndex, thresholdValue) && !visited.has(rightIndex)) {
       queue.push(rightIndex);
       visited.add(rightIndex);
     }
@@ -54,7 +68,7 @@ function floodFillFromEdges(
   let queueIndex = 0;
   while (queueIndex < queue.length) {
     const currentIndex = queue[queueIndex++];
-    if (shouldRemovePixel(data, currentIndex, thresholdValue)) {
+    if (shouldRemove(data, currentIndex, thresholdValue)) {
       toRemove.add(currentIndex);
     }
     const pixelPos = currentIndex / 4;
@@ -71,7 +85,7 @@ function floodFillFromEdges(
       const neighborIndex = getIndex(nx, ny);
       if (visited.has(neighborIndex)) continue;
       visited.add(neighborIndex);
-      if (isWhitePixel(data, neighborIndex, thresholdValue)) {
+      if (isBackground(data, neighborIndex, thresholdValue)) {
         queue.push(neighborIndex);
       }
     }
@@ -79,9 +93,9 @@ function floodFillFromEdges(
   return toRemove;
 }
 
-function processRemoval(data: Uint8ClampedArray, width: number, height: number, threshold: number): void {
-  const thresholdValue = (threshold / 100) * 255;
-  const pixelsToRemove = floodFillFromEdges(data, width, height, thresholdValue);
+function processRemoval(data: Uint8ClampedArray, width: number, height: number, threshold: number, mode: 'white' | 'black' = 'white'): void {
+  const thresholdValue = mode === 'black' ? threshold : (threshold / 100) * 255;
+  const pixelsToRemove = floodFillFromEdges(data, width, height, thresholdValue, mode);
 
   const pixelArray = Array.from(pixelsToRemove);
   for (let i = 0; i < pixelArray.length; i++) {
@@ -154,15 +168,16 @@ function processRemoval(data: Uint8ClampedArray, width: number, height: number, 
 }
 
 self.onmessage = (e: MessageEvent) => {
-  const { imageData, width, height, threshold } = e.data as {
+  const { imageData, width, height, threshold, mode } = e.data as {
     imageData: Uint8ClampedArray;
     width: number;
     height: number;
     threshold: number;
+    mode?: 'white' | 'black';
   };
 
   try {
-    processRemoval(imageData, width, height, threshold);
+    processRemoval(imageData, width, height, threshold, mode ?? 'white');
     (self as unknown as Worker).postMessage(
       { type: 'result', imageData, width, height },
       [imageData.buffer] as any

@@ -35,6 +35,8 @@ export default function ImageEditorView() {
     handleDeleteDesign, handleDeleteGroup, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleAlignCorner,
     handleAutoArrange, handleArtboardResize, handleExpandArtboard, handleThresholdAlpha,
     handleThresholdAlphaAll, handleCropDesign, handleCropApply, handleDownload, handleAddToCart,
+    handleRemoveWhiteBackground, handleWandDelete, wandDeleteModeActive, setWandDeleteModeActive,
+    wandTolerance, setWandTolerance,
     handleCanvasContextMenu, handleInteractionEnd, handleUndo, handleRedo, canUndo, canRedo,
     handleAutoArrangeRef, actionToolbarProps, getLayerThumbnail, setDesignGap, setDuplicateCount,
     parseDuplicateCount, handleDuplicateCountKeyDown, clampDuplicateCount, setArtboardWidth,
@@ -179,6 +181,14 @@ export default function ImageEditorView() {
             addToCartLabel={isEditMode ? "Update Design" : undefined}
             addingStatusLabel={isEditMode ? "Updating" : undefined}
             lockGangsheetSize={isEditMode}
+            onRemoveWhiteBackground={handleRemoveWhiteBackground}
+            wandDeleteActive={wandDeleteModeActive}
+            onWandDeleteToggle={() => {
+              setWandDeleteModeActive((active) => !active);
+              if (!wandDeleteModeActive) setMobilePanel("preview");
+            }}
+            wandTolerance={wandTolerance}
+            onWandToleranceChange={setWandTolerance}
           />
 
           {/* Fluorescent panel portal target */}
@@ -388,6 +398,9 @@ export default function ImageEditorView() {
                   selectionZoomActive={selectionZoomActive}
                   onSelectionZoomChange={setSelectionZoomActive}
                   bottomToolbarContainer={mobileToolbarContainer}
+                   wandDeleteActive={wandDeleteModeActive}
+                   onWandDeleteTap={handleWandDelete}
+                   onWandDeactivate={() => setWandDeleteModeActive(false)}
                 />
               </div>
             </div>
@@ -535,6 +548,9 @@ export default function ImageEditorView() {
               spotPreviewData={profile.enableFluorescent ? spotPreviewData : undefined}
               selectionZoomActive={selectionZoomActive}
               onSelectionZoomChange={setSelectionZoomActive}
+              wandDeleteActive={wandDeleteModeActive}
+              onWandDeleteTap={handleWandDelete}
+              onWandDeactivate={() => setWandDeleteModeActive(false)}
             />
           </div>
         )}
