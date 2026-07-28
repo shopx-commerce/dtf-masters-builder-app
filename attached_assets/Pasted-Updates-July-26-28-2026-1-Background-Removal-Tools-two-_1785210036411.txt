@@ -1,0 +1,51 @@
+Updates — July 26–28, 2026
+1. Background Removal Tools (two new toolbar buttons)
+Files: client/src/components/image-editor.tsx, client/src/lib/background-removal.ts, client/src/lib/bg-removal-worker.ts
+
+Added "White BG" button — edge flood-fill that removes white/off-white backgrounds from the selected design. Calls removeBackgroundFromImage at threshold 75 (lowered from 95 to handle cream/off-white).
+Added "Magic Wand Delete" button — click/tap any color on a design to flood-erase all connected pixels of that color. Inline flood-fill using max-channel distance; tolerance slider maps 1–100 → diff 1–255, default 30.
+background-removal.ts refactored to private _removeBackground(image, threshold, mode) accepting 'white' | 'black' mode.
+bg-removal-worker.ts updated with mode param; floodFillFromEdges branches on mode.
+2. Magic Wand UI & Color Scheme
+File: client/src/components/image-editor.tsx
+
+MagicWandIcon — custom module-level SVG component (3 paths, viewBox="0 0 16 16").
+Button color: magenta/fuchsia (bg-fuchsia-600) when active; fuchsia text when inactive.
+Mobile toolbar (Row 1): Both "White BG" and "Magic Wand" buttons added — no tolerance slider on mobile.
+Desktop toolbar: Both buttons + tolerance range slider (accent-fuchsia-600, labeled "Tol", value shown).
+Cursor: crosshair when wand mode is active (same as fluorescent channel picker).
+3. Magic Wand Deactivation — All Paths
+Files: client/src/components/preview-section.tsx, client/src/components/image-editor.tsx
+
+Added onWandDeactivate prop to PreviewSection. Called setWandDeleteModeActive(false) from every zoom/navigation trigger:
+
+Trigger	Location
+Fluorescent channel activates	onActiveChannelChange in image-editor
+Selection zoom mode toggles on	onSelectionZoomChange in image-editor
+Ctrl/Cmd + scroll wheel zoom	onWheel handler in preview-section
+Two-finger pinch zoom starts	handleTouchStart in preview-section
+Zoom In button clicked	button onClick in preview-section
+Zoom Out button clicked	button onClick in preview-section
+Mobile "Reset/Fit" button clicked	button onClick in preview-section
+Mobile "Controls" tab button clicked	onClick in image-editor
+Finger drifts after wand tap	handleTouchMove early-returns when wand active
+4. Fluorescent Panel Restructure
+File: client/src/components/controls-section.tsx
+
+Outer fluorescent panel header is now non-interactive — body always visible (removed the showSpotColors toggle state entirely).
+Channel picker buttons (FY / FM / FG / FO) and "Auto Color it for me!" button always shown.
+"Detected Colors (Pick by Color)" list moved inside its own collapsible dropdown (showDetectedColors state, defaults false).
+5. Auto-Assign Toggle (Apply / Undo)
+File: client/src/components/controls-section.tsx
+
+preAutoAssignSnapshot ref stores the color list before auto-assign runs.
+autoAssignActive boolean state drives button label.
+First click: applies auto-assign + saves snapshot → button shows "Undo Auto Color".
+Second click: restores the saved snapshot → button returns to "Auto Color it for me!".
+Both reset when the design changes.
+clearActiveChannelRef prop populated via useEffect (not during render) to avoid React render-phase update warning.
+Added Undo2 to lucide-react import.
+6. Mutual Exclusion Rules
+Wand delete ↔ fluorescent channel picker deactivate each other.
+Wand delete deactivates when pan mode activates (zoom > 1 + hand tool).
+Pan mode deactivates when a fluorescent channel activates.
