@@ -416,7 +416,7 @@ export default function ControlsSection({
                 : "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-600 hover:bg-fuchsia-100"}`}
               title={wandDeleteActive ? "Magic Wand active — click a color to erase it" : "Erase a connected color from the selected design"}
             >
-              <Wand2 className="h-3.5 w-3.5" />
+              <Wand2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               {wandDeleteActive ? "Wand ON" : "Magic Wand"}
             </Button>
           </div>
