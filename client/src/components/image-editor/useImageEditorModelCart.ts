@@ -449,7 +449,11 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         uploadedProductionKey = existingProduction.key ? String(existingProduction.key) : uploadedProductionKey;
         setAddToCartProgressLabel(undefined);
       } else if (uploadInBuilder) {
-        const uploadOpts = { objectKey: productionKey, useShellRelay: canUseShellRelay() };
+        const uploadOpts = {
+          objectKey: productionKey,
+          useShellRelay: canUseShellRelay(),
+          productionFormat: productionIsPdf ? "pdf" as const : "png" as const,
+        };
         const uploadBody =
           exportBufferForUpload && exportBufferForUpload.byteLength > 0
             ? new Blob([exportBufferForUpload], { type: "image/png" })

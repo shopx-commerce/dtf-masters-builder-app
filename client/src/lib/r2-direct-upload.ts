@@ -22,6 +22,8 @@ export type R2UploadResult = {
 export type R2UploadOptions = {
   objectKey?: string | null;
   onProgress?: (message: string) => void;
+  contentType?: string;
+  productionFormat?: "png" | "pdf";
   /** When true, prepare/complete JSON goes through parent proxy shell (same-origin), not cross-origin fetch. */
   useShellRelay?: boolean;
 };
@@ -80,7 +82,7 @@ function waitForShellMessage<T>(
 async function prepareViaShellRelay(
   filename: string,
   totalBytes: number,
-  options: Pick<R2UploadOptions, "objectKey"> = {},
+  options: Pick<R2UploadOptions, "objectKey" | "contentType" | "productionFormat"> = {},
 ): Promise<R2PrepareMeta> {
   const requestId = newRelayId("prep");
   const wait = waitForShellMessage(requestId, "dtf-builder-r2-prepared", SHELL_RELAY_TIMEOUT_MS, (data) => {
@@ -94,6 +96,8 @@ async function prepareViaShellRelay(
       requestId,
       filename,
       totalBytes,
+      ...(options.contentType ? { contentType: options.contentType } : {}),
+      ...(options.productionFormat ? { productionFormat: options.productionFormat } : {}),
       ...(options.objectKey ? { objectKey: options.objectKey } : {}),
     },
     "*",
@@ -223,7 +227,7 @@ export async function prepareR2DirectUpload(
   uploadUrl: string,
   filename: string,
   totalBytes: number,
-  options: Pick<R2UploadOptions, "objectKey" | "useShellRelay"> = {},
+  options: Pick<R2UploadOptions, "objectKey" | "useShellRelay" | "contentType" | "productionFormat"> = {},
 ): Promise<R2PrepareMeta> {
   if (shouldUseShellRelay(options)) {
     return prepareViaShellRelay(filename, totalBytes, options);
@@ -235,6 +239,8 @@ export async function prepareR2DirectUpload(
       step: "r2-direct-prepare",
       filename,
       totalBytes,
+      ...(options.contentType ? { contentType: options.contentType } : {}),
+      ...(options.productionFormat ? { productionFormat: options.productionFormat } : {}),
       ...(options.objectKey ? { objectKey: options.objectKey } : {}),
     }),
   });
@@ -317,8 +323,14 @@ export async function uploadProductionToR2(
   const total = bodySize(body);
   if (!total) throw new Error("Empty design image");
 
+  const contentType = body instanceof Blob && body.type ? body.type : undefined;
+  const expectedFormat = options.productionFormat || (contentType === "application/pdf" ? "pdf" : "png");
   onProgress?.("Preparing cloud upload...");
-  const meta = await prepareR2DirectUpload(uploadUrl, filename, total, options);
+  const meta = await prepareR2DirectUpload(uploadUrl, filename, total, {
+    ...options,
+    contentType,
+    productionFormat: expectedFormat,
+  });
 
   const uploadedParts = await uploadPreparedPartsToR2(body, meta, onProgress);
 
@@ -333,6 +345,17 @@ export async function uploadProductionToR2(
   );
   const prod = String(done.productionUrl || done.url || "");
   if (!prod) throw new Error("No production URL");
+  const returnedPath = (() => {
+    try {
+      return new URL(prod, window.location.href).pathname.toLowerCase();
+    } catch {
+      return prod.toLowerCase();
+    }
+  })();
+  const expectedExtension = expectedFormat === "pdf" ? ".pdf" : ".png";
+  if (!returnedPath.endsWith(expectedExtension)) {
+    throw new Error(`Upload returned a non-${expectedFormat.toUpperCase()} production URL`);
+  }
   return {
     productionUrl: prod,
     key: done.key ? String(done.key) : null,
