@@ -155,6 +155,7 @@ export default function ControlsSection({
   const [activeChannel, setActiveChannel] = useState<'spotFluorY' | 'spotFluorM' | 'spotFluorG' | 'spotFluorOrange' | null>(null);
   const [autoAssignActive, setAutoAssignActive] = useState(false);
   const preAutoAssignRef = useRef<ExtractedColor[] | null>(null);
+  const autoAssignSnapshotsRef = useRef<Map<string, ExtractedColor[]>>(new Map());
   const pixelMapRef = useRef<{ pixelMap: Int16Array; width: number; height: number } | null>(null);
   const [spotPreviewEnabled, setSpotPreviewEnabled] = useState(true);
   const spotFluorYName = "FY";
@@ -175,13 +176,16 @@ export default function ControlsSection({
 
     let cancelled = false;
     pixelMapRef.current = null;
-    preAutoAssignRef.current = null;
-    setAutoAssignActive(false);
 
     if (prevDesignIdRef.current && extractedColors.length > 0) {
       spotSelectionsRef.current.set(prevDesignIdRef.current, extractedColors);
     }
     prevDesignIdRef.current = selectedDesignId;
+    const savedAutoSnapshot = selectedDesignId
+      ? autoAssignSnapshotsRef.current.get(selectedDesignId) ?? null
+      : null;
+    preAutoAssignRef.current = savedAutoSnapshot;
+    setAutoAssignActive(Boolean(savedAutoSnapshot));
 
     if (imageInfo?.image) {
       if (selectedDesignId && spotSelectionsRef.current.has(selectedDesignId)) {
@@ -345,11 +349,16 @@ export default function ControlsSection({
       preAutoAssignRef.current = null;
       setAutoAssignActive(false);
       setExtractedColors(restored);
-      if (selectedDesignId) spotSelectionsRef.current.set(selectedDesignId, restored);
+      if (selectedDesignId) {
+        autoAssignSnapshotsRef.current.delete(selectedDesignId);
+        spotSelectionsRef.current.set(selectedDesignId, restored);
+      }
       return;
     }
     setExtractedColors(prev => {
-      preAutoAssignRef.current = prev.map(color => ({ ...color, regions: color.regions?.map(region => ({ ...region })) }));
+      const snapshot = prev.map(color => ({ ...color, regions: color.regions?.map(region => ({ ...region })) }));
+      preAutoAssignRef.current = snapshot;
+      if (selectedDesignId) autoAssignSnapshotsRef.current.set(selectedDesignId, snapshot);
       const updated = prev.map(color => {
         const field = autoAssignChannel(color.rgb);
         const flags = {
