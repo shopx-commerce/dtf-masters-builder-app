@@ -111,7 +111,14 @@ function useImageEditorModel(props: ImageEditorProps) {
         bag.setSelectedDesignId(row.designs.find(d => !idsToRemove.has(d.id))?.id ?? null);
       }
     }
-    setTimeout(() => bag.handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true }), 0);
+    // Wait for the copy list and selection state to commit before arranging.
+    // Auto-Arrange will reuse the configured height-expansion loop if the new
+    // copies do not fit on the current gangsheet.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        bag.handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true });
+      });
+    });
   };
 
   const handleSetRotation = (degrees: number) => {
