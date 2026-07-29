@@ -70,7 +70,7 @@ export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) 
     saveSnapshot,
   } = bag;
 
-  const [halftoneStrength, setHalftoneStrength] = useState<HalftoneStrength>('light');
+  const [halftoneStrength, setHalftoneStrength] = useState<HalftoneStrength>('balanced');
   const [halftoneMenuOpen, setHalftoneMenuOpen] = useState(false);
   const [halftoneTopColors, setHalftoneTopColors] = useState<
     Array<{ r: number; g: number; b: number; hex: string; name?: string }>
