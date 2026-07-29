@@ -419,59 +419,64 @@ export default function ImageEditorView() {
                           {formatDimensions(first.widthInches * first.transform.s, first.heightInches * first.transform.s, lang)}
                         </p>
                       </div>
-                      <div className="col-start-2 flex min-w-0 items-center gap-1">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleRemoveOneCopy(row.baseName, row.sizeKey); }}
-                          disabled={count <= 1}
-                          className={`w-4 h-4 rounded-full flex items-center justify-center transition-colors ${count > 1 ? 'bg-gray-200 hover:bg-red-100 text-gray-600 hover:text-red-600' : 'bg-gray-100 text-gray-300 cursor-not-allowed'}`}
-                          title={t("editor.removeOne")}
-                        >
-                          <Minus className="w-2.5 h-2.5" strokeWidth={3} />
-                        </button>
-                        {editingCountKey === `${row.baseName}::${row.sizeKey}` ? (
+                      <div className="col-start-2 flex min-w-0 items-center gap-1.5">
+                        <div className="flex items-center gap-px shrink-0" onClick={(e) => e.stopPropagation()}>
                           <input
-                            type="number"
+                            type="text"
+                            inputMode="numeric"
                             min={1}
                             max={200}
-                            autoFocus
-                            className="h-4 w-8 rounded border border-cyan-400 bg-white text-center text-[10px] font-semibold tabular-nums text-cyan-600 outline-none"
-                            value={editingCountValue}
-                            onChange={(e) => setEditingCountValue(e.target.value)}
-                            onClick={(e) => e.stopPropagation()}
+                            readOnly={editingCountKey !== `${row.baseName}::${row.sizeKey}`}
+                            autoFocus={editingCountKey === `${row.baseName}::${row.sizeKey}`}
+                            className={`h-6 w-14 rounded border-2 bg-white text-center text-[11px] font-semibold tabular-nums text-gray-800 outline-none shadow-sm transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${editingCountKey === `${row.baseName}::${row.sizeKey}` ? "border-cyan-500" : "cursor-pointer border-gray-300 hover:border-cyan-400 hover:bg-cyan-50"}`}
+                            value={editingCountKey === `${row.baseName}::${row.sizeKey}` ? editingCountValue : String(count)}
+                            onChange={(e) => setEditingCountValue(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                            onFocus={() => {
+                              if (editingCountKey !== `${row.baseName}::${row.sizeKey}`) {
+                                setEditingCountKey(`${row.baseName}::${row.sizeKey}`);
+                                setEditingCountValue(String(count));
+                              }
+                            }}
                             onBlur={() => {
-                              handleSetGroupCount(row, parseInt(editingCountValue, 10));
+                              handleSetGroupCount(row, parseInt(editingCountValue || String(count), 10));
                               setEditingCountKey(null);
                             }}
                             onKeyDown={(e) => {
                               if (e.key === "Enter") {
-                                handleSetGroupCount(row, parseInt(editingCountValue, 10));
+                                handleSetGroupCount(row, parseInt(editingCountValue || String(count), 10));
                                 setEditingCountKey(null);
                               } else if (e.key === "Escape") {
                                 setEditingCountKey(null);
                               }
                               e.stopPropagation();
                             }}
+                            title="Click to set exact copy count"
                           />
-                        ) : (
-                          <span
-                            className="min-w-[18px] cursor-pointer text-center text-[10px] font-semibold tabular-nums text-cyan-400 hover:text-cyan-600"
-                            title="Click to set exact count"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditingCountKey(`${row.baseName}::${row.sizeKey}`);
-                              setEditingCountValue(String(count));
-                            }}
-                          >
-                            x{count}
-                          </span>
-                        )}
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleDuplicateById(first.id); }}
-                          className="w-4 h-4 rounded-full bg-gray-200 hover:bg-cyan-100 text-gray-600 hover:text-cyan-600 flex items-center justify-center transition-colors"
-                          title={t("editor.addOneMore")}
-                        >
-                          <Plus className="w-2.5 h-2.5" strokeWidth={3} />
-                        </button>
+                          <div className="flex flex-col gap-px">
+                            <button
+                              type="button"
+                              tabIndex={-1}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => handleSetGroupCount(row, count + 1)}
+                              disabled={count >= 200}
+                              className="flex h-[10px] w-3.5 items-center justify-center rounded-t border border-gray-300 bg-gray-100 text-gray-400 transition-colors hover:bg-cyan-100 hover:text-cyan-600 disabled:opacity-30"
+                              title="Increase copies"
+                            >
+                              <ChevronUp className="h-2.5 w-2.5" strokeWidth={3} />
+                            </button>
+                            <button
+                              type="button"
+                              tabIndex={-1}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => handleSetGroupCount(row, count - 1)}
+                              disabled={count <= 1}
+                              className="flex h-[10px] w-3.5 items-center justify-center rounded-b border border-t-0 border-gray-300 bg-gray-100 text-gray-400 transition-colors hover:bg-cyan-100 hover:text-cyan-600 disabled:opacity-30"
+                              title="Decrease copies"
+                            >
+                              <ChevronDown className="h-2.5 w-2.5" strokeWidth={3} />
+                            </button>
+                          </div>
+                        </div>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -488,7 +493,7 @@ export default function ImageEditorView() {
                             }
                             setEditingCountKey(null);
                           }}
-                          className="inline-flex h-7 min-w-0 flex-1 items-center justify-center gap-1 rounded-md border border-pink-600 bg-pink-500 px-1.5 text-[9px] font-bold text-black shadow-sm shadow-pink-500/20 transition-colors hover:bg-pink-600"
+                          className="inline-flex h-7 min-w-0 flex-1 items-center justify-center gap-1 rounded-md border border-fuchsia-400 bg-fuchsia-100 px-1.5 text-[9px] font-bold text-fuchsia-800 shadow-sm shadow-fuchsia-500/20 transition-colors hover:bg-fuchsia-200"
                           title="Duplicate & Arrange"
                         >
                           <Copy className="h-3 w-3" />
