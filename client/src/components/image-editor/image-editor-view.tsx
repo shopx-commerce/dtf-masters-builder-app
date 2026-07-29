@@ -340,7 +340,7 @@ export default function ImageEditorView() {
                     return (
                     <div
                       key={`${row.baseName}::${row.sizeKey}`}
-                      className={`flex flex-wrap items-center gap-2 px-2.5 py-2 cursor-pointer transition-colors ${isSelected ? 'bg-cyan-50 border-l-2 border-cyan-400' : 'hover:bg-gray-100/70 border-l-2 border-transparent'}`}
+                      className={`relative grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1 px-2.5 py-2.5 cursor-pointer transition-colors ${isSelected ? 'bg-cyan-50 border-l-2 border-cyan-400' : 'hover:bg-gray-100/70 border-l-2 border-transparent'}`}
                       onClick={(e) => {
                         if (e.ctrlKey || e.metaKey) {
                           setSelectedDesignIds(prev => {
@@ -360,7 +360,7 @@ export default function ImageEditorView() {
                         }
                       }}
                     >
-                      <div className="w-7 h-7 rounded bg-gray-100 border border-gray-300 flex-shrink-0 overflow-hidden flex items-center justify-center">
+                      <div className="row-span-2 h-9 w-9 rounded bg-gray-100 border border-gray-300 flex-shrink-0 overflow-hidden flex items-center justify-center">
                         <img
                           src={getLayerThumbnail(first)}
                           alt=""
@@ -369,7 +369,7 @@ export default function ImageEditorView() {
                           style={{ transform: `${first.transform.flipX ? 'scaleX(-1)' : ''} ${first.transform.flipY ? 'scaleY(-1)' : ''}` }}
                         />
                       </div>
-                      <div className="min-w-0 flex-1 overflow-hidden">
+                      <div className="min-w-0 overflow-hidden pr-7">
                         {editingLayerName === `${row.baseName}::${row.sizeKey}` ? (
                           <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                             <input
@@ -419,7 +419,7 @@ export default function ImageEditorView() {
                           {formatDimensions(first.widthInches * first.transform.s, first.heightInches * first.transform.s, lang)}
                         </p>
                       </div>
-                      <div className="flex items-center gap-1 flex-shrink-0">
+                      <div className="col-start-2 flex min-w-0 items-center gap-1">
                         <button
                           onClick={(e) => { e.stopPropagation(); handleRemoveOneCopy(row.baseName, row.sizeKey); }}
                           disabled={count <= 1}
@@ -488,7 +488,7 @@ export default function ImageEditorView() {
                             }
                             setEditingCountKey(null);
                           }}
-                          className="inline-flex h-6 items-center gap-1 rounded-md border border-pink-600 bg-pink-500 px-1.5 text-[9px] font-bold text-white shadow-sm shadow-pink-500/20 transition-colors hover:bg-pink-600"
+                          className="inline-flex h-7 min-w-0 flex-1 items-center justify-center gap-1 rounded-md border border-pink-600 bg-pink-500 px-1.5 text-[9px] font-bold text-black shadow-sm shadow-pink-500/20 transition-colors hover:bg-pink-600"
                           title="Duplicate & Arrange"
                         >
                           <Copy className="h-3 w-3" />
@@ -497,7 +497,7 @@ export default function ImageEditorView() {
                       </div>
                       <button
                         onClick={(e) => { e.stopPropagation(); handleDeleteGroup(row.designs.map(d => d.id)); }}
-                        className="p-0.5 rounded hover:bg-gray-200 text-red-500 hover:text-red-600 transition-colors flex-shrink-0"
+                        className="absolute right-2.5 top-2.5 p-0.5 rounded hover:bg-gray-200 text-red-500 hover:text-red-600 transition-colors flex-shrink-0"
                       >
                         <Trash2 className="w-3 h-3" />
                       </button>
@@ -726,7 +726,7 @@ export default function ImageEditorView() {
                   disabled={designs.length < 2 && selectedDesignIds.size < 2}
                   className={`mx-auto flex min-h-[36px] items-center justify-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
                     designs.length >= 2 || selectedDesignIds.size >= 2
-                      ? "border border-pink-600 bg-pink-500 text-white shadow-md shadow-pink-500/25 hover:bg-pink-600"
+                      ? "border border-pink-600 bg-pink-500 text-black shadow-md shadow-pink-500/25 hover:bg-pink-600"
                       : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"
                   }`}
                   title={selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll")}
