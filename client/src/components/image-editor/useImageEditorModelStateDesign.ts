@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from "react";
 import { flushSync } from "react-dom";
 import { useToast } from "@/hooks/use-toast";
 import { useHistory, type HistorySnapshot } from "@/hooks/use-history";
@@ -105,6 +105,12 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   }, [initialWidth, initialHeight, designs.length]);
   const [selectedDesignId, setSelectedDesignId] = useState<string | null>(null);
   const [selectedDesignIds, setSelectedDesignIds] = useState<Set<string>>(new Set());
+  const lastActiveDesignIdRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (selectedDesignId !== null) {
+      lastActiveDesignIdRef.current = selectedDesignId;
+    }
+  }, [selectedDesignId]);
   const [mobilePanel, setMobilePanel] = useState<"controls" | "preview">("controls");
   const [showDesignInfo, setShowDesignInfo] = useState(false);
   const [selectionZoomActive, setSelectionZoomActive] = useState(false);
@@ -384,6 +390,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   }, [activeImageInfo, onDesignUploaded]);
 
   const handleSelectDesign = useCallback((id: string | null) => {
+    if (id) lastActiveDesignIdRef.current = id;
     flushSync(() => {
       setSelectedDesignId(id);
       setSelectedDesignIds(id ? new Set([id]) : new Set());
@@ -634,10 +641,11 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   }, [selectedDesignIds, artboardWidth, artboardHeight]);
 
   const handleEffectiveSizeChange = useCallback((axis: 'width' | 'height', value: number) => {
-    if ((!selectedDesignId && selectedDesignIds.size === 0) || value <= 0) return;
+    const targetId = selectedDesignId ?? lastActiveDesignIdRef.current;
+    if ((!targetId && selectedDesignIds.size === 0) || value <= 0) return;
     const ids = selectedDesignIds.size > 0
       ? selectedDesignIds
-      : new Set([selectedDesignId!]);
+      : new Set([targetId!]);
     const targets = designs.filter(d => ids.has(d.id));
     if (targets.length === 0) return;
     saveSnapshot();
@@ -661,7 +669,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       next.transform = { ...next.transform, nx: clamped.nx, ny: clamped.ny };
       return next;
     }));
-    const active = targets.find(d => d.id === selectedDesignId);
+    const active = targets.find(d => d.id === targetId);
     if (active) {
       if (proportionalLock) {
         setDesignTransform(prev => ({ ...prev, s: axis === 'width' ? value / active.widthInches : value / active.heightInches }));

@@ -1675,6 +1675,12 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
     const handleMouseDown = useCallback((e: React.MouseEvent) => {
       e.preventDefault();
+      // Canvas mousedown prevents the browser's normal focus transition, so
+      // explicitly blur active form controls before selection changes.
+      const activeEl = document.activeElement;
+      if (activeEl instanceof HTMLInputElement || activeEl instanceof HTMLTextAreaElement) {
+        activeEl.blur();
+      }
       // Ensure keyboard scope is active on mousedown (fixes first-upload case where mouseenter never fired)
       isKeyboardScopeActiveRef.current = true;
       altKeyRef.current = e.altKey;
