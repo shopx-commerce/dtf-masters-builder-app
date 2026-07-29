@@ -617,20 +617,17 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
         groupMinY = Math.min(groupMinY, centerY + bounds.minY);
         groupMaxY = Math.max(groupMaxY, centerY + bounds.maxY);
       }
-      // Apply one shared translation to the rotated group. Per-design clamping
-      // would change the relative spacing and can make the designs overlap.
-      const groupShiftX =
-        groupMinX < 0
-          ? -groupMinX
-          : groupMaxX > artboardWidth
-            ? artboardWidth - groupMaxX
-            : 0;
-      const groupShiftY =
-        groupMinY < 0
-          ? -groupMinY
-          : groupMaxY > artboardHeight
-            ? artboardHeight - groupMaxY
-            : 0;
+      // Rotation is bounded as one group. Do not shift or independently clamp
+      // designs at the edge: reject the invalid angle and keep the last valid
+      // group position/rotation intact.
+      if (
+        groupMinX < 0 ||
+        groupMaxX > artboardWidth ||
+        groupMinY < 0 ||
+        groupMaxY > artboardHeight
+      ) {
+        return prev;
+      }
 
       return prev.map(d => {
         if (!selectedDesignIds.has(d.id)) return d;
@@ -641,8 +638,8 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
           transform: {
             ...d.transform,
             rotation: Math.round(u.rotation),
-            nx: u.nx + groupShiftX / artboardWidth,
-            ny: u.ny + groupShiftY / artboardHeight,
+            nx: u.nx,
+            ny: u.ny,
           },
         };
       });

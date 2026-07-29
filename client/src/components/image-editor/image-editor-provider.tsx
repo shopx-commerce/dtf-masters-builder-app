@@ -62,11 +62,12 @@ function rotateDesignGroup(
     nextMaxY = Math.max(nextMaxY, cy + bounds.maxY);
   }
 
-  const shiftX = nextMinX < 0 ? -nextMinX : nextMaxX > artboardWidth ? artboardWidth - nextMaxX : 0;
-  const shiftY = nextMinY < 0 ? -nextMinY : nextMaxY > artboardHeight ? artboardHeight - nextMaxY : 0;
+  if (nextMinX < 0 || nextMaxX > artboardWidth || nextMinY < 0 || nextMaxY > artboardHeight) {
+    return null;
+  }
   return new Map(candidates.map(({ d, nx, ny, rotation }) => [
     d.id,
-    { nx: nx + shiftX / artboardWidth, ny: ny + shiftY / artboardHeight, rotation },
+    { nx, ny, rotation },
   ]));
 }
 
@@ -125,6 +126,7 @@ function useImageEditorModel(props: ImageEditorProps) {
         const active = prev.find(d => d.id === bag.selectedDesignId);
         const delta = active ? rotation - active.transform.rotation : 0;
         const rotated = rotateDesignGroup(prev, ids, delta, bag.artboardWidth, bag.artboardHeight);
+        if (!rotated) return prev;
         return prev.map(d => {
           const next = rotated.get(d.id);
           return next ? { ...d, transform: { ...d.transform, ...next } } : d;

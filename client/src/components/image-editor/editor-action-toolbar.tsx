@@ -547,22 +547,22 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
             <button
               onClick={handleRotate90}
               disabled={!selectedDesignId}
-              className="w-8 h-8 lg:w-7 lg:h-7 rounded border border-gray-300 bg-white hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center shadow-sm"
+              className="w-10 h-10 lg:w-9 lg:h-9 rounded-lg border-2 border-black bg-black text-white hover:bg-white hover:text-black transition-colors disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center shadow-sm"
               title={t("editor.rotate")}
             >
               <RotateCw className="w-4 h-4" />
             </button>
             {selectedDesignId && (
-              <div className="flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-1 py-0.5">
-                <button onClick={() => handleAlignAxis("vertical")} className="flex h-7 w-7 items-center justify-center rounded text-gray-600 hover:bg-white hover:text-cyan-600" title="Center vertically">
-                  <AlignCenterVertical className="h-4 w-4" />
+              <div className="flex items-center gap-1.5 rounded-xl border-2 border-black bg-white px-1.5 py-1 shadow-sm">
+                <button onClick={() => handleAlignAxis("vertical")} className="flex h-9 w-9 items-center justify-center rounded-lg border border-black bg-black text-white hover:bg-white hover:text-black" title="Center vertically">
+                  <AlignCenterVertical className="h-5 w-5" />
                 </button>
-                <button onClick={() => handleAlignAxis("horizontal")} className="flex h-7 w-7 items-center justify-center rounded text-gray-600 hover:bg-white hover:text-cyan-600" title="Center horizontally">
-                  <AlignCenterHorizontal className="h-4 w-4" />
+                <button onClick={() => handleAlignAxis("horizontal")} className="flex h-9 w-9 items-center justify-center rounded-lg border border-black bg-black text-white hover:bg-white hover:text-black" title="Center horizontally">
+                  <AlignCenterHorizontal className="h-5 w-5" />
                 </button>
-                <span className="min-w-[38px] text-center text-[12px] font-semibold tabular-nums text-gray-700">{Math.round(activeDesignTransform.rotation || 0)}°</span>
+                <span className="min-w-[48px] rounded-lg border-2 border-black bg-white px-1.5 py-1 text-center text-[16px] font-bold tabular-nums text-black">{Math.round(activeDesignTransform.rotation || 0)}°</span>
                 {[0, 90, 180, 270].map(deg => (
-                  <button key={deg} onClick={() => handleSetRotation(deg)} className="flex h-8 min-w-8 items-center justify-center rounded px-1 text-[11px] font-semibold text-gray-700 hover:bg-white hover:text-cyan-600">
+                  <button key={deg} onClick={() => handleSetRotation(deg)} className="flex h-9 min-w-10 items-center justify-center rounded-lg border border-black bg-white px-1.5 text-[13px] font-bold tabular-nums text-black hover:bg-black hover:text-white">
                     {deg}°
                   </button>
                 ))}
@@ -572,7 +572,7 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
               <button
                 onClick={() => handleAlignCorner('tl')}
                 disabled={!selectedDesignId}
-                className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
+                className="p-2 lg:p-2 rounded-lg border border-black bg-white hover:bg-black hover:text-white text-black transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] lg:min-w-[42px] lg:min-h-[42px] flex items-center justify-center"
                 title={t("editor.alignTL")}
               >
                 <ArrowUpLeft className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
@@ -580,7 +580,7 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
               <button
                 onClick={() => handleAlignCorner('tr')}
                 disabled={!selectedDesignId}
-                className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
+                className="p-2 lg:p-2 rounded-lg border border-black bg-white hover:bg-black hover:text-white text-black transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] lg:min-w-[42px] lg:min-h-[42px] flex items-center justify-center"
                 title={t("editor.alignTR")}
               >
                 <ArrowUpRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
@@ -588,7 +588,7 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
               <button
                 onClick={() => handleAlignCorner('bl')}
                 disabled={!selectedDesignId}
-                className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
+                className="p-2 lg:p-2 rounded-lg border border-black bg-white hover:bg-black hover:text-white text-black transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] lg:min-w-[42px] lg:min-h-[42px] flex items-center justify-center"
                 title={t("editor.alignBL")}
               >
                 <ArrowDownLeft className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
@@ -596,7 +596,7 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
               <button
                 onClick={() => handleAlignCorner('br')}
                 disabled={!selectedDesignId}
-                className="p-2 lg:p-1.5 rounded-md hover:bg-gray-200/80 text-gray-600 hover:text-cyan-400 transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 flex items-center justify-center"
+                className="p-2 lg:p-2 rounded-lg border border-black bg-white hover:bg-black hover:text-white text-black transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] lg:min-w-[42px] lg:min-h-[42px] flex items-center justify-center"
                 title={t("editor.alignBR")}
               >
                 <ArrowDownRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
