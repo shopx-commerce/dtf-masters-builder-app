@@ -59,6 +59,7 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     handleDeleteMulti,
     handleRotate90,
   } = bag;
+  const handleArtboardResizeRef = useRef<(newWidth: number, newHeight: number) => void>(() => {});
 
   const getAlignNxNy = useCallback((corner: 'tl' | 'tr' | 'bl' | 'br') => {
     const design = designsRef.current.find(d => d.id === selectedDesignId);
@@ -80,6 +81,14 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       case 'br': return { nx: right, ny: bottom };
     }
   }, [selectedDesignId, artboardWidth, artboardHeight]);
+
+  const GANGSHEET_HEIGHTS = useMemo(() => {
+    if (initialGangsheetHeights && initialGangsheetHeights.length > 0) return initialGangsheetHeights;
+    const base = profile.gangsheetHeights;
+    if (!initialHeight || base.includes(initialHeight)) return base;
+    return [...base, initialHeight].sort((a, b) => a - b);
+  }, [profile.gangsheetHeights, initialHeight, initialGangsheetHeights]);
+  const MAX_ARTBOARD_HEIGHT = GANGSHEET_HEIGHTS[GANGSHEET_HEIGHTS.length - 1];
 
   const handleAlignCorner = useCallback((corner: 'tl' | 'tr' | 'bl' | 'br') => {
     if (!selectedDesignId) return;
@@ -164,6 +173,12 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     type PlacedItem = { id: string; nx: number; ny: number; rotation: number; overflows: boolean };
 
     const applyResult = (bestResult: PlacedItem[], anyRotated: boolean, hasOverflow: boolean) => {
+      if (hasOverflow && artboardHeightRef.current < MAX_ARTBOARD_HEIGHT) {
+        const nextHeight = GANGSHEET_HEIGHTS.find(h => h > artboardHeightRef.current) ?? MAX_ARTBOARD_HEIGHT;
+        handleArtboardResizeRef.current(artboardWidthRef.current, nextHeight);
+        setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true }), 0);
+        return;
+      }
       if (hasOverflow) {
         toast({ title: t("toast.noSpace"), description: t("toast.noSpaceDesc"), variant: "destructive" });
       } else if (anyRotated) {
@@ -440,7 +455,7 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       const best = cands[0].result;
       applyResult(best, best.some(p => p.rotation !== 0), best.some(p => p.overflows));
     }
-  }, [selectedDesignIds, saveSnapshot, toast, designGap]);
+  }, [selectedDesignIds, saveSnapshot, toast, designGap, GANGSHEET_HEIGHTS, MAX_ARTBOARD_HEIGHT]);
 
   const handleArtboardResize = useCallback((newWidth: number, newHeight: number) => {
     if (newWidth <= 0 || newHeight <= 0) return;
@@ -466,14 +481,8 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     setArtboardWidth(newWidth);
     setArtboardHeight(newHeight);
   }, [designs.length, saveSnapshot, artboardWidth, artboardHeight]);
+  handleArtboardResizeRef.current = handleArtboardResize;
 
-  const GANGSHEET_HEIGHTS = useMemo(() => {
-    if (initialGangsheetHeights && initialGangsheetHeights.length > 0) return initialGangsheetHeights;
-    const base = profile.gangsheetHeights;
-    if (!initialHeight || base.includes(initialHeight)) return base;
-    return [...base, initialHeight].sort((a, b) => a - b);
-  }, [profile.gangsheetHeights, initialHeight, initialGangsheetHeights]);
-  const MAX_ARTBOARD_HEIGHT = GANGSHEET_HEIGHTS[GANGSHEET_HEIGHTS.length - 1];
   const recommendedArtboardHeight = useMemo(() => {
     if (designs.length === 0) return null;
     let minY = Infinity, maxY = -Infinity;
@@ -486,12 +495,6 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     const requiredH = maxY - minY + (designGap ?? 0.25) * 2;
     return GANGSHEET_HEIGHTS.find(h => h >= requiredH) ?? null;
   }, [designs, artboardHeight, designGap, GANGSHEET_HEIGHTS]);
-  const handleExpandArtboard = useCallback(() => {
-    if (artboardHeight >= MAX_ARTBOARD_HEIGHT) return;
-    const nextHeight = GANGSHEET_HEIGHTS.find(h => h > artboardHeight) ?? MAX_ARTBOARD_HEIGHT;
-    handleArtboardResize(artboardWidth, nextHeight);
-  }, [artboardHeight, artboardWidth, handleArtboardResize, GANGSHEET_HEIGHTS, MAX_ARTBOARD_HEIGHT]);
-
   // Stable refs for keyboard handler to avoid frequent re-registration
   const handleUndoRef = useRef(handleUndo);
   handleUndoRef.current = handleUndo;
@@ -805,7 +808,6 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     GANGSHEET_HEIGHTS,
     MAX_ARTBOARD_HEIGHT,
     recommendedArtboardHeight,
-    handleExpandArtboard,
     handleUndoRef,
     handleRedoRef,
     handleDuplicateDesignRef,

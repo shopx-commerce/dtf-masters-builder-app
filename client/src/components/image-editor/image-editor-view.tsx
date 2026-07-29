@@ -51,7 +51,7 @@ export default function ImageEditorView() {
     handleEffectiveSizeChange, handleResizeChange, handleDuplicateDesign,
     handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleSetGroupCount,
     handleDeleteDesign, handleDeleteGroup, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleAlignCorner,
-    handleAutoArrange, handleArtboardResize, handleExpandArtboard, handleThresholdAlpha,
+    handleAutoArrange, handleArtboardResize, handleThresholdAlpha,
     handleThresholdAlphaAll, handleCropDesign, handleCropApply, handleDownload, handleAddToCart,
     handleApplyHalftone, handleOpenHalftoneMenu, halftoneStrength, setHalftoneStrength,
     halftoneMenuOpen, setHalftoneMenuOpen, halftoneTopColors,
@@ -550,7 +550,6 @@ export default function ImageEditorView() {
                   onMultiRotateDelta={handleMultiRotateDelta}
                   onDuplicateSelected={handleDuplicateSelected}
                   onInteractionEnd={handleInteractionEnd}
-                  onExpandArtboard={artboardHeight < MAX_ARTBOARD_HEIGHT ? handleExpandArtboard : undefined}
                   onDesignContextMenu={handleCanvasContextMenu}
                   spotPreviewData={profile.enableFluorescent ? spotPreviewData : undefined}
                   activeSpotChannel={profile.enableFluorescent ? activeSpotChannel : null}
@@ -769,7 +768,6 @@ export default function ImageEditorView() {
               onMultiRotateDelta={handleMultiRotateDelta}
               onDuplicateSelected={handleDuplicateSelected}
               onInteractionEnd={handleInteractionEnd}
-              onExpandArtboard={artboardHeight < MAX_ARTBOARD_HEIGHT ? handleExpandArtboard : undefined}
               onDesignContextMenu={handleCanvasContextMenu}
               spotPreviewData={profile.enableFluorescent ? spotPreviewData : undefined}
               activeSpotChannel={profile.enableFluorescent ? activeSpotChannel : null}
