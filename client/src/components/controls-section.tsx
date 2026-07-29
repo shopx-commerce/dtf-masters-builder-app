@@ -592,10 +592,10 @@ export default function ControlsSection({
               variant="outline"
               size="sm"
               onClick={onRemoveWhiteBackground}
-              className="flex-1 gap-1 border-amber-200 bg-amber-50 text-[11px] text-amber-700 hover:bg-amber-100"
+              className="h-10 flex-1 gap-1.5 rounded-lg border-amber-200 bg-amber-50 text-xs text-amber-700 hover:bg-amber-100"
               title="Remove contiguous white or off-white background"
             >
-              <Eraser className="h-3.5 w-3.5" />
+              <Eraser className="h-4 w-4" />
               White BG
             </Button>
             <Button
@@ -603,12 +603,12 @@ export default function ControlsSection({
               variant="outline"
               size="sm"
               onClick={onWandDeleteToggle}
-              className={`flex-1 gap-1 text-[11px] ${wandDeleteActive
+              className={`h-10 flex-1 gap-1.5 rounded-lg text-xs ${wandDeleteActive
                 ? "border-fuchsia-600 bg-fuchsia-600 text-white hover:bg-fuchsia-700"
                 : "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-600 hover:bg-fuchsia-100"}`}
               title={wandDeleteActive ? "Magic Wand active — click a color to erase it" : "Erase a connected color from the selected design"}
             >
-              <WandSparkles className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <WandSparkles className="h-4 w-4 shrink-0" aria-hidden="true" />
               {wandDeleteActive ? "Wand ON" : "Magic Wand"}
             </Button>
           </div>

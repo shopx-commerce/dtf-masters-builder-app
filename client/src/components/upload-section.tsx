@@ -145,7 +145,7 @@ export default function UploadSection({ onImageUpload, onBatchStart, imageInfo, 
           text-center cursor-pointer
           ${showHero 
             ? 'rounded-2xl p-10 hover:scale-[1.02] transform transition-transform duration-300' 
-            : 'rounded-md bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-400 hover:to-blue-400 px-5 py-1 shadow-md shadow-cyan-500/20 hover:shadow-cyan-400/30'
+            : 'rounded-lg bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-400 hover:to-blue-400 px-5 py-2 shadow-md shadow-cyan-500/20 hover:shadow-cyan-400/30'
           }
         `}
         style={showHero ? {
@@ -169,10 +169,10 @@ export default function UploadSection({ onImageUpload, onBatchStart, imageInfo, 
             </>
           )}
           {!showHero && (
-            <Upload className="w-3.5 h-3.5 text-white" />
+            <Upload className="w-4 h-4 text-white" />
           )}
           {!showHero && (
-            <p className={`font-medium text-white whitespace-nowrap ${metric ? 'text-[10px]' : 'text-[11px]'}`}>
+            <p className={`font-semibold text-white whitespace-nowrap ${metric ? 'text-[11px]' : 'text-xs'}`}>
               {t("editor.addDesigns")}
             </p>
           )}

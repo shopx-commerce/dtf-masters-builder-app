@@ -43,7 +43,7 @@ export default function SizeInput({
       <input
         type="text"
         inputMode="decimal"
-        className={`h-5 bg-gray-100 border border-cyan-500 rounded font-semibold text-gray-900 text-center outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${metric ? 'w-16 text-[10px]' : 'w-14 text-[11px]'}`}
+         className={`h-7 bg-white border border-cyan-500 rounded-md font-semibold text-gray-900 text-center outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${metric ? 'w-16 text-[11px]' : 'w-14 text-xs'}`}
         value={draft}
         autoFocus
         onChange={(e) => setDraft(e.target.value)}
@@ -65,7 +65,7 @@ export default function SizeInput({
     <input
       type="text"
       readOnly
-      className={`h-5 bg-gray-100 border border-gray-300 rounded font-semibold text-gray-900 text-center outline-none cursor-pointer hover:border-gray-400 transition-colors ${metric ? 'w-16 text-[10px]' : 'w-14 text-[11px]'}`}
+      className={`h-7 bg-white border border-gray-300 rounded-md font-semibold text-gray-900 text-center outline-none cursor-pointer hover:border-cyan-400 transition-colors ${metric ? 'w-16 text-[11px]' : 'w-14 text-xs'}`}
       value={display}
       onFocus={() => {
         setDraft(display);
