@@ -1,1 +1,2 @@
 - [Fluorescent editor port](fluorescent-editor-port.md) — keep source-repository improvements selective and route wand state through the existing editor preview/control boundary.
+- [Raster upload DPI handling](raster-upload-dpi.md) — use a stable 300 DPI default and never silently lower valid DPI based on pixel dimensions.
