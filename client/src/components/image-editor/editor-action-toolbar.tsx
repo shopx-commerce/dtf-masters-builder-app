@@ -219,21 +219,6 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
             <Droplets className="w-3 h-3 lg:w-4 lg:h-4" />
             {t("editor.cleanAlphaAll")}
           </button>
-          {!isMobile && (
-            <button
-              onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2 })}
-              disabled={designs.length < 2 && selectedDesignIds.size < 2}
-              className={`flex items-center gap-1 px-2 py-1 lg:px-4 lg:py-2 rounded-md transition-all whitespace-nowrap font-medium shadow-sm min-h-[36px] ${lang !== 'en' ? 'text-[10px] lg:text-sm' : 'text-[11px] lg:text-sm'} ${
-                designs.length >= 2 || selectedDesignIds.size >= 2
-                  ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
-                  : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
-              }`}
-              title={selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll")}
-            >
-              <LayoutGrid className="w-3 h-3 lg:w-4 lg:h-4 flex-shrink-0" />
-              {t("editor.autoArrange")}
-            </button>
-          )}
         </div>
         {!isMobile && (
           <div className="flex items-center gap-1">
@@ -508,6 +493,23 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
             </div>
           )}
         </>
+      )}
+      {!isMobile && (
+        <div className="ml-auto flex items-center gap-1">
+          <button
+            onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2 })}
+            disabled={designs.length < 2 && selectedDesignIds.size < 2}
+            className={`flex items-center gap-1 px-2 py-1 lg:px-4 lg:py-2 rounded-md transition-all whitespace-nowrap text-[11px] lg:text-sm font-medium min-h-[36px] ${
+              designs.length >= 2 || selectedDesignIds.size >= 2
+                ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
+                : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+            }`}
+            title={selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll")}
+          >
+            <LayoutGrid className="w-3 h-3 lg:w-4 lg:h-4 flex-shrink-0" />
+            {t("editor.autoArrange")}
+          </button>
+        </div>
       )}
       {!isMobile && designs.length >= 2 && (
         <div className="flex items-center gap-1.5 flex-shrink-0">
