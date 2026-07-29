@@ -52,8 +52,8 @@ export default function SizeInput({
         tabIndex={-1}
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => step(stepInches)}
-        className="flex h-3 items-center justify-center rounded-sm text-gray-500 hover:bg-cyan-50 hover:text-cyan-600"
-        aria-label="Increase size"
+        className="flex h-[10px] w-3.5 items-center justify-center rounded-t border border-gray-300 bg-gray-100 text-gray-400 transition-colors hover:bg-cyan-100 hover:text-cyan-600"
+        title="Increase size"
       >
         <ChevronUp className="h-2.5 w-2.5" strokeWidth={3} />
       </button>
@@ -62,8 +62,8 @@ export default function SizeInput({
         tabIndex={-1}
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => step(-stepInches)}
-        className="flex h-3 items-center justify-center rounded-sm text-gray-500 hover:bg-cyan-50 hover:text-cyan-600"
-        aria-label="Decrease size"
+        className="flex h-[10px] w-3.5 items-center justify-center rounded-b border border-t-0 border-gray-300 bg-gray-100 text-gray-400 transition-colors hover:bg-cyan-100 hover:text-cyan-600"
+        title="Decrease size"
       >
         <ChevronDown className="h-2.5 w-2.5" strokeWidth={3} />
       </button>
@@ -72,11 +72,11 @@ export default function SizeInput({
 
   if (editing) {
     return (
-      <div className="flex items-center gap-0.5">
+      <div className="flex items-center gap-px">
         <input
           type="text"
           inputMode="decimal"
-          className={`h-7 bg-white border border-cyan-500 rounded-md font-semibold text-gray-900 text-center outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${metric ? 'w-16 text-[11px]' : 'w-14 text-xs'}`}
+          className={`h-6 bg-white border-2 border-cyan-500 rounded font-semibold text-gray-800 text-center outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none shadow-sm ${metric ? 'w-16 text-[10px]' : 'w-14 text-[11px]'}`}
           value={draft}
           autoFocus
           onChange={(e) => setDraft(e.target.value)}
@@ -100,18 +100,18 @@ export default function SizeInput({
     );
   }
   return (
-    <div className="flex items-center gap-0.5">
+      <div className="flex items-center gap-px">
       <input
         type="text"
         readOnly
-        className={`h-7 bg-white border border-gray-300 rounded-md font-semibold text-gray-900 text-center outline-none cursor-pointer hover:border-cyan-400 transition-colors ${metric ? 'w-16 text-[11px]' : 'w-14 text-xs'}`}
+        className={`h-6 bg-white border-2 border-gray-300 rounded font-semibold text-gray-800 text-center outline-none cursor-pointer hover:border-cyan-400 hover:bg-cyan-50 active:bg-cyan-100 transition-colors shadow-sm ${metric ? 'w-16 text-[10px]' : 'w-14 text-[11px]'}`}
         value={display}
         onFocus={() => {
           onCommitAtFocusRef.current = onCommit;
           setDraft(display);
           setEditing(true);
         }}
-        title={title}
+        title={title + " — click to edit"}
       />
       {arrows}
     </div>
