@@ -288,10 +288,11 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
         <button
           onClick={handleUndo}
           disabled={!canUndo()}
-          className="w-8 h-8 lg:w-10 lg:h-10 rounded border border-gray-300 bg-white hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center shadow-sm"
+          className="h-10 min-w-[76px] lg:h-11 lg:min-w-[92px] rounded-lg border-2 border-black bg-black px-2.5 text-white hover:bg-white hover:text-black transition-colors disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center gap-1.5 shadow-sm"
           title={t("editor.undo")}
         >
-          <Undo2 className="w-4 h-4 lg:w-5 lg:h-5" />
+          <Undo2 className="w-5 h-5 lg:w-6 lg:h-6" strokeWidth={2.5} />
+          <span className="text-[13px] lg:text-[15px] font-black tracking-wide">UNDO</span>
         </button>
         <button
           onClick={handleRedo}
