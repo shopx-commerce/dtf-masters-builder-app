@@ -634,8 +634,10 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   }, [selectedDesignIds, artboardWidth, artboardHeight]);
 
   const handleEffectiveSizeChange = useCallback((axis: 'width' | 'height', value: number) => {
-    if (!selectedDesignId || value <= 0) return;
-    const ids = selectedDesignIds.size > 1 ? selectedDesignIds : new Set([selectedDesignId]);
+    if ((!selectedDesignId && selectedDesignIds.size === 0) || value <= 0) return;
+    const ids = selectedDesignIds.size > 0
+      ? selectedDesignIds
+      : new Set([selectedDesignId!]);
     const targets = designs.filter(d => ids.has(d.id));
     if (targets.length === 0) return;
     saveSnapshot();

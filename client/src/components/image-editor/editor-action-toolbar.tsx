@@ -368,8 +368,9 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
         <>
           <div className="w-px h-5 bg-gray-100 flex-shrink-0 hidden lg:block" />
           <div className="flex items-center gap-1.5 min-w-0 flex-shrink-0">
+            <span className="text-[10px] font-medium text-gray-600">Size</span>
             {selectedDesignIds.size > 1 && (
-              <span className="rounded-full bg-cyan-100 px-1.5 py-0.5 text-[9px] font-semibold text-cyan-700" title={`${selectedDesignIds.size} designs selected`}>
+              <span className="rounded-full bg-cyan-100 px-1.5 py-0.5 text-[9px] font-semibold leading-4 text-cyan-700" title={`${selectedDesignIds.size} designs selected`}>
                 ×{selectedDesignIds.size}
               </span>
             )}
@@ -385,10 +386,10 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
               <span className={`text-gray-600 ${lang === 'en' ? 'text-[10px]' : 'text-[9px]'}`}>{getUnitSuffix(activeResizeSettings.widthInches * activeDesignTransform.s, lang)}</span>
               <button
                 onClick={() => setProportionalLock(prev => !prev)}
-                className={`p-0.5 rounded transition-colors ${proportionalLock ? 'text-cyan-400 hover:text-cyan-300' : 'text-gray-600 hover:text-gray-700'}`}
+                className={`flex h-6 w-6 items-center justify-center rounded transition-colors ${proportionalLock ? 'text-cyan-500 hover:bg-cyan-50' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-700'}`}
                 title={proportionalLock ? 'Proportions locked – click to unlock' : 'Proportions unlocked – click to lock'}
               >
-                {proportionalLock ? <Link className="w-3 h-3" /> : <Unlink className="w-3 h-3" />}
+                {proportionalLock ? <Link className="h-3.5 w-3.5" /> : <Unlink className="h-3.5 w-3.5" />}
               </button>
               <span className="text-[10px] text-gray-600">H</span>
               <SizeInput
@@ -524,15 +525,15 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
             </button>
             {selectedDesignId && (
               <div className="flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-1 py-0.5">
-                <button onClick={() => handleAlignAxis("vertical")} className="rounded p-1 text-gray-600 hover:bg-white hover:text-cyan-600" title="Center vertically">
-                  <AlignCenterVertical className="h-3.5 w-3.5" />
+                <button onClick={() => handleAlignAxis("vertical")} className="flex h-7 w-7 items-center justify-center rounded text-gray-600 hover:bg-white hover:text-cyan-600" title="Center vertically">
+                  <AlignCenterVertical className="h-4 w-4" />
                 </button>
-                <button onClick={() => handleAlignAxis("horizontal")} className="rounded p-1 text-gray-600 hover:bg-white hover:text-cyan-600" title="Center horizontally">
-                  <AlignCenterHorizontal className="h-3.5 w-3.5" />
+                <button onClick={() => handleAlignAxis("horizontal")} className="flex h-7 w-7 items-center justify-center rounded text-gray-600 hover:bg-white hover:text-cyan-600" title="Center horizontally">
+                  <AlignCenterHorizontal className="h-4 w-4" />
                 </button>
-                <span className="min-w-[34px] text-center text-[10px] tabular-nums text-gray-600">{Math.round(activeDesignTransform.rotation || 0)}°</span>
+                <span className="min-w-[38px] text-center text-[10px] font-medium tabular-nums text-gray-600">{Math.round(activeDesignTransform.rotation || 0)}°</span>
                 {[0, 90, 180, 270].map(deg => (
-                  <button key={deg} onClick={() => handleSetRotation(deg)} className="rounded px-1 py-0.5 text-[9px] text-gray-600 hover:bg-white hover:text-cyan-600">
+                  <button key={deg} onClick={() => handleSetRotation(deg)} className="flex h-7 min-w-7 items-center justify-center rounded px-1 text-[10px] font-medium text-gray-600 hover:bg-white hover:text-cyan-600">
                     {deg}°
                   </button>
                 ))}
