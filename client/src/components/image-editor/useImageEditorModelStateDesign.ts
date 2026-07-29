@@ -11,7 +11,7 @@ import {
   EXPORT_DPI,
   LAYER_THUMBNAIL_SIZE,
 } from "./constants";
-import { clampDesignToArtboard } from "./utils";
+import { clampDesignToArtboard, getRotatedBounds } from "./utils";
 import { useAddToCartStall } from "./use-add-to-cart-stall";
 import { useRestoreDesignState } from "./use-restore-design-state";
 import type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
@@ -593,48 +593,57 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
         });
       }
 
-      let shiftR = 0, shiftL = 0, shiftD = 0, shiftU = 0;
+      let groupMinX = Infinity;
+      let groupMaxX = -Infinity;
+      let groupMinY = Infinity;
+      let groupMaxY = -Infinity;
       for (const d of prev) {
         if (!selectedDesignIds.has(d.id)) continue;
         const u = unclamped.get(d.id);
         if (!u) continue;
-        const rad = (u.rotation * Math.PI) / 180;
-        const cos = Math.abs(Math.cos(rad));
-        const sin = Math.abs(Math.sin(rad));
-        const halfW = (d.widthInches * d.transform.s * cos + d.heightInches * d.transform.s * sin) / 2;
-        const halfH = (d.widthInches * d.transform.s * sin + d.heightInches * d.transform.s * cos) / 2;
-        const minNx = halfW / artboardWidth;
-        const maxNx = 1 - halfW / artboardWidth;
-        const minNy = halfH / artboardHeight;
-        const maxNy = 1 - halfH / artboardHeight;
-        if (minNx <= maxNx) {
-          if (u.nx < minNx) shiftR = Math.max(shiftR, minNx - u.nx);
-          if (u.nx > maxNx) shiftL = Math.max(shiftL, u.nx - maxNx);
-        }
-        if (minNy <= maxNy) {
-          if (u.ny < minNy) shiftD = Math.max(shiftD, minNy - u.ny);
-          if (u.ny > maxNy) shiftU = Math.max(shiftU, u.ny - maxNy);
-        }
+        const bounds = getRotatedBounds({
+          ...d,
+          transform: {
+            ...d.transform,
+            nx: u.nx,
+            ny: u.ny,
+            rotation: u.rotation,
+          },
+        });
+        const centerX = u.nx * artboardWidth;
+        const centerY = u.ny * artboardHeight;
+        groupMinX = Math.min(groupMinX, centerX + bounds.minX);
+        groupMaxX = Math.max(groupMaxX, centerX + bounds.maxX);
+        groupMinY = Math.min(groupMinY, centerY + bounds.minY);
+        groupMaxY = Math.max(groupMaxY, centerY + bounds.maxY);
       }
-      const groupDnx = shiftR - shiftL;
-      const groupDny = shiftD - shiftU;
+      // Apply one shared translation to the rotated group. Per-design clamping
+      // would change the relative spacing and can make the designs overlap.
+      const groupShiftX =
+        groupMinX < 0
+          ? -groupMinX
+          : groupMaxX > artboardWidth
+            ? artboardWidth - groupMaxX
+            : 0;
+      const groupShiftY =
+        groupMinY < 0
+          ? -groupMinY
+          : groupMaxY > artboardHeight
+            ? artboardHeight - groupMaxY
+            : 0;
 
       return prev.map(d => {
         if (!selectedDesignIds.has(d.id)) return d;
         const u = unclamped.get(d.id);
         if (!u) return d;
-        const rad = (u.rotation * Math.PI) / 180;
-        const cos = Math.abs(Math.cos(rad));
-        const sin = Math.abs(Math.sin(rad));
-        const halfW = (d.widthInches * d.transform.s * cos + d.heightInches * d.transform.s * sin) / 2;
-        const halfH = (d.widthInches * d.transform.s * sin + d.heightInches * d.transform.s * cos) / 2;
-        const adjNx = u.nx + groupDnx;
-        const adjNy = u.ny + groupDny;
-        const clampedNx = Math.max(halfW / artboardWidth, Math.min(1 - halfW / artboardWidth, adjNx));
-        const clampedNy = Math.max(halfH / artboardHeight, Math.min(1 - halfH / artboardHeight, adjNy));
         return {
           ...d,
-          transform: { ...d.transform, rotation: Math.round(u.rotation), nx: clampedNx, ny: clampedNy },
+          transform: {
+            ...d.transform,
+            rotation: Math.round(u.rotation),
+            nx: u.nx + groupShiftX / artboardWidth,
+            ny: u.ny + groupShiftY / artboardHeight,
+          },
         };
       });
     });

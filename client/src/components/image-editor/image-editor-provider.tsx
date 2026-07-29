@@ -7,9 +7,68 @@ import { useImageEditorModelHalftone } from "./useImageEditorModelHalftone";
 import { useImageEditorModelExport } from "./useImageEditorModelExport";
 import { useImageEditorModelCart } from "./useImageEditorModelCart";
 import type { EditorActionToolbarProps } from "./editor-action-toolbar";
-import { clampDesignToArtboard } from "./utils";
+import { clampDesignToArtboard, getRotatedBounds } from "./utils";
 
 export type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
+
+function rotateDesignGroup(
+  designs: DesignItem[],
+  ids: Set<string>,
+  angleDeg: number,
+  artboardWidth: number,
+  artboardHeight: number,
+) {
+  const targets = designs.filter(d => ids.has(d.id));
+  if (targets.length === 0) return new Map<string, { nx: number; ny: number; rotation: number }>();
+
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const d of targets) {
+    const bounds = getRotatedBounds(d);
+    const cx = d.transform.nx * artboardWidth;
+    const cy = d.transform.ny * artboardHeight;
+    minX = Math.min(minX, cx + bounds.minX);
+    maxX = Math.max(maxX, cx + bounds.maxX);
+    minY = Math.min(minY, cy + bounds.minY);
+    maxY = Math.max(maxY, cy + bounds.maxY);
+  }
+
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+  const radians = (angleDeg * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const candidates = targets.map(d => {
+    const px = d.transform.nx * artboardWidth - centerX;
+    const py = d.transform.ny * artboardHeight - centerY;
+    return {
+      d,
+      nx: (centerX + px * cos - py * sin) / artboardWidth,
+      ny: (centerY + px * sin + py * cos) / artboardHeight,
+      rotation: ((d.transform.rotation + angleDeg) % 360 + 360) % 360,
+    };
+  });
+
+  let nextMinX = Infinity, nextMaxX = -Infinity, nextMinY = Infinity, nextMaxY = -Infinity;
+  for (const { d, nx, ny, rotation } of candidates) {
+    const bounds = getRotatedBounds({
+      ...d,
+      transform: { ...d.transform, nx, ny, rotation },
+    });
+    const cx = nx * artboardWidth;
+    const cy = ny * artboardHeight;
+    nextMinX = Math.min(nextMinX, cx + bounds.minX);
+    nextMaxX = Math.max(nextMaxX, cx + bounds.maxX);
+    nextMinY = Math.min(nextMinY, cy + bounds.minY);
+    nextMaxY = Math.max(nextMaxY, cy + bounds.maxY);
+  }
+
+  const shiftX = nextMinX < 0 ? -nextMinX : nextMaxX > artboardWidth ? artboardWidth - nextMaxX : 0;
+  const shiftY = nextMinY < 0 ? -nextMinY : nextMaxY > artboardHeight ? artboardHeight - nextMaxY : 0;
+  return new Map(candidates.map(({ d, nx, ny, rotation }) => [
+    d.id,
+    { nx: nx + shiftX / artboardWidth, ny: ny + shiftY / artboardHeight, rotation },
+  ]));
+}
 
 export function ImageEditorProvider({ children, ...props }: ImageEditorProps & { children: React.ReactNode }) {
   const value = useImageEditorModel(props);
@@ -61,12 +120,23 @@ function useImageEditorModel(props: ImageEditorProps) {
     if (ids.size === 0 || !Number.isFinite(degrees)) return;
     const rotation = ((Math.round(degrees) % 360) + 360) % 360;
     bag.saveSnapshot();
-    bag.setDesigns(prev => prev.map(d => {
-      if (!ids.has(d.id)) return d;
-      const rotated = { ...d, transform: { ...d.transform, rotation } };
-      const { nx, ny } = clampDesignToArtboard(rotated, bag.artboardWidth, bag.artboardHeight);
-      return { ...rotated, transform: { ...rotated.transform, nx, ny } };
-    }));
+    bag.setDesigns(prev => {
+      if (ids.size > 1) {
+        const active = prev.find(d => d.id === bag.selectedDesignId);
+        const delta = active ? rotation - active.transform.rotation : 0;
+        const rotated = rotateDesignGroup(prev, ids, delta, bag.artboardWidth, bag.artboardHeight);
+        return prev.map(d => {
+          const next = rotated.get(d.id);
+          return next ? { ...d, transform: { ...d.transform, ...next } } : d;
+        });
+      }
+      return prev.map(d => {
+        if (!ids.has(d.id)) return d;
+        const next = { ...d, transform: { ...d.transform, rotation } };
+        const { nx, ny } = clampDesignToArtboard(next, bag.artboardWidth, bag.artboardHeight);
+        return { ...next, transform: { ...next.transform, nx, ny } };
+      });
+    });
   };
 
   const handleAlignAxis = (axis: "horizontal" | "vertical") => {
