@@ -708,7 +708,7 @@ export default function ImageEditorView() {
                   disabled={designs.length < 2 && selectedDesignIds.size < 2}
                   className={`mx-auto flex min-h-[36px] items-center justify-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
                     designs.length >= 2 || selectedDesignIds.size >= 2
-                      ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#0891B2] shadow-none hover:bg-[#E2E8F0]"
+                      ? "border border-pink-600 bg-pink-500 text-white shadow-md shadow-pink-500/25 hover:bg-pink-600"
                       : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"
                   }`}
                   title={selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll")}
