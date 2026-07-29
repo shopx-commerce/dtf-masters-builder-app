@@ -294,23 +294,23 @@ export default function ImageEditorView() {
           {/* Layers Panel */}
           {designs.length > 0 && (
             <div ref={designInfoRef} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-              <div className="flex items-center gap-2 px-3 py-1.5 min-w-0">
+              <div className="flex items-center gap-3 px-3 py-2.5 min-w-0">
                 <button
                   onClick={() => setShowDesignInfo(!showDesignInfo)}
-                  className="flex items-center gap-2 flex-1 min-w-0 text-sm text-gray-700 hover:text-gray-900 transition-colors overflow-hidden"
+                  className="flex flex-1 min-w-0 items-center gap-3 rounded-md px-1.5 py-1 text-base font-semibold text-gray-800 transition-colors hover:bg-gray-50 hover:text-gray-900 overflow-hidden"
                 >
-                  <Layers className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />
-                  <span className="font-medium text-xs truncate">{t("editor.layers")}</span>
-                  <span className="text-[10px] text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded-full flex-shrink-0">{designs.length}</span>
-                  {showDesignInfo ? <ChevronUp className="w-3 h-3 text-gray-600 flex-shrink-0" /> : <ChevronDown className="w-3 h-3 text-gray-600 flex-shrink-0" />}
+                  <Layers className="h-7 w-7 flex-shrink-0 text-cyan-500" strokeWidth={2.25} />
+                  <span className="truncate">{t("editor.layers")}</span>
+                  <span className="flex-shrink-0 rounded-full bg-cyan-100 px-2.5 py-1 text-sm font-bold tabular-nums text-cyan-700">{designs.length}</span>
+                  {showDesignInfo ? <ChevronUp className="h-5 w-5 flex-shrink-0 text-gray-600" /> : <ChevronDown className="h-5 w-5 flex-shrink-0 text-gray-600" />}
                 </button>
                 <button
                   onClick={() => sidebarFileRef.current?.click()}
-                  className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-600 font-medium transition-colors flex-shrink-0 whitespace-nowrap"
+                  className="flex min-h-10 flex-shrink-0 items-center gap-1.5 rounded-lg border border-cyan-600 bg-cyan-500 px-4 py-2 text-sm font-bold text-white shadow-md shadow-cyan-500/25 transition-all hover:bg-cyan-600 hover:shadow-lg hover:shadow-cyan-500/30 active:scale-[0.98] whitespace-nowrap"
                   title={t("editor.addDesignTitle")}
                 >
-                  <Plus className="w-3 h-3 flex-shrink-0" />
-                  <span className={lang !== 'en' ? 'text-[10px]' : 'text-[11px]'}>{t("editor.addDesigns")}</span>
+                  <Plus className="h-5 w-5 flex-shrink-0" strokeWidth={2.5} />
+                  <span>{t("editor.addDesigns")}</span>
                 </button>
                 <input
                   ref={sidebarFileRef}
