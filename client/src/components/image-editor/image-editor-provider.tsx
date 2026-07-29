@@ -41,6 +41,8 @@ function useImageEditorModel(props: ImageEditorProps) {
         printFileName: false,
       }));
       bag.setDesigns(prev => [...prev, ...copies]);
+      bag.setSelectedDesignIds(new Set([...row.designs.map(d => d.id), ...copies.map(d => d.id)]));
+      bag.setSelectedDesignId(copies[copies.length - 1].id);
     } else {
       const idsToRemove = new Set(row.designs.slice(targetCount).map(d => d.id));
       bag.setDesigns(prev => prev.filter(d => !idsToRemove.has(d.id)));

@@ -639,7 +639,6 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       }
 
       if (e.key === 'Escape') {
-        if (showDesignInfoRef.current) setShowDesignInfo(false);
         setSelectedDesignId(null);
         setSelectedDesignIds(new Set());
       }

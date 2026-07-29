@@ -297,15 +297,11 @@ export default function ImageEditorView() {
           {designs.length > 0 && (
             <div ref={designInfoRef} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
               <div className="flex items-center gap-3 px-3 py-2.5 min-w-0">
-                <button
-                  onClick={() => setShowDesignInfo(!showDesignInfo)}
-                  className="flex flex-1 min-w-0 items-center gap-3 rounded-md px-1.5 py-1 text-base font-semibold text-gray-800 transition-colors hover:bg-gray-50 hover:text-gray-900 overflow-hidden"
-                >
+                <div className="flex flex-1 min-w-0 items-center gap-3 rounded-md px-1.5 py-1 text-base font-semibold text-gray-800 overflow-hidden">
                   <Layers className="h-7 w-7 flex-shrink-0 text-cyan-500" strokeWidth={2.25} />
                   <span className="truncate">{t("editor.layers")}</span>
                   <span className="flex-shrink-0 rounded-full bg-cyan-100 px-2.5 py-1 text-sm font-bold tabular-nums text-cyan-700">{designs.length}</span>
-                  {showDesignInfo ? <ChevronUp className="h-5 w-5 flex-shrink-0 text-gray-600" /> : <ChevronDown className="h-5 w-5 flex-shrink-0 text-gray-600" />}
-                </button>
+                </div>
                 <button
                   onClick={() => sidebarFileRef.current?.click()}
                   className="flex min-h-10 flex-shrink-0 items-center gap-1.5 rounded-lg border border-cyan-600 bg-cyan-500 px-4 py-2 text-sm font-bold text-white shadow-md shadow-cyan-500/25 transition-all hover:bg-cyan-600 hover:shadow-lg hover:shadow-cyan-500/30 active:scale-[0.98] whitespace-nowrap"
@@ -344,7 +340,7 @@ export default function ImageEditorView() {
                     return (
                     <div
                       key={`${row.baseName}::${row.sizeKey}`}
-                      className={`flex items-center gap-2 px-2.5 py-1.5 cursor-pointer transition-colors ${isSelected ? 'bg-cyan-50 border-l-2 border-cyan-400' : 'hover:bg-gray-100/70 border-l-2 border-transparent'}`}
+                      className={`flex flex-wrap items-center gap-2 px-2.5 py-2 cursor-pointer transition-colors ${isSelected ? 'bg-cyan-50 border-l-2 border-cyan-400' : 'hover:bg-gray-100/70 border-l-2 border-transparent'}`}
                       onClick={(e) => {
                         if (e.ctrlKey || e.metaKey) {
                           setSelectedDesignIds(prev => {
@@ -423,7 +419,7 @@ export default function ImageEditorView() {
                           {formatDimensions(first.widthInches * first.transform.s, first.heightInches * first.transform.s, lang)}
                         </p>
                       </div>
-                      <div className="flex items-center gap-0.5 flex-shrink-0">
+                      <div className="flex items-center gap-1 flex-shrink-0">
                         <button
                           onClick={(e) => { e.stopPropagation(); handleRemoveOneCopy(row.baseName, row.sizeKey); }}
                           disabled={count <= 1}
@@ -475,6 +471,28 @@ export default function ImageEditorView() {
                           title={t("editor.addOneMore")}
                         >
                           <Plus className="w-2.5 h-2.5" strokeWidth={3} />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const targetCount = editingCountKey === `${row.baseName}::${row.sizeKey}`
+                              ? parseInt(editingCountValue, 10)
+                              : count;
+                            const groupIds = new Set(row.designs.map(d => d.id));
+                            setSelectedDesignIds(groupIds);
+                            setSelectedDesignId(first.id);
+                            if (targetCount !== count) {
+                              handleSetGroupCount(row, targetCount);
+                            } else if (Number.isInteger(targetCount)) {
+                              setTimeout(() => handleAutoArrangeRef.current({ preserveSelection: true }), 0);
+                            }
+                            setEditingCountKey(null);
+                          }}
+                          className="inline-flex h-6 items-center gap-1 rounded-md border border-pink-600 bg-pink-500 px-1.5 text-[9px] font-bold text-white shadow-sm shadow-pink-500/20 transition-colors hover:bg-pink-600"
+                          title="Duplicate & Arrange"
+                        >
+                          <Copy className="h-3 w-3" />
+                          <span className="whitespace-nowrap">Duplicate &amp; Arrange</span>
                         </button>
                       </div>
                       <button

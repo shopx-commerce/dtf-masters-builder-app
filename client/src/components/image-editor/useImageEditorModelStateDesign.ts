@@ -112,7 +112,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     }
   }, [selectedDesignId]);
   const [mobilePanel, setMobilePanel] = useState<"controls" | "preview">("controls");
-  const [showDesignInfo, setShowDesignInfo] = useState(false);
+  const [showDesignInfo, setShowDesignInfo] = useState(true);
   const [selectionZoomActive, setSelectionZoomActive] = useState(false);
   const [editingLayerName, setEditingLayerName] = useState<string | null>(null);
   const [editingNameValue, setEditingNameValue] = useState('');
