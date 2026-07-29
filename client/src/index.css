@@ -6,9 +6,15 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Magic Wand must win over zoom/pan cursor writes on desktop and touch preview surfaces. */
+/* Magic-wand cursor always wins over zoom/pan cursor writes on desktop and touch preview surfaces. */
 .preview-canvas-area[data-wand-active="true"],
 .preview-canvas-area[data-wand-active="true"] * {
+  cursor: crosshair !important;
+}
+
+/* Fluorescent color selection must also win over inline zoom/drag cursor writes. */
+.preview-canvas-area[data-spot-active="true"],
+.preview-canvas-area[data-spot-active="true"] * {
   cursor: crosshair !important;
 }
 

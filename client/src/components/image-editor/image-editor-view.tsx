@@ -66,7 +66,7 @@ export default function ImageEditorView() {
   const [panModeActive, setPanModeActive] = useState(false);
   const wandAssignRef = useRef<((nx: number, ny: number) => void) | null>(null);
   const clearActiveChannelRef = useRef<(() => void) | null>(null);
-  const halftoneEnabled = profile?.id === "hot-peel" || profile?.id === "fluorescent";
+  const halftoneEnabled = profile?.enableHalftone !== false;
 
   if (!activeImageInfo && !embedFromShopify) {
     return (

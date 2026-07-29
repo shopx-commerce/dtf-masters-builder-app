@@ -1702,6 +1702,12 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
     const handleMouseDown = useCallback((e: React.MouseEvent) => {
       e.preventDefault();
+      // Commit an edited size field before canvas interaction. preventDefault()
+      // prevents the browser from naturally blurring the focused input.
+      const activeElement = document.activeElement;
+      if (activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement) {
+        activeElement.blur();
+      }
       // Ensure keyboard scope is active on mousedown (fixes first-upload case where mouseenter never fired)
       isKeyboardScopeActiveRef.current = true;
       altKeyRef.current = e.altKey;
@@ -3194,6 +3200,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
           data-wand-active={wandDeleteActive ? "true" : "false"}
+          data-spot-active={activeSpotChannel && !panModeActive ? "true" : "false"}
           className="preview-canvas-area flex-1 min-h-0 flex items-center justify-center bg-gray-100 p-3 relative overflow-hidden cursor-default"
           style={{ userSelect: 'none', touchAction: 'none', overscrollBehavior: 'none' }}
         >
