@@ -17,6 +17,40 @@ import {
 
 import sgMail from "@sendgrid/mail";
 
+function readPngUint32(buffer: Buffer, offset: number): number {
+  return (
+    ((buffer[offset] << 24) |
+      (buffer[offset + 1] << 16) |
+      (buffer[offset + 2] << 8) |
+      buffer[offset + 3]) >>>
+    0
+  );
+}
+
+/** Return embedded PNG resolution only when a real pHYs chunk is present. */
+function getEmbeddedPngDpi(buffer: Buffer): number | null {
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  if (buffer.length < signature.length || !buffer.subarray(0, 8).equals(signature)) return null;
+
+  let offset = 8;
+  while (offset + 12 <= buffer.length) {
+    const length = readPngUint32(buffer, offset);
+    const type = buffer.toString("ascii", offset + 4, offset + 8);
+    if (type === "pHYs" && length >= 9 && offset + 8 + length <= buffer.length) {
+      const dataOffset = offset + 8;
+      const pixelsPerUnitX = readPngUint32(buffer, dataOffset);
+      const unit = buffer[dataOffset + 8];
+      if (unit === 1 && pixelsPerUnitX > 0) {
+        return Math.round(pixelsPerUnitX * 0.0254);
+      }
+      return null;
+    }
+    if (type === "IDAT" || type === "IEND") break;
+    offset += 12 + length;
+  }
+  return null;
+}
+
 // ─── Shopify helpers ────────────────────────────────────────────────────────
 
 function toVariantGid(id: string): string {
@@ -692,7 +726,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const metadata = await sharp(req.file.buffer).metadata();
-      const rawDensity = metadata.density;
+      // Sharp reports 72 DPI when a PNG has no pHYs chunk. That is a library
+      // default, not uploaded metadata, so never use it as the print size.
+      const embeddedPngDpi = getEmbeddedPngDpi(req.file.buffer);
+      const rawDensity = metadata.format === "png"
+        ? embeddedPngDpi
+        : metadata.density;
       const density =
         rawDensity != null && rawDensity > 0 ? Math.min(rawDensity, 300) : 300;
 
