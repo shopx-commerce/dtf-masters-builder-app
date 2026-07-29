@@ -76,7 +76,7 @@ export default function SizeInput({
         <input
           type="text"
           inputMode="decimal"
-          className={`h-6 bg-white border-2 border-cyan-500 rounded font-semibold text-gray-800 text-center outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none shadow-sm ${metric ? 'w-16 text-[10px]' : 'w-14 text-[11px]'}`}
+           className={`h-7 bg-white border-2 border-cyan-500 rounded font-bold text-gray-900 text-center outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none shadow-sm ${metric ? 'w-16 text-[12px]' : 'w-14 text-[12px]'}`}
           value={draft}
           autoFocus
           onChange={(e) => setDraft(e.target.value)}
@@ -104,7 +104,7 @@ export default function SizeInput({
       <input
         type="text"
         readOnly
-        className={`h-6 bg-white border-2 border-gray-300 rounded font-semibold text-gray-800 text-center outline-none cursor-pointer hover:border-cyan-400 hover:bg-cyan-50 active:bg-cyan-100 transition-colors shadow-sm ${metric ? 'w-16 text-[10px]' : 'w-14 text-[11px]'}`}
+         className={`h-7 bg-white border-2 border-gray-300 rounded font-bold text-gray-900 text-center outline-none cursor-pointer hover:border-cyan-400 hover:bg-cyan-50 active:bg-cyan-100 transition-colors shadow-sm ${metric ? 'w-16 text-[12px]' : 'w-14 text-[12px]'}`}
         value={display}
         onFocus={() => {
           onCommitAtFocusRef.current = onCommit;

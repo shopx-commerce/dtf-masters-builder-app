@@ -367,14 +367,14 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
         <>
           <div className="w-px h-5 bg-gray-100 flex-shrink-0 hidden lg:block" />
           <div className="flex items-center gap-1.5 min-w-0 flex-shrink-0">
-            <span className="mr-1 text-[10px] font-semibold text-gray-500">Size</span>
+            <span className="mr-1 text-[13px] font-bold leading-none tracking-tight text-gray-800">Size</span>
             {selectedDesignIds.size > 1 && (
               <span className="mr-1 flex-shrink-0 rounded-full border border-cyan-300 bg-cyan-50 px-1 py-px text-[9px] font-bold tabular-nums text-cyan-600" title={`Resize applies to all ${selectedDesignIds.size} selected designs`}>
                 ×{selectedDesignIds.size}
               </span>
             )}
             <div className="flex items-center gap-0.5 flex-shrink-0 flex-wrap">
-              <span className="text-[10px] text-gray-600">W</span>
+              <span className="text-[12px] font-bold leading-none text-gray-800">W</span>
               <SizeInput
                 value={activeResizeSettings.widthInches * activeDesignTransform.s}
                 onCommit={(v) => { handleEffectiveSizeChange("width", v); setShowSizeHint(false); }}
@@ -382,7 +382,7 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
                 max={artboardWidth}
                 lang={lang}
               />
-              <span className={`text-gray-600 ${lang === 'en' ? 'text-[10px]' : 'text-[9px]'}`}>{getUnitSuffix(activeResizeSettings.widthInches * activeDesignTransform.s, lang)}</span>
+              <span className={`font-medium text-gray-700 ${lang === 'en' ? 'text-[11px]' : 'text-[10px]'}`}>{getUnitSuffix(activeResizeSettings.widthInches * activeDesignTransform.s, lang)}</span>
               <button
                 onClick={() => setProportionalLock(prev => !prev)}
                 className={`flex h-6 w-6 items-center justify-center rounded transition-colors ${proportionalLock ? 'text-cyan-500 hover:bg-cyan-50' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-700'}`}
@@ -390,7 +390,7 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
               >
                 {proportionalLock ? <Link className="h-3.5 w-3.5" /> : <Unlink className="h-3.5 w-3.5" />}
               </button>
-              <span className="text-[10px] text-gray-600">H</span>
+              <span className="text-[12px] font-bold leading-none text-gray-800">H</span>
               <SizeInput
                 value={activeResizeSettings.heightInches * activeDesignTransform.s}
                 onCommit={(v) => { handleEffectiveSizeChange("height", v); setShowSizeHint(false); }}
@@ -398,7 +398,7 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
                 max={artboardHeight}
                 lang={lang}
               />
-              <span className={`text-gray-600 ${lang === 'en' ? 'text-[10px]' : 'text-[9px]'}`}>{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>
+              <span className={`font-medium text-gray-700 ${lang === 'en' ? 'text-[11px]' : 'text-[10px]'}`}>{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>
             </div>
             {showSizeHint && (
               <span className="ml-1 inline-flex flex-shrink-0 items-center gap-1 rounded-full border border-cyan-300 bg-cyan-50 px-2 py-0.5 text-[10px] text-cyan-700 animate-pulse">
