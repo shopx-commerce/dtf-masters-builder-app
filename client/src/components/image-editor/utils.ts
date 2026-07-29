@@ -18,11 +18,8 @@ function inchesFromPixelsPair(pw: number, ph: number, dpi: number): { widthInche
 }
 
 function normalizeRasterDpiForInches(dpi: number, image: HTMLImageElement): number {
-  const w = image.naturalWidth || image.width;
-  const h = image.naturalHeight || image.height;
-  const longEdge = Math.max(w, h);
-  if (dpi >= 290 && longEdge > 0 && longEdge <= 2200) return RASTER_DPI_FALLBACK;
-  return dpi;
+  const normalized = Number.isFinite(dpi) && dpi > 0 ? dpi : RASTER_DPI_FALLBACK;
+  return Math.min(normalized, EXPORT_DPI);
 }
 
 function imageHasCleanAlpha(img: HTMLImageElement): boolean {

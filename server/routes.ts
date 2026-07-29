@@ -694,7 +694,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const metadata = await sharp(req.file.buffer).metadata();
       const rawDensity = metadata.density;
       const density =
-        rawDensity != null && rawDensity > 0 ? Math.min(rawDensity, 300) : 72;
+        rawDensity != null && rawDensity > 0 ? Math.min(rawDensity, 300) : 300;
 
       res.json({
         width: metadata.width,
