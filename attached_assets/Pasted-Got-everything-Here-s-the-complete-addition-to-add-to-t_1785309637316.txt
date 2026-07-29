@@ -1,0 +1,108 @@
+Got everything. Here's the complete addition to add to the prompt for the other agent — paste this after the two fixes already listed:
+
+Fix 3 — The SizeInput Component (build this from scratch)
+The W and H fields are not plain <input> elements. They are a custom SizeInput component defined at the top of image-editor.tsx (before the main component). Build it exactly as follows:
+
+Props:
+
+function SizeInput({
+  value,       // current size in inches (number)
+  onCommit,    // called with final value in inches when user confirms
+  title,       // tooltip string
+  min = 0.1,
+  max = 999,
+  lang,        // "en" | "es" | "fr"
+}: { ... })
+
+Behavior:
+
+Displays value in inches (e.g. 2.50) or cm (e.g. 6.35 cm) depending on lang — use a useMetric(lang) helper that returns true for es/fr
+If metric and value ≥ 100 cm, display in meters (e.g. 1.00 m)
+Click the display → switches to an editable text input with the current value pre-filled; pressing Enter or blurring commits; Escape cancels
+Has up/down chevron arrow buttons stacked to the right of the display field that increment/decrement by 0.1" imperial or ~0.25 cm metric per click
+Step size logic:
+
+const stepInches = metric ? cmToInches(0.25) : 0.1;
+// Up arrow:   onCommit(Math.max(min, Math.min(max, value + stepInches)))
+// Down arrow: onCommit(Math.max(min, Math.min(max, value - stepInches)))
+
+Critical bug fix — onCommitAtFocusRef:
+The onCommit prop can change mid-edit (if the user clicks elsewhere and deselects a design before blur fires). Without this fix, blur commits to a stale onCommit that references selectedDesignId = null and silently does nothing. Fix:
+
+// Capture onCommit at the moment focus begins — immune to mid-edit closure changes
+const onCommitAtFocusRef = useRef<typeof onCommit>(onCommit);
+// On focus:
+onCommitAtFocusRef.current = onCommit;
+// On blur/Enter: call onCommitAtFocusRef.current(parsedValue) instead of onCommit(...)
+
+Arrow button implementation (no focus-steal on click):
+
+<div className="flex flex-col" style={{ gap: 1 }}>
+  <button
+    type="button"
+    tabIndex={-1}
+    onMouseDown={(e) => e.preventDefault()}  // prevents stealing focus from the input
+    onClick={() => onCommit(Math.max(min, Math.min(max, value + stepInches)))}
+  >
+    <ChevronUp className="w-2.5 h-2.5" strokeWidth={3} />
+  </button>
+  <button
+    type="button"
+    tabIndex={-1}
+    onMouseDown={(e) => e.preventDefault()}
+    onClick={() => onCommit(Math.max(min, Math.min(max, value - stepInches)))}
+  >
+    <ChevronDown className="w-2.5 h-2.5" strokeWidth={3} />
+  </button>
+</div>
+
+The onMouseDown={(e) => e.preventDefault()} is essential — without it, clicking an arrow button while the text input is active triggers blur first (which commits the half-typed value), then the click fires on the wrong value.
+
+Fix 4 — ×N Badge + Size Hint in the Toolbar
+In the desktop size row (where W and H inputs live), add:
+
+Multi-select badge — shown when selectedDesignIds.size > 1:
+
+{selectedDesignIds.size > 1 && (
+  <span
+    className="text-[9px] font-bold text-cyan-600 bg-cyan-50 border border-cyan-300 rounded-full px-1 py-px mr-1 flex-shrink-0 tabular-nums"
+    title={`Resize applies to all ${selectedDesignIds.size} selected designs`}
+  >
+    ×{selectedDesignIds.size}
+  </span>
+)}
+
+First-upload size hint — a pulsing "← Click to resize" tip that appears after the first image upload and disappears after 5 seconds or when the user edits a size:
+
+{showSizeHint && (
+  <span className="inline-flex items-center gap-1 text-[10px] text-cyan-700 bg-cyan-50 border border-cyan-300 rounded-full px-2 py-0.5 animate-pulse ml-1 flex-shrink-0">
+    ← Click to resize
+    <button onClick={() => setShowSizeHint(false)}>
+      <X className="w-2.5 h-2.5" />
+    </button>
+  </span>
+)}
+
+Trigger: setShowSizeHint(true) when the first design is added; auto-dismiss via setTimeout(() => setShowSizeHint(false), 5000). Also call setShowSizeHint(false) inside the onCommit handlers on both W and H inputs.
+
+Complete Size Row Usage (Desktop Toolbar)
+<span className="text-[10px] font-semibold text-gray-500 mr-1">Size</span>
+{selectedDesignIds.size > 1 && <span ...>×{selectedDesignIds.size}</span>}
+<span className="text-[10px] text-gray-600">W</span>
+<SizeInput
+  value={activeResizeSettings.widthInches * activeDesignTransform.s}
+  onCommit={(v) => { handleEffectiveSizeChange("width", v); setShowSizeHint(false); }}
+  title="Width"
+  max={artboardWidth}
+  lang={lang}
+/>
+{/* Proportional lock toggle button (Link/Unlink icon) */}
+<span className="text-[10px] text-gray-600">H</span>
+<SizeInput
+  value={activeResizeSettings.heightInches * activeDesignTransform.s}
+  onCommit={(v) => { handleEffectiveSizeChange("height", v); setShowSizeHint(false); }}
+  title="Height"
+  max={artboardHeight}
+  lang={lang}
+/>
+{showSizeHint && <span ...>← Click to resize</span>}
