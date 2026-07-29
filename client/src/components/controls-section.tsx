@@ -490,21 +490,21 @@ export default function ControlsSection({
           <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-cyan-500/10 sm:h-6 sm:w-6">
             <Layers className="h-3 w-3 text-cyan-600 sm:h-3.5 sm:w-3.5" />
           </div>
-          <span className="min-w-0 max-w-[5.25rem] shrink truncate text-[10px] font-medium text-gray-900 sm:max-w-none sm:text-xs">{t("controls.gangsheetSize")}</span>
+          <span className="min-w-0 max-w-[5.25rem] shrink truncate text-[11px] font-semibold text-gray-900 sm:max-w-none sm:text-sm">{t("controls.gangsheetSize")}</span>
           {!isLgUp ? (
             <div className="flex min-w-0 flex-1 items-center justify-end gap-0.5 sm:gap-1.5 -translate-x-[5px]">
               <div className="flex min-w-0 items-center gap-0.5 sm:gap-1">
-                <span className={`shrink-0 font-semibold text-gray-700 tabular-nums ${lang === 'en' ? 'text-[10px] sm:text-xs' : 'text-[10px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
-                <span className={`shrink-0 text-gray-600 ${lang === 'en' ? 'text-[10px] sm:text-xs' : 'text-[10px]'}`}>×</span>
+                <span className={`shrink-0 font-semibold text-gray-800 tabular-nums ${lang === 'en' ? 'text-[11px] sm:text-xs' : 'text-[11px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
+                <span className={`shrink-0 font-medium text-gray-700 ${lang === 'en' ? 'text-[11px] sm:text-xs' : 'text-[11px]'}`}>×</span>
                 {lockGangsheetSize ? (
-                  <span className={`h-6 min-w-[3.5rem] shrink-0 rounded border border-gray-200 bg-gray-100 px-1.5 py-0.5 text-center font-semibold tabular-nums text-gray-900 sm:h-7 sm:min-w-[4.5rem] sm:px-2 ${lang === 'en' ? 'text-[10px] sm:text-xs' : 'text-[10px]'}`}>{formatLength(artboardHeight, lang)}{lang === "en" ? '"' : ""}</span>
+                  <span className={`h-7 min-w-[3.5rem] shrink-0 rounded border border-gray-200 bg-gray-100 px-1.5 py-1 text-center font-semibold tabular-nums text-gray-900 sm:min-w-[4.5rem] sm:px-2 ${lang === 'en' ? 'text-[11px] sm:text-xs' : 'text-[11px]'}`}>{formatLength(artboardHeight, lang)}{lang === "en" ? '"' : ""}</span>
                 ) : (
                   <Select
                     value={String(artboardHeight)}
                     onValueChange={(v) => onArtboardHeightChange?.(parseFloat(v))}
                   >
                     <SelectTrigger
-                      className={`h-6 w-[3.5rem] shrink-0 gap-0.5 border-gray-200 bg-gray-100 pl-1.5 pr-1 font-semibold tabular-nums text-gray-900 sm:h-7 sm:w-[4.5rem] sm:pl-2 sm:pr-1.5 [&>span]:min-w-0 [&>span]:truncate [&>svg]:h-3 [&>svg]:w-3 [&>svg]:shrink-0 sm:[&>svg]:h-3.5 sm:[&>svg]:w-3.5 ${lang === 'en' ? 'text-[10px] sm:text-xs' : 'text-[10px]'}`}
+                      className={`h-7 w-[3.5rem] shrink-0 gap-0.5 border-gray-200 bg-gray-100 pl-1.5 pr-1 font-semibold tabular-nums text-gray-900 sm:w-[4.5rem] sm:pl-2 sm:pr-1.5 [&>span]:min-w-0 [&>span]:truncate [&>svg]:h-3.5 [&>svg]:w-3.5 ${lang === 'en' ? 'text-[11px] sm:text-xs' : 'text-[11px]'}`}
                     >
                       <SelectValue />
                     </SelectTrigger>
@@ -516,12 +516,12 @@ export default function ControlsSection({
                             key={h}
                             value={String(h)}
                             textValue={label}
-                            className={`tabular-nums ${lang !== 'en' ? 'text-[10px]' : 'text-xs'}`}
+                            className={`tabular-nums ${lang !== 'en' ? 'text-[11px]' : 'text-sm'}`}
                           >
                             <span className="flex items-center justify-between gap-3 w-full">
                               <span>{label}</span>
                               {recommendedArtboardHeight === h && (
-                                <span className="text-[10px] text-blue-600 font-medium shrink-0">
+                                <span className="text-[11px] text-blue-700 font-medium shrink-0">
                                   {t("controls.currentBounds")}
                                 </span>
                               )}
@@ -542,7 +542,7 @@ export default function ControlsSection({
           ) : (
             <div className="flex items-center gap-1 ml-auto shrink-0 max-w-[min(12rem,46%)]">
               <span className={`font-semibold text-gray-700 tabular-nums shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
-              <span className={`text-gray-600 shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>×</span>
+               <span className={`text-gray-700 font-medium shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[11px]'}`}>×</span>
               {lockGangsheetSize ? (
                 <span className={`h-7 min-w-[4.5rem] rounded border border-gray-200 bg-gray-100 px-2 py-1 text-center font-semibold tabular-nums text-gray-900 shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>{formatLength(artboardHeight, lang)}{lang === "en" ? '"' : ""}</span>
               ) : (
@@ -551,7 +551,7 @@ export default function ControlsSection({
                   onValueChange={(v) => onArtboardHeightChange?.(parseFloat(v))}
                 >
                   <SelectTrigger
-                    className={`h-7 w-[4.5rem] shrink-0 pl-2 pr-1.5 gap-0.5 font-semibold text-gray-900 bg-gray-100 border-gray-200 tabular-nums [&>span]:min-w-0 [&>span]:truncate [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:shrink-0 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}
+                   className={`h-8 w-[4.5rem] shrink-0 pl-2 pr-1.5 gap-0.5 font-semibold text-gray-900 bg-gray-100 border-gray-200 tabular-nums [&>span]:min-w-0 [&>span]:truncate [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:shrink-0 ${lang === 'en' ? 'text-sm' : 'text-[12px]'}`}
                   >
                     <SelectValue />
                   </SelectTrigger>
@@ -563,12 +563,12 @@ export default function ControlsSection({
                           key={h}
                           value={String(h)}
                           textValue={label}
-                          className={`tabular-nums ${lang !== 'en' ? 'text-[10px]' : 'text-xs'}`}
+                           className={`tabular-nums ${lang !== 'en' ? 'text-[12px]' : 'text-sm'}`}
                         >
                           <span className="flex items-center justify-between gap-3 w-full">
                             <span>{label}</span>
                             {recommendedArtboardHeight === h && (
-                              <span className="text-[10px] text-blue-600 font-medium shrink-0">
+                               <span className="text-[11px] text-blue-700 font-medium shrink-0">
                                 {t("controls.currentBounds")}
                               </span>
                             )}
@@ -613,7 +613,7 @@ export default function ControlsSection({
             </Button>
           </div>
           {wandDeleteActive && (
-            <label className="mt-2 flex items-center gap-2 text-[10px] text-fuchsia-700">
+             <label className="mt-2 flex items-center gap-2 text-[12px] text-fuchsia-800">
               <span className="font-medium">Tol</span>
               <input
                 type="range"
@@ -664,12 +664,12 @@ export default function ControlsSection({
             <div className="px-3 pb-2.5 space-y-2">
               <div className="rounded-lg border border-purple-100 bg-purple-50/60 p-2">
                 <div className="mb-1 flex items-center justify-between">
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-600">Color Select Wand</span>
+               <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-700">Color Select Wand</span>
                   {activeChannel && (
                     <button
                       type="button"
                       onClick={() => setActiveChannel(null)}
-                      className="text-[10px] text-gray-500 hover:text-gray-800"
+                       className="text-[11px] text-gray-600 hover:text-gray-900"
                     >
                       Clear
                     </button>
@@ -684,7 +684,7 @@ export default function ControlsSection({
                         setActiveChannel(activeChannel === channel.field ? null : channel.field);
                         onPanModeChange?.(false);
                       }}
-                      className={`rounded-md border py-1.5 text-[10px] font-bold transition-all ${
+                     className={`rounded-md border py-1.5 text-[11px] font-bold transition-all ${
                         activeChannel === channel.field ? "scale-105 ring-2 ring-offset-1" : "opacity-70 hover:opacity-100"
                       }`}
                       style={{ backgroundColor: `${channel.color}${activeChannel === channel.field ? "" : "44"}`, borderColor: channel.color, color: "#111", ["--tw-ring-color" as string]: channel.color }}
@@ -693,11 +693,11 @@ export default function ControlsSection({
                     </button>
                   ))}
                 </div>
-                <p className="mt-1 text-[9px] text-gray-500">
+                 <p className="mt-1 text-[11px] text-gray-600 leading-snug">
                   {activeChannel ? `Tap the preview to assign ${activeChannel.replace("spotFluor", "F")}.` : "Choose an ink, then tap a color in the preview."}
                 </p>
                 {activeChannel && panModeActive && (
-                  <button type="button" onClick={() => onPanModeChange?.(false)} className="mt-1 text-[9px] text-amber-700 underline">
+                   <button type="button" onClick={() => onPanModeChange?.(false)} className="mt-1 text-[11px] text-amber-800 underline">
                     Return to paint mode
                   </button>
                 )}
@@ -705,7 +705,7 @@ export default function ControlsSection({
               <button
                 type="button"
                 onClick={handleAutoAssign}
-                className="flex w-full items-center justify-center gap-2 rounded-xl py-2 text-[11px] font-bold shadow-sm transition-all hover:brightness-105"
+                 className="flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-[12px] font-bold shadow-sm transition-all hover:brightness-105"
                 style={autoAssignActive
                   ? { background: "#e5e7eb", color: "#374151" }
                   : { background: "linear-gradient(135deg, #DFFF00, #39FF14 30%, #FF6600 65%, #FF00FF)", color: "#111" }}
@@ -715,7 +715,7 @@ export default function ControlsSection({
               </button>
               <div className="border-t border-gray-100 pt-1">
                 <button type="button" onClick={() => setShowDetectedColors(value => !value)} className="flex w-full items-center justify-between py-1 text-left">
-                  <span className="flex items-center gap-1.5 text-[11px] font-semibold text-gray-600">
+                   <span className="flex items-center gap-1.5 text-[12px] font-semibold text-gray-700">
                     <Palette className="h-3 w-3 text-gray-400" /> Detected Colors
                     <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[9px] font-normal">{extractedColors.filter(c => c.percentage >= 0.1).length}</span>
                   </span>

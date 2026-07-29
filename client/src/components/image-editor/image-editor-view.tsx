@@ -589,11 +589,11 @@ export default function ImageEditorView() {
                     </button>
                     {halftoneMenuOpen && (selectedDesignId || selectedDesignIds.size > 0) && (
                       <div className="absolute left-0 top-full z-50 mt-1 w-48 rounded-md border border-gray-200 bg-white p-2 shadow-lg">
-                        <p className="mb-1 text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Strength</p>
+                        <p className="mb-1 text-[11px] font-semibold text-gray-700 uppercase tracking-wide">Strength</p>
                         <div className="mb-2 flex gap-1">
                           {(['light','balanced','strong'] as const).map(s => (
                             <button key={s} onClick={() => setHalftoneStrength(s)}
-                              className={`flex-1 text-[10px] py-0.5 rounded border font-medium capitalize transition-colors ${halftoneStrength === s ? 'bg-amber-500 text-white border-amber-600' : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-amber-50'}`}>
+                              className={`flex-1 text-[11px] py-1 rounded border font-medium capitalize transition-colors ${halftoneStrength === s ? 'bg-amber-500 text-white border-amber-600' : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-amber-50'}`}>
                               {s}
                             </button>
                           ))}
@@ -606,7 +606,7 @@ export default function ImageEditorView() {
                         </button>
                         {halftoneTopColors.length > 0 && (
                           <div className="mt-1 space-y-1">
-                            <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Colour garment</p>
+                            <p className="text-[11px] font-semibold text-gray-700 uppercase tracking-wide">Colour garment</p>
                             {halftoneTopColors.map((c, i) => (
                               <button key={i}
                                 onClick={() => { setHalftoneMenuOpen(false); const id = selectedDesignId ?? [...selectedDesignIds][0]; if (id) handleApplyHalftone(id, c.r, c.g, c.b, halftoneStrength); }}
@@ -643,7 +643,7 @@ export default function ImageEditorView() {
                         onChange={(e) => setDuplicateCount(parseDuplicateCount(e.target.value))}
                         onKeyDown={handleDuplicateCountKeyDown}
                         disabled={!selectedDesignId}
-                        className="w-full h-full text-center text-[11px] leading-none p-0 pr-3 bg-white outline-none disabled:opacity-30 disabled:pointer-events-none"
+                         className="w-full h-full text-center text-[12px] font-semibold leading-none p-0 pr-3 bg-white outline-none disabled:opacity-30 disabled:pointer-events-none"
                         style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                         title="Number of copies"
                       />
@@ -671,7 +671,7 @@ export default function ImageEditorView() {
                     <button
                       onClick={() => handleDuplicateAndArrange(duplicateCount)}
                       disabled={!selectedDesignId}
-                      className={`w-full rounded-md px-2 py-2 text-[11px] font-medium transition-all ${selectedDesignId ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#0891B2]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`}
+                       className={`w-full rounded-md px-2 py-2 text-[12px] font-semibold transition-all ${selectedDesignId ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#0891B2]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`}
                       title={t("editor.duplicateArrange")}
                     >
                       <span className="inline-flex w-full items-center justify-center gap-1 text-center whitespace-normal break-words leading-snug">
@@ -681,7 +681,7 @@ export default function ImageEditorView() {
                     </button>
                     {designs.length >= 2 && (
                       <div className="mt-1 flex items-center justify-center gap-1">
-                        <span className="text-[10px] text-gray-600">{t("editor.margin")}</span>
+                         <span className="text-[11px] font-medium text-gray-700">{t("editor.margin")}</span>
                         <select
                           value={designGap === undefined ? "auto" : String(designGap)}
                           onChange={(e) => {
@@ -690,7 +690,7 @@ export default function ImageEditorView() {
                             setDesignGap(newGap);
                             setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true }), 0);
                           }}
-                          className="h-8 px-1.5 bg-gray-100 border border-gray-300 rounded text-[11px] text-gray-700 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
+                           className="h-8 px-1.5 bg-gray-100 border border-gray-300 rounded text-[12px] font-medium text-gray-800 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
                           title={useMetric(lang) ? t("editor.marginGapCm") : t("editor.marginGap")}
                         >
                           <option value="auto">{t("editor.marginAuto")}</option>
@@ -704,12 +704,12 @@ export default function ImageEditorView() {
                     )}
                   </div>
                 </div>
-                <span className={`mx-auto inline-flex rounded px-2 py-1 text-[9px] font-semibold ${effectiveDPI < 277 ? "border border-amber-400 bg-amber-100 text-amber-600" : "border border-emerald-700 bg-emerald-100 text-emerald-600"}`} title={t("editor.effectiveRes", { dpi: effectiveDPI })}>{effectiveDPI} DPI</span>
+                <span className={`mx-auto inline-flex rounded px-2 py-1 text-[11px] font-bold ${effectiveDPI < 277 ? "border border-amber-400 bg-amber-100 text-amber-700" : "border border-emerald-700 bg-emerald-100 text-emerald-700"}`} title={t("editor.effectiveRes", { dpi: effectiveDPI })}>{effectiveDPI} DPI</span>
                 <div className={`rounded-md border border-gray-200 bg-white p-2 ${isMobile ? "mx-auto w-fit max-w-full" : ""}`}>
                   <div className="mx-auto mb-1 inline-flex items-center justify-center gap-1">
-                    <span className="text-[10px] text-gray-600">W</span>
+                    <span className="text-[12px] font-bold text-gray-800">W</span>
                     <SizeInput value={activeResizeSettings.widthInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("width", v)} title={useMetric(lang) ? t("editor.widthTitleCm") : t("editor.widthTitle")} max={artboardWidth} lang={lang} />
-                    <span className="text-[9px] text-gray-600">{getUnitSuffix(activeResizeSettings.widthInches * activeDesignTransform.s, lang)}</span>
+                    <span className="text-[11px] font-medium text-gray-700">{getUnitSuffix(activeResizeSettings.widthInches * activeDesignTransform.s, lang)}</span>
                   </div>
                   <button
                     type="button"
@@ -720,15 +720,15 @@ export default function ImageEditorView() {
                     {proportionalLock ? <Link className="h-3.5 w-3.5" /> : <Unlink className="h-3.5 w-3.5" />}
                   </button>
                   <div className="mx-auto inline-flex items-center justify-center gap-1">
-                    <span className="text-[10px] text-gray-600">H</span>
+                    <span className="text-[12px] font-bold text-gray-800">H</span>
                     <SizeInput value={activeResizeSettings.heightInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("height", v)} title={useMetric(lang) ? t("editor.heightTitleCm") : t("editor.heightTitle")} max={artboardHeight} lang={lang} />
-                    <span className="text-[9px] text-gray-600">{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>
+                    <span className="text-[11px] font-medium text-gray-700">{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>
                   </div>
                 </div>
                 <button
                   onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2 })}
                   disabled={designs.length < 2 && selectedDesignIds.size < 2}
-                  className={`mx-auto flex min-h-[36px] items-center justify-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
+                   className={`mx-auto flex min-h-[36px] items-center justify-center gap-1 rounded-md px-2 py-1 text-[12px] font-semibold transition-colors ${
                     designs.length >= 2 || selectedDesignIds.size >= 2
                       ? "border border-pink-600 bg-pink-500 text-black shadow-md shadow-pink-500/25 hover:bg-pink-600"
                       : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"

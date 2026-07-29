@@ -271,7 +271,7 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
             <button
               onClick={() => handleDuplicateAndArrange(duplicateCount)}
               disabled={!selectedDesignId}
-              className={`flex items-center gap-1 px-2 py-1 lg:px-4 lg:py-2 rounded-md transition-all whitespace-nowrap ${lang !== 'en' ? 'text-[10px] lg:text-sm' : 'text-[11px] lg:text-sm'} font-medium shadow-sm min-h-[36px] ${
+              className={`flex items-center gap-1 px-2 py-1 lg:px-4 lg:py-2 rounded-md transition-all whitespace-nowrap ${lang !== 'en' ? 'text-[11px] lg:text-sm' : 'text-[12px] lg:text-sm'} font-semibold shadow-sm min-h-[36px] ${
                 selectedDesignId
                   ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
                   : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
@@ -320,7 +320,7 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
           <button
             onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2 })}
             disabled={designs.length < 2 && selectedDesignIds.size < 2}
-            className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap font-medium shadow-sm min-h-[36px] ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ml-auto ${
+            className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap font-semibold shadow-sm min-h-[36px] ${lang !== 'en' ? 'text-[11px]' : 'text-[12px]'} ml-auto ${
               designs.length >= 2 || selectedDesignIds.size >= 2
                 ? 'bg-pink-500 hover:bg-pink-600 text-black border border-pink-600 shadow-md shadow-pink-500/25'
                 : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
@@ -401,7 +401,7 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
               <span className={`font-medium text-gray-700 ${lang === 'en' ? 'text-[11px]' : 'text-[10px]'}`}>{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>
             </div>
             {showSizeHint && (
-              <span className="ml-1 inline-flex flex-shrink-0 items-center gap-1 rounded-full border border-cyan-300 bg-cyan-50 px-2 py-0.5 text-[10px] text-cyan-700 animate-pulse">
+              <span className="ml-1 inline-flex flex-shrink-0 items-center gap-1 rounded-full border border-cyan-300 bg-cyan-50 px-2 py-0.5 text-[11px] text-cyan-700 animate-pulse">
                 ← Click to resize
                 <button
                   type="button"
@@ -414,7 +414,7 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
               </span>
             )}
             <span
-              className={`text-[9px] font-semibold px-1.5 py-0.5 rounded flex-shrink-0 inline-flex items-center gap-1.5 ${
+              className={`text-[11px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 inline-flex items-center gap-1.5 ${
                 effectiveDPI < 198
                   ? 'text-amber-600 bg-amber-100 border border-amber-400'
                   : effectiveDPI < 277
@@ -424,7 +424,7 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
               title={t("editor.effectiveRes", { dpi: effectiveDPI })}
             >
               <span>{effectiveDPI} DPI</span>
-              <span className="text-[8px] font-medium opacity-90 hidden sm:inline">
+              <span className="text-[10px] font-medium opacity-90 hidden sm:inline">
                 {effectiveDPI < 198 ? 'Low Res' : effectiveDPI < 277 ? 'Okay to print' : 'Excellent'}
               </span>
             </span>
@@ -515,7 +515,7 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
         <div className="flex items-center gap-1.5 flex-shrink-0">
           <div className="w-px h-5 bg-gray-100 hidden lg:block" />
           <div className="flex items-center gap-1">
-            <span className="text-[10px] text-gray-600">{t("editor.margin")}</span>
+            <span className="text-[11px] font-medium text-gray-700">{t("editor.margin")}</span>
             <select
               value={designGap === undefined ? "auto" : String(designGap)}
               onChange={(e) => {
@@ -526,7 +526,7 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
                   setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true }), 0);
                 }
               }}
-              className="h-5 px-1 bg-gray-100 border border-gray-300 rounded text-[10px] text-gray-700 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
+              className="h-7 px-1.5 bg-gray-100 border border-gray-300 rounded text-[11px] font-medium text-gray-800 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
               title={useMetric(lang) ? t("editor.marginGapCm") : t("editor.marginGap")}
             >
               <option value="auto">{t("editor.marginAuto")}</option>
@@ -560,9 +560,9 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
                 <button onClick={() => handleAlignAxis("horizontal")} className="flex h-7 w-7 items-center justify-center rounded text-gray-600 hover:bg-white hover:text-cyan-600" title="Center horizontally">
                   <AlignCenterHorizontal className="h-4 w-4" />
                 </button>
-                <span className="min-w-[38px] text-center text-[10px] font-medium tabular-nums text-gray-600">{Math.round(activeDesignTransform.rotation || 0)}°</span>
+                <span className="min-w-[38px] text-center text-[12px] font-semibold tabular-nums text-gray-700">{Math.round(activeDesignTransform.rotation || 0)}°</span>
                 {[0, 90, 180, 270].map(deg => (
-                  <button key={deg} onClick={() => handleSetRotation(deg)} className="flex h-7 min-w-7 items-center justify-center rounded px-1 text-[10px] font-medium text-gray-600 hover:bg-white hover:text-cyan-600">
+                  <button key={deg} onClick={() => handleSetRotation(deg)} className="flex h-8 min-w-8 items-center justify-center rounded px-1 text-[11px] font-semibold text-gray-700 hover:bg-white hover:text-cyan-600">
                     {deg}°
                   </button>
                 ))}

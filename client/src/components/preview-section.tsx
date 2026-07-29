@@ -3140,10 +3140,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
             </div>
             <div className="absolute bottom-0 left-0 right-3.5 flex justify-center pointer-events-none">
-              <span className={`text-gray-600 font-medium tracking-wide ${lang === 'en' ? 'text-[10px]' : 'text-[9px]'}`} style={{ transform: 'translateY(2px)' }}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
+              <span className={`text-gray-700 font-semibold tracking-wide ${lang === 'en' ? 'text-[11px]' : 'text-[10px]'}`} style={{ transform: 'translateY(2px)' }}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
             </div>
             <div className="absolute right-1 top-0 bottom-4 flex items-center pointer-events-none">
-              <span className={`text-gray-600 font-medium tracking-wide ${lang === 'en' ? 'text-[10px]' : 'text-[9px]'}`} style={{ writingMode: 'vertical-rl' }}>{formatLength(artboardHeight, lang)}{lang === "en" ? '"' : ""}</span>
+              <span className={`text-gray-700 font-semibold tracking-wide ${lang === 'en' ? 'text-[11px]' : 'text-[10px]'}`} style={{ writingMode: 'vertical-rl' }}>{formatLength(artboardHeight, lang)}{lang === "en" ? '"' : ""}</span>
             </div>
           </div>
           {/* Horizontal scrollbar */}
@@ -3398,7 +3398,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                           />
                         ) : (
                           <span
-                            className="text-[11px] text-gray-600 font-medium cursor-pointer hover:text-gray-900 tabular-nums"
+                            className="text-[12px] text-gray-700 font-semibold cursor-pointer hover:text-gray-900 tabular-nums"
                             title={t("preview.editRotation")}
                             onClick={() => {
                               setRotationInput(String(Math.round(designTransform.rotation || 0)));
@@ -3421,7 +3421,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                       if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
                       resetView();
                     }}
-                    className="min-w-[40px] min-h-[40px] h-8 px-2 hover:bg-gray-200 rounded text-gray-600 whitespace-nowrap text-[11px] flex items-center justify-center"
+                    className="min-w-[40px] min-h-[40px] h-8 px-2 hover:bg-gray-200 rounded text-gray-700 whitespace-nowrap text-[12px] font-medium flex items-center justify-center"
                     title={t("preview.resetView")}
                   >
                     <RotateCcw className="h-3.5 w-3.5 mr-1 flex-shrink-0" />
@@ -3448,7 +3448,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                   >
                     <ZoomOut className="h-4 w-4 text-gray-600" />
                   </Button>
-                  <span className="text-[11px] text-gray-600 min-w-[32px] text-center font-medium tabular-nums px-0.5">
+                  <span className="text-[12px] text-gray-700 min-w-[36px] text-center font-semibold tabular-nums px-0.5">
                     {Math.round(zoom * 100)}%
                   </span>
                   <Button
@@ -3477,7 +3477,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                     variant="ghost"
                     size="sm"
                     onClick={() => setSelectionZoomActive(prev => !prev)}
-                    className={`h-6 px-1.5 hover:bg-gray-200 rounded whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} ${selectionZoomActive ? 'bg-cyan-500/20 text-cyan-400' : 'text-gray-600'} flex items-center`}
+                     className={`h-7 px-2 hover:bg-gray-200 rounded whitespace-nowrap ${lang !== 'en' ? 'text-[11px]' : 'text-[12px]'} ${selectionZoomActive ? 'bg-cyan-500/20 text-cyan-600' : 'text-gray-700'} flex items-center font-medium`}
                     title={t("preview.selectionZoom")}
                   >
                     <ScanSearch className="h-2.5 w-2.5 mr-0.5 flex-shrink-0" />
@@ -3492,7 +3492,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                       if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
                       resetView();
                     }}
-                    className={`h-6 px-1.5 hover:bg-gray-200 rounded text-gray-600 whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'}`}
+                     className={`h-7 px-2 hover:bg-gray-200 rounded text-gray-700 whitespace-nowrap ${lang !== 'en' ? 'text-[11px]' : 'text-[12px]'} font-medium`}
                     title={t("preview.resetView")}
                   >
                     <RotateCcw className="h-2.5 w-2.5 mr-0.5 flex-shrink-0" />
@@ -3504,7 +3504,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                     variant="ghost"
                     size="sm"
                     onClick={zoomToSelected}
-                    className={`${isMobile ? 'min-w-[36px] min-h-[36px] h-8 w-8 p-0 justify-center' : 'h-6 px-1.5'} hover:bg-gray-200 rounded text-gray-600 whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} flex items-center`}
+                     className={`${isMobile ? 'min-w-[36px] min-h-[36px] h-8 w-8 p-0 justify-center' : 'h-7 px-2'} hover:bg-gray-200 rounded text-gray-700 whitespace-nowrap ${lang !== 'en' ? 'text-[11px]' : 'text-[12px]'} font-medium flex items-center`}
                     title={t("preview.focusTitle")}
                   >
                     <Focus className={`${isMobile ? 'h-4 w-4' : 'h-2.5 w-2.5 mr-0.5'} flex-shrink-0`} />
