@@ -87,6 +87,7 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
     rawParams["test"] === "1" ||
     rawParams["test"] === "true" ||
     window.location.pathname === "/test-builder";
+  const directEmbedMode = window.location.pathname === "/embed";
   /** Opened from Shopify (proxy / product) — skip landing-style chrome and upload gate */
   const embedFromShopify = !!(ctxToken || shopDomain || isAdminEditMode);
   /** Opt-in only: ?storefront=1 fetches sizes from Storefront API (needs env vars). Default is builder_context only. */
@@ -95,6 +96,7 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
   /** Editor only when coming from Shopify (ctx / shop) or optional dev: ?storefront=1&variant= */
   const allowEditor =
     testMode ||
+    directEmbedMode ||
     Boolean(ctxToken) ||
     Boolean(shopDomain) ||
     isAdminEditMode ||
