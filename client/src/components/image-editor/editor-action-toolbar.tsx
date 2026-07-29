@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import UploadSection from "../upload-section";
 import SizeInput from "./size-input";
 import {
@@ -20,6 +21,7 @@ import {
   Trash2,
   Undo2,
   Unlink,
+  X,
 } from "lucide-react";
 import { formatLength, getUnitSuffix, useMetric } from "@/lib/format-length";
 import { formatVariantPriceForDisplay } from "@/lib/variant-price";
@@ -152,6 +154,18 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
         ? t("editor.processing")
         : t("controls.addToCart");
   const cartButtonTitle = !canAddToCart ? t("controls.uploadFirst") : cartButtonLabel;
+  const [showSizeHint, setShowSizeHint] = useState(false);
+  const hadImageRef = useRef(false);
+
+  useEffect(() => {
+    if (activeImageInfo && !hadImageRef.current) {
+      hadImageRef.current = true;
+      setShowSizeHint(true);
+      const timer = window.setTimeout(() => setShowSizeHint(false), 5000);
+      return () => window.clearTimeout(timer);
+    }
+    if (!activeImageInfo) hadImageRef.current = false;
+  }, [activeImageInfo]);
 
   return (
     <>
@@ -368,9 +382,9 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
         <>
           <div className="w-px h-5 bg-gray-100 flex-shrink-0 hidden lg:block" />
           <div className="flex items-center gap-1.5 min-w-0 flex-shrink-0">
-            <span className="text-[10px] font-medium text-gray-600">Size</span>
+            <span className="mr-1 text-[10px] font-semibold text-gray-500">Size</span>
             {selectedDesignIds.size > 1 && (
-              <span className="rounded-full bg-cyan-100 px-1.5 py-0.5 text-[9px] font-semibold leading-4 text-cyan-700" title={`${selectedDesignIds.size} designs selected`}>
+              <span className="mr-1 flex-shrink-0 rounded-full border border-cyan-300 bg-cyan-50 px-1 py-px text-[9px] font-bold tabular-nums text-cyan-600" title={`Resize applies to all ${selectedDesignIds.size} selected designs`}>
                 ×{selectedDesignIds.size}
               </span>
             )}
@@ -378,7 +392,7 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
               <span className="text-[10px] text-gray-600">W</span>
               <SizeInput
                 value={activeResizeSettings.widthInches * activeDesignTransform.s}
-                onCommit={(v) => handleEffectiveSizeChange("width", v)}
+                onCommit={(v) => { handleEffectiveSizeChange("width", v); setShowSizeHint(false); }}
                 title={useMetric(lang) ? t("editor.widthTitleCm") : t("editor.widthTitle")}
                 max={artboardWidth}
                 lang={lang}
@@ -394,13 +408,26 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
               <span className="text-[10px] text-gray-600">H</span>
               <SizeInput
                 value={activeResizeSettings.heightInches * activeDesignTransform.s}
-                onCommit={(v) => handleEffectiveSizeChange("height", v)}
+                onCommit={(v) => { handleEffectiveSizeChange("height", v); setShowSizeHint(false); }}
                 title={useMetric(lang) ? t("editor.heightTitleCm") : t("editor.heightTitle")}
                 max={artboardHeight}
                 lang={lang}
               />
               <span className={`text-gray-600 ${lang === 'en' ? 'text-[10px]' : 'text-[9px]'}`}>{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>
             </div>
+            {showSizeHint && (
+              <span className="ml-1 inline-flex flex-shrink-0 items-center gap-1 rounded-full border border-cyan-300 bg-cyan-50 px-2 py-0.5 text-[10px] text-cyan-700 animate-pulse">
+                ← Click to resize
+                <button
+                  type="button"
+                  onClick={() => setShowSizeHint(false)}
+                  className="flex h-3 w-3 items-center justify-center"
+                  aria-label="Dismiss resize hint"
+                >
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              </span>
+            )}
             <span
               className={`text-[9px] font-semibold px-1.5 py-0.5 rounded flex-shrink-0 inline-flex items-center gap-1.5 ${
                 effectiveDPI < 198

@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { cmToInches, useMetric } from "@/lib/format-length";
 
 export default function SizeInput({
@@ -18,9 +19,11 @@ export default function SizeInput({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const onCommitAtFocusRef = useRef<typeof onCommit>(onCommit);
   const metric = useMetric(lang);
   const cm = value * 2.54;
   const useM = metric && cm >= 100;
+  const stepInches = metric ? cmToInches(0.25) : 0.1;
   const display = metric
     ? useM
       ? (cm / 100).toFixed(2)
@@ -35,43 +38,82 @@ export default function SizeInput({
         ? cmToInches(v * 100)
         : cmToInches(v)
       : v;
-    onCommit(Math.max(min, Math.min(inches, max)));
+    onCommitAtFocusRef.current(Math.max(min, Math.min(inches, max)));
   };
+
+  const step = (delta: number) => {
+    onCommit(Math.max(min, Math.min(max, value + delta)));
+  };
+
+  const arrows = (
+    <div className="flex flex-col" style={{ gap: 1 }}>
+      <button
+        type="button"
+        tabIndex={-1}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => step(stepInches)}
+        className="flex h-3 items-center justify-center rounded-sm text-gray-500 hover:bg-cyan-50 hover:text-cyan-600"
+        aria-label="Increase size"
+      >
+        <ChevronUp className="h-2.5 w-2.5" strokeWidth={3} />
+      </button>
+      <button
+        type="button"
+        tabIndex={-1}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => step(-stepInches)}
+        className="flex h-3 items-center justify-center rounded-sm text-gray-500 hover:bg-cyan-50 hover:text-cyan-600"
+        aria-label="Decrease size"
+      >
+        <ChevronDown className="h-2.5 w-2.5" strokeWidth={3} />
+      </button>
+    </div>
+  );
 
   if (editing) {
     return (
-      <input
-        type="text"
-        inputMode="decimal"
-         className={`h-7 bg-white border border-cyan-500 rounded-md font-semibold text-gray-900 text-center outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${metric ? 'w-16 text-[11px]' : 'w-14 text-xs'}`}
-        value={draft}
-        autoFocus
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={() => {
-          commit(draft);
-          setEditing(false);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
+      <div className="flex items-center gap-0.5">
+        <input
+          type="text"
+          inputMode="decimal"
+          className={`h-7 bg-white border border-cyan-500 rounded-md font-semibold text-gray-900 text-center outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${metric ? 'w-16 text-[11px]' : 'w-14 text-xs'}`}
+          value={draft}
+          autoFocus
+          onChange={(e) => setDraft(e.target.value)}
+          onFocus={() => {
+            onCommitAtFocusRef.current = onCommit;
+          }}
+          onBlur={() => {
             commit(draft);
             setEditing(false);
-          } else if (e.key === "Escape") setEditing(false);
-        }}
-        title={title}
-      />
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              commit(draft);
+              setEditing(false);
+            } else if (e.key === "Escape") setEditing(false);
+          }}
+          title={title}
+        />
+        {arrows}
+      </div>
     );
   }
   return (
-    <input
-      type="text"
-      readOnly
-      className={`h-7 bg-white border border-gray-300 rounded-md font-semibold text-gray-900 text-center outline-none cursor-pointer hover:border-cyan-400 transition-colors ${metric ? 'w-16 text-[11px]' : 'w-14 text-xs'}`}
-      value={display}
-      onFocus={() => {
-        setDraft(display);
-        setEditing(true);
-      }}
-      title={title}
-    />
+    <div className="flex items-center gap-0.5">
+      <input
+        type="text"
+        readOnly
+        className={`h-7 bg-white border border-gray-300 rounded-md font-semibold text-gray-900 text-center outline-none cursor-pointer hover:border-cyan-400 transition-colors ${metric ? 'w-16 text-[11px]' : 'w-14 text-xs'}`}
+        value={display}
+        onFocus={() => {
+          onCommitAtFocusRef.current = onCommit;
+          setDraft(display);
+          setEditing(true);
+        }}
+        title={title}
+      />
+      {arrows}
+    </div>
   );
 }
