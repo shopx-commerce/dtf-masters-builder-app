@@ -7,8 +7,6 @@ export interface ProfileConfig {
   gangsheetHeights: number[];
   downloadFormat: 'png' | 'pdf';
   enableFluorescent: boolean;
-  /** Whether the Halftone tool is available for this product profile. */
-  enableHalftone?: boolean;
   description: string;
   comingSoon?: boolean;
 }
@@ -47,7 +45,6 @@ export const UV_DTF_PROFILE: ProfileConfig = {
   gangsheetHeights: [],
   downloadFormat: 'png',
   enableFluorescent: false,
-  enableHalftone: false,
   description: 'Perfect UV stickers that go on acrylic, plastic, glass and many hard surfaces. Not dishwasher safe.',
 };
 
@@ -60,7 +57,6 @@ export const SPECIALTY_DTF_PROFILE: ProfileConfig = {
   gangsheetHeights: [],
   downloadFormat: 'png',
   enableFluorescent: false,
-  enableHalftone: false,
   description: 'Use a parchment paper or teflon sheet over the transfer, press at 325F for 15 seconds and peel completely COLD! will not work on canvas material but it works on cotton/polyester tshirts.',
 };
 

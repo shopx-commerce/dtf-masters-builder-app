@@ -12,12 +12,6 @@
   cursor: crosshair !important;
 }
 
-/* Fluorescent color selection must also win over inline zoom/drag cursor writes. */
-.preview-canvas-area[data-spot-active="true"],
-.preview-canvas-area[data-spot-active="true"] * {
-  cursor: crosshair !important;
-}
-
 :root {
   --background: hsl(0, 0%, 100%);
   --foreground: hsl(0, 0%, 0%);

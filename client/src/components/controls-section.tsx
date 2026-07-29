@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ResizeSettings, ImageInfo } from "./image-editor";
-import { Download, Layers, FileCheck, Palette, Eye, EyeOff, ChevronDown, ChevronUp, Info, ShoppingCart, Sun, Wand2, Sparkles, Undo2 } from "lucide-react";
+import { Download, Layers, FileCheck, Palette, Eye, EyeOff, ChevronDown, ChevronUp, Info, ShoppingCart, Eraser, WandSparkles, Sparkles, Undo2 } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
 import { formatLength } from "@/lib/format-length";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -595,7 +595,7 @@ export default function ControlsSection({
               className="flex-1 gap-1 border-amber-200 bg-amber-50 text-[11px] text-amber-700 hover:bg-amber-100"
               title="Remove contiguous white or off-white background"
             >
-              <Sun className="h-3.5 w-3.5" />
+              <Eraser className="h-3.5 w-3.5" />
               White BG
             </Button>
             <Button
@@ -608,7 +608,7 @@ export default function ControlsSection({
                 : "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-600 hover:bg-fuchsia-100"}`}
               title={wandDeleteActive ? "Magic Wand active — click a color to erase it" : "Erase a connected color from the selected design"}
             >
-              <Wand2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <WandSparkles className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               {wandDeleteActive ? "Wand ON" : "Magic Wand"}
             </Button>
           </div>

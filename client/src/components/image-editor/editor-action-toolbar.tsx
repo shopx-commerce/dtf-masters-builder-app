@@ -14,6 +14,8 @@ import {
   Loader2,
   Redo2,
   RotateCw,
+  AlignCenterHorizontal,
+  AlignCenterVertical,
   ShoppingCart,
   Trash2,
   Undo2,
@@ -65,6 +67,8 @@ export type EditorActionToolbarProps = {
   effectiveDPI: number;
   handleEffectiveSizeChange: (axis: "width" | "height", value: number) => void;
   handleRotate90: () => void;
+  handleSetRotation: (degrees: number) => void;
+  handleAlignAxis: (axis: "horizontal" | "vertical") => void;
   handleAlignCorner: (corner: "tl" | "tr" | "bl" | "br") => void;
   isMobile: boolean;
   isLgUp: boolean;
@@ -121,6 +125,8 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
     effectiveDPI,
     handleEffectiveSizeChange,
     handleRotate90,
+    handleSetRotation,
+    handleAlignAxis,
     handleAlignCorner,
     isMobile,
     isLgUp,
@@ -362,6 +368,11 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
         <>
           <div className="w-px h-5 bg-gray-100 flex-shrink-0 hidden lg:block" />
           <div className="flex items-center gap-1.5 min-w-0 flex-shrink-0">
+            {selectedDesignIds.size > 1 && (
+              <span className="rounded-full bg-cyan-100 px-1.5 py-0.5 text-[9px] font-semibold text-cyan-700" title={`${selectedDesignIds.size} designs selected`}>
+                ×{selectedDesignIds.size}
+              </span>
+            )}
             <div className="flex items-center gap-0.5 flex-shrink-0 flex-wrap">
               <span className="text-[10px] text-gray-600">W</span>
               <SizeInput
@@ -511,6 +522,22 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
             >
               <RotateCw className="w-4 h-4" />
             </button>
+            {selectedDesignId && (
+              <div className="flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-1 py-0.5">
+                <button onClick={() => handleAlignAxis("vertical")} className="rounded p-1 text-gray-600 hover:bg-white hover:text-cyan-600" title="Center vertically">
+                  <AlignCenterVertical className="h-3.5 w-3.5" />
+                </button>
+                <button onClick={() => handleAlignAxis("horizontal")} className="rounded p-1 text-gray-600 hover:bg-white hover:text-cyan-600" title="Center horizontally">
+                  <AlignCenterHorizontal className="h-3.5 w-3.5" />
+                </button>
+                <span className="min-w-[34px] text-center text-[10px] tabular-nums text-gray-600">{Math.round(activeDesignTransform.rotation || 0)}°</span>
+                {[0, 90, 180, 270].map(deg => (
+                  <button key={deg} onClick={() => handleSetRotation(deg)} className="rounded px-1 py-0.5 text-[9px] text-gray-600 hover:bg-white hover:text-cyan-600">
+                    {deg}°
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="grid grid-cols-4 gap-0.5 lg:contents">
               <button
                 onClick={() => handleAlignCorner('tl')}

@@ -509,63 +509,45 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       const centerX = centerNx * artboardWidth;
       const centerY = centerNy * artboardHeight;
 
-      const unclamped = new Map<string, { nx: number; ny: number; s: number }>();
+      // Derive the largest legal group scale analytically. Every selected
+      // design shares the same ratio, so each artboard edge produces a
+      // linear upper bound on that ratio.
+      let maxScale = Number.POSITIVE_INFINITY;
       for (const d of prev) {
         if (!selectedDesignIds.has(d.id)) continue;
         const start = starts.get(d.id);
         if (!start) continue;
-        const newS = Math.max(0.05, start.s * scaleRatio);
-        const px = start.nx * artboardWidth - centerX;
-        const py = start.ny * artboardHeight - centerY;
-        unclamped.set(d.id, {
-          nx: (centerX + px * scaleRatio) / artboardWidth,
-          ny: (centerY + py * scaleRatio) / artboardHeight,
-          s: newS,
-        });
-      }
-
-      let shiftR = 0, shiftL = 0, shiftD = 0, shiftU = 0;
-      for (const d of prev) {
-        if (!selectedDesignIds.has(d.id)) continue;
-        const u = unclamped.get(d.id);
-        if (!u) continue;
         const rad = (d.transform.rotation * Math.PI) / 180;
         const cos = Math.abs(Math.cos(rad));
         const sin = Math.abs(Math.sin(rad));
-        const halfW = (d.widthInches * u.s * cos + d.heightInches * u.s * sin) / 2;
-        const halfH = (d.widthInches * u.s * sin + d.heightInches * u.s * cos) / 2;
-        const minNx = halfW / artboardWidth;
-        const maxNx = 1 - halfW / artboardWidth;
-        const minNy = halfH / artboardHeight;
-        const maxNy = 1 - halfH / artboardHeight;
-        if (minNx <= maxNx) {
-          if (u.nx < minNx) shiftR = Math.max(shiftR, minNx - u.nx);
-          if (u.nx > maxNx) shiftL = Math.max(shiftL, u.nx - maxNx);
-        }
-        if (minNy <= maxNy) {
-          if (u.ny < minNy) shiftD = Math.max(shiftD, minNy - u.ny);
-          if (u.ny > maxNy) shiftU = Math.max(shiftU, u.ny - maxNy);
-        }
+        const halfW = (d.widthInches * start.s * cos + d.heightInches * start.s * sin) / 2;
+        const halfH = (d.widthInches * start.s * sin + d.heightInches * start.s * cos) / 2;
+        const dx = start.nx * artboardWidth - centerX;
+        const dy = start.ny * artboardHeight - centerY;
+        const cap = (a: number, b: number) => {
+          if (b > 0) maxScale = Math.min(maxScale, a / b);
+        };
+        cap(centerX, halfW - dx);
+        cap(artboardWidth - centerX, halfW + dx);
+        cap(centerY, halfH - dy);
+        cap(artboardHeight - centerY, halfH + dy);
       }
-      const groupDnx = shiftR - shiftL;
-      const groupDny = shiftD - shiftU;
+      const appliedRatio = Math.max(0.05, Math.min(scaleRatio, maxScale));
 
       return prev.map(d => {
         if (!selectedDesignIds.has(d.id)) return d;
-        const u = unclamped.get(d.id);
-        if (!u) return d;
-        const rad = (d.transform.rotation * Math.PI) / 180;
-        const cos = Math.abs(Math.cos(rad));
-        const sin = Math.abs(Math.sin(rad));
-        const halfW = (d.widthInches * u.s * cos + d.heightInches * u.s * sin) / 2;
-        const halfH = (d.widthInches * u.s * sin + d.heightInches * u.s * cos) / 2;
-        const adjNx = u.nx + groupDnx;
-        const adjNy = u.ny + groupDny;
-        const clampedNx = Math.max(halfW / artboardWidth, Math.min(1 - halfW / artboardWidth, adjNx));
-        const clampedNy = Math.max(halfH / artboardHeight, Math.min(1 - halfH / artboardHeight, adjNy));
+        const start = starts.get(d.id);
+        if (!start) return d;
+        const px = start.nx * artboardWidth - centerX;
+        const py = start.ny * artboardHeight - centerY;
         return {
           ...d,
-          transform: { ...d.transform, s: u.s, nx: clampedNx, ny: clampedNy },
+          transform: {
+            ...d.transform,
+            s: Math.max(0.05, start.s * appliedRatio),
+            nx: (centerX + px * appliedRatio) / artboardWidth,
+            ny: (centerY + py * appliedRatio) / artboardHeight,
+          },
         };
       });
     });
@@ -653,46 +635,41 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
 
   const handleEffectiveSizeChange = useCallback((axis: 'width' | 'height', value: number) => {
     if (!selectedDesignId || value <= 0) return;
-    const design = designs.find(d => d.id === selectedDesignId);
-    if (!design) return;
-    const currentS = design.transform.s;
-    const currentW = design.widthInches;
-    const currentH = design.heightInches;
-    if (currentW <= 0 || currentH <= 0 || currentS <= 0) return;
+    const ids = selectedDesignIds.size > 1 ? selectedDesignIds : new Set([selectedDesignId]);
+    const targets = designs.filter(d => ids.has(d.id));
+    if (targets.length === 0) return;
     saveSnapshot();
-
-    const rad = (design.transform.rotation * Math.PI) / 180;
-    const cosR = Math.abs(Math.cos(rad));
-    const sinR = Math.abs(Math.sin(rad));
-    const maxEffW = artboardWidth / Math.max(0.001, cosR + (currentH / currentW) * sinR);
-    const maxEffH = artboardHeight / Math.max(0.001, sinR * (currentW / currentH) + cosR);
-    const clampedValue = axis === 'width'
-      ? Math.min(value, maxEffW)
-      : Math.min(value, maxEffH);
-
-    if (proportionalLock) {
-      const newS = axis === 'width' ? clampedValue / currentW : clampedValue / currentH;
-      const updated = { ...design, transform: { ...design.transform, s: newS } };
-      const { nx, ny } = clampDesignToArtboard(updated, artboardWidth, artboardHeight);
-      const newTransform = { ...design.transform, s: newS, nx, ny };
-      setDesignTransform(newTransform);
-      setDesigns(prev => prev.map(d => d.id === selectedDesignId ? { ...d, transform: newTransform } : d));
-    } else {
-      if (axis === 'width') {
-        const newW = Math.max(0.01, Math.min(artboardWidth, clampedValue / currentS));
-        const updated = { ...design, widthInches: newW };
-        const { nx, ny } = clampDesignToArtboard(updated, artboardWidth, artboardHeight);
-        setResizeSettings(prev => ({ ...prev, widthInches: newW }));
-        setDesigns(prev => prev.map(d => d.id === selectedDesignId ? { ...d, widthInches: newW, transform: { ...d.transform, nx, ny } } : d));
+    setDesigns(prev => prev.map(design => {
+      if (!ids.has(design.id)) return design;
+      const currentS = design.transform.s;
+      const currentW = design.widthInches;
+      const currentH = design.heightInches;
+      if (currentW <= 0 || currentH <= 0 || currentS <= 0) return design;
+      const requested = Math.max(0.01, value);
+      const next = { ...design };
+      if (proportionalLock) {
+        const newS = axis === 'width' ? requested / currentW : requested / currentH;
+        next.transform = { ...design.transform, s: newS };
+      } else if (axis === 'width') {
+        next.widthInches = Math.min(artboardWidth, requested / currentS);
       } else {
-        const newH = Math.max(0.01, Math.min(artboardHeight, clampedValue / currentS));
-        const updated = { ...design, heightInches: newH };
-        const { nx, ny } = clampDesignToArtboard(updated, artboardWidth, artboardHeight);
-        setResizeSettings(prev => ({ ...prev, heightInches: newH }));
-        setDesigns(prev => prev.map(d => d.id === selectedDesignId ? { ...d, heightInches: newH, transform: { ...d.transform, nx, ny } } : d));
+        next.heightInches = Math.min(artboardHeight, requested / currentS);
+      }
+      const clamped = clampDesignToArtboard(next, artboardWidth, artboardHeight);
+      next.transform = { ...next.transform, nx: clamped.nx, ny: clamped.ny };
+      return next;
+    }));
+    const active = targets.find(d => d.id === selectedDesignId);
+    if (active) {
+      if (proportionalLock) {
+        setDesignTransform(prev => ({ ...prev, s: axis === 'width' ? value / active.widthInches : value / active.heightInches }));
+      } else {
+        setResizeSettings(prev => axis === 'width'
+          ? { ...prev, widthInches: Math.min(artboardWidth, value / active.transform.s) }
+          : { ...prev, heightInches: Math.min(artboardHeight, value / active.transform.s) });
       }
     }
-  }, [selectedDesignId, designs, proportionalLock, saveSnapshot, artboardWidth, artboardHeight]);
+  }, [selectedDesignId, selectedDesignIds, designs, proportionalLock, saveSnapshot, artboardWidth, artboardHeight]);
 
   const isArtboardFull = useCallback((extraDesigns?: DesignItem[]) => {
     if (designs.length === 0) return false;
