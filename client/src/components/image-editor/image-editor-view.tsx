@@ -49,7 +49,7 @@ export default function ImageEditorView() {
     handleDragLeave, handleDragOver, handleDrop, handleSelectDesign, handleMultiSelect,
     handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta,
     handleEffectiveSizeChange, handleResizeChange, handleDuplicateDesign,
-    handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy,
+    handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleSetGroupCount,
     handleDeleteDesign, handleDeleteGroup, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleAlignCorner,
     handleAutoArrange, handleArtboardResize, handleExpandArtboard, handleThresholdAlpha,
     handleThresholdAlphaAll, handleCropDesign, handleCropApply, handleDownload, handleAddToCart,
@@ -63,6 +63,8 @@ export default function ImageEditorView() {
     setArtboardHeight, setQuantity,
   } = useImageEditorContext();
   const [activeSpotChannel, setActiveSpotChannel] = useState<string | null>(null);
+  const [editingCountKey, setEditingCountKey] = useState<string | null>(null);
+  const [editingCountValue, setEditingCountValue] = useState("");
   const [panModeActive, setPanModeActive] = useState(false);
   const wandAssignRef = useRef<((nx: number, ny: number) => void) | null>(null);
   const clearActiveChannelRef = useRef<(() => void) | null>(null);
@@ -430,7 +432,43 @@ export default function ImageEditorView() {
                         >
                           <Minus className="w-2.5 h-2.5" strokeWidth={3} />
                         </button>
-                        <span className="text-[10px] text-cyan-400 font-semibold min-w-[18px] text-center tabular-nums">x{count}</span>
+                        {editingCountKey === `${row.baseName}::${row.sizeKey}` ? (
+                          <input
+                            type="number"
+                            min={1}
+                            max={200}
+                            autoFocus
+                            className="h-4 w-8 rounded border border-cyan-400 bg-white text-center text-[10px] font-semibold tabular-nums text-cyan-600 outline-none"
+                            value={editingCountValue}
+                            onChange={(e) => setEditingCountValue(e.target.value)}
+                            onClick={(e) => e.stopPropagation()}
+                            onBlur={() => {
+                              handleSetGroupCount(row, parseInt(editingCountValue, 10));
+                              setEditingCountKey(null);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                handleSetGroupCount(row, parseInt(editingCountValue, 10));
+                                setEditingCountKey(null);
+                              } else if (e.key === "Escape") {
+                                setEditingCountKey(null);
+                              }
+                              e.stopPropagation();
+                            }}
+                          />
+                        ) : (
+                          <span
+                            className="min-w-[18px] cursor-pointer text-center text-[10px] font-semibold tabular-nums text-cyan-400 hover:text-cyan-600"
+                            title="Click to set exact count"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingCountKey(`${row.baseName}::${row.sizeKey}`);
+                              setEditingCountValue(String(count));
+                            }}
+                          >
+                            x{count}
+                          </span>
+                        )}
                         <button
                           onClick={(e) => { e.stopPropagation(); handleDuplicateById(first.id); }}
                           className="w-4 h-4 rounded-full bg-gray-200 hover:bg-cyan-100 text-gray-600 hover:text-cyan-600 flex items-center justify-center transition-colors"

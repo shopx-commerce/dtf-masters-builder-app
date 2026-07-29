@@ -25,6 +25,33 @@ function useImageEditorModel(props: ImageEditorProps) {
   const p5 = useImageEditorModelCart({ ...p0, ...p1, ...p2, ...p3, ...p4 });
   const bag = { ...p0, ...p1, ...p2, ...p3, ...p4, ...p5 };
 
+  const handleSetGroupCount = (row: { designs: typeof bag.designs }, targetCount: number) => {
+    if (!Number.isInteger(targetCount) || targetCount < 1 || targetCount > 200) return;
+    const delta = targetCount - row.designs.length;
+    if (delta === 0) return;
+    bag.saveSnapshot();
+    if (delta > 0) {
+      const base = row.designs[0];
+      const baseName = base.name.replace(/ copy( \d+)?$/, "");
+      const copies = Array.from({ length: delta }, () => ({
+        ...base,
+        id: crypto.randomUUID(),
+        name: baseName,
+        transform: { ...base.transform },
+        printFileName: false,
+      }));
+      bag.setDesigns(prev => [...prev, ...copies]);
+    } else {
+      const idsToRemove = new Set(row.designs.slice(targetCount).map(d => d.id));
+      bag.setDesigns(prev => prev.filter(d => !idsToRemove.has(d.id)));
+      bag.setSelectedDesignIds(prev => new Set([...prev].filter(id => !idsToRemove.has(id))));
+      if (bag.selectedDesignId && idsToRemove.has(bag.selectedDesignId)) {
+        bag.setSelectedDesignId(row.designs.find(d => !idsToRemove.has(d.id))?.id ?? null);
+      }
+    }
+    setTimeout(() => bag.handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true }), 0);
+  };
+
   const handleSetRotation = (degrees: number) => {
     const ids = bag.selectedDesignIds.size > 0
       ? bag.selectedDesignIds
@@ -116,7 +143,7 @@ function useImageEditorModel(props: ImageEditorProps) {
     isProcessing: bag.isProcessing,
   };
 
-  return { ...bag, actionToolbarProps };
+  return { ...bag, handleSetGroupCount, actionToolbarProps };
 }
 
 export type ImageEditorModel = ReturnType<typeof useImageEditorModel>;
