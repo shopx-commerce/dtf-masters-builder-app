@@ -90,9 +90,12 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
   const directEmbedMode = window.location.pathname === "/embed";
   /** Opened from Shopify (proxy / product) — skip landing-style chrome and upload gate */
   const embedFromShopify = !!(ctxToken || shopDomain || isAdminEditMode);
-  /** Opt-in only: ?storefront=1 fetches sizes from Storefront API (needs env vars). Default is builder_context only. */
+  /** Explicit storefront loading remains supported; direct embeds with a variant
+   * also need the variant config so they expose every configured gangsheet size. */
   const useStorefront =
-    rawParams["storefront"] === "1" || rawParams["storefront"] === "true";
+    rawParams["storefront"] === "1" ||
+    rawParams["storefront"] === "true" ||
+    (directEmbedMode && Boolean(variantId));
   /** Editor only when coming from Shopify (ctx / shop) or optional dev: ?storefront=1&variant= */
   const allowEditor =
     testMode ||
