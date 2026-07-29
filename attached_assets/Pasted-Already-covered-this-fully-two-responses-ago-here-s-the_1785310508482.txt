@@ -1,0 +1,85 @@
+Already covered this fully two responses ago — here's the exact spec pulled directly from the code, standalone:
+
+Layers Panel — Editable Count Input
+Each design group row shows − · count · +. The count (x3, x5, etc.) is clickable — it swaps into an inline number input.
+
+State needed:
+
+const [editingCountKey, setEditingCountKey] = useState<string | null>(null);
+const [editingCountValue, setEditingCountValue] = useState('');
+// Key format: `${row.baseName}::${row.sizeKey}` — uniquely identifies each group row
+
+Count display (default):
+
+<span
+  className="text-[10px] text-cyan-400 font-semibold min-w-[18px] text-center tabular-nums cursor-pointer hover:text-cyan-600"
+  title="Click to set exact count"
+  onClick={(e) => {
+    e.stopPropagation();
+    setEditingCountKey(`${row.baseName}::${row.sizeKey}`);
+    setEditingCountValue(String(count));
+  }}
+>
+  x{count}
+</span>
+
+Count edit input (shown when key matches):
+
+{editingCountKey === `${row.baseName}::${row.sizeKey}` ? (
+  <input
+    type="number"
+    min="1"
+    max="200"
+    autoFocus
+    className="w-8 h-4 text-[10px] text-cyan-600 font-semibold text-center border border-cyan-400 rounded bg-white outline-none tabular-nums"
+    value={editingCountValue}
+    onChange={(e) => setEditingCountValue(e.target.value)}
+    onClick={(e) => e.stopPropagation()}
+    onBlur={() => {
+      handleSetGroupCount(row, parseInt(editingCountValue));
+      setEditingCountKey(null);
+    }}
+    onKeyDown={(e) => {
+      if (e.key === 'Enter') {
+        handleSetGroupCount(row, parseInt(editingCountValue));
+        setEditingCountKey(null);
+      } else if (e.key === 'Escape') {
+        setEditingCountKey(null);
+      }
+      e.stopPropagation(); // critical — blocks canvas keyboard shortcuts (arrows, delete, etc.)
+    }}
+  />
+) : (
+  <span ...>x{count}</span>
+)}
+
+Visual details:
+
+w-8 h-4 — compact, fits between the − and + buttons
+text-[10px] text-cyan-600 — matches the cyan color of the count display
+border border-cyan-400 rounded — cyan border signals it's active/editable
+tabular-nums — digits don't shift width as you type
+The surrounding − and + buttons are w-4 h-4 rounded-full, icons w-2.5 h-2.5 strokeWidth={3}
+handleSetGroupCount — adds or removes copies and re-runs auto-arrange:
+
+const handleSetGroupCount = (row, targetCount: number) => {
+  if (isNaN(targetCount) || targetCount < 1 || targetCount > 200) return;
+  const delta = targetCount - row.designs.length;
+  if (delta === 0) return;
+  saveSnapshot();
+  if (delta > 0) {
+    const base = row.designs[0];
+    const copies = Array.from({ length: delta }, () => ({
+      ...base,
+      id: crypto.randomUUID(),
+      name: base.name.replace(/ copy( \d+)?$/, ''),
+      transform: { ...base.transform },
+      printFileName: false,
+    }));
+    setDesigns(prev => [...prev, ...copies]);
+  } else {
+    const idsToRemove = new Set(row.designs.slice(row.designs.length + delta).map(d => d.id));
+    setDesigns(prev => prev.filter(d => !idsToRemove.has(d.id)));
+  }
+  setTimeout(() => handleAutoArrange({ skipSnapshot: true, preserveSelection: true }), 0);
+};
