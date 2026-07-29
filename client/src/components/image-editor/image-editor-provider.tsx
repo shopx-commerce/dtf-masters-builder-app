@@ -8,6 +8,7 @@ import { useImageEditorModelExport } from "./useImageEditorModelExport";
 import { useImageEditorModelCart } from "./useImageEditorModelCart";
 import type { EditorActionToolbarProps } from "./editor-action-toolbar";
 import { clampDesignToArtboard, getRotatedBounds } from "./utils";
+import type { DesignItem } from "@/lib/types";
 
 export type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
 
@@ -116,7 +117,14 @@ function useImageEditorModel(props: ImageEditorProps) {
     // copies do not fit on the current gangsheet.
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        bag.handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true });
+        // Copy-count changes must repack the whole sheet. The newly created
+        // copies are selected for layer feedback, but selected-only arranging
+        // would keep every other design fixed and stack copies in one column.
+        bag.handleAutoArrangeRef.current({
+          skipSnapshot: true,
+          preserveSelection: true,
+          arrangeAll: true,
+        });
       });
     });
   };

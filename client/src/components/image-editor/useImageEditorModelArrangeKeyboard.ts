@@ -102,7 +102,12 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     setDesignTransform(prev => ({ ...prev, nx: pos.nx, ny: pos.ny }));
   }, [selectedDesignId, saveSnapshot, getAlignNxNy]);
 
-  const handleAutoArrange = useCallback((opts?: { skipSnapshot?: boolean; preserveSelection?: boolean }) => {
+  const handleAutoArrange = useCallback((opts?: {
+    skipSnapshot?: boolean;
+    preserveSelection?: boolean;
+    /** Ignore multi-selection and pack every design on the sheet. */
+    arrangeAll?: boolean;
+  }) => {
     const currentDesigns = designsRef.current;
     if (currentDesigns.length === 0) { console.warn('[autoArrange] no designs'); return; }
     if (!opts?.skipSnapshot) saveSnapshot();
@@ -110,7 +115,7 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     const usableW = artboardWidthRef.current;
     const usableH = artboardHeightRef.current;
 
-    const arrangeSelection = selectedDesignIds.size >= 2;
+    const arrangeSelection = !opts?.arrangeAll && selectedDesignIds.size >= 2;
     const designsToArrange = arrangeSelection
       ? currentDesigns.filter(d => selectedDesignIds.has(d.id))
       : currentDesigns;

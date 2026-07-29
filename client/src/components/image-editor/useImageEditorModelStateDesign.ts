@@ -77,7 +77,9 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   const artboardHeightRef = useRef(artboardHeight);
   artboardHeightRef.current = artboardHeight;
   const contentFillCacheRef = useRef<Map<string, number>>(new Map());
-  const handleAutoArrangeRef = useRef<(opts?: { skipSnapshot?: boolean; preserveSelection?: boolean }) => void>(() => {});
+  const handleAutoArrangeRef = useRef<(
+    opts?: { skipSnapshot?: boolean; preserveSelection?: boolean; arrangeAll?: boolean }
+  ) => void>(() => {});
   const [quantity, setQuantity] = useState(initialQuantity ?? 1);
   useEffect(() => {
     if (initialQuantity != null && initialQuantity >= 1) setQuantity(initialQuantity);
