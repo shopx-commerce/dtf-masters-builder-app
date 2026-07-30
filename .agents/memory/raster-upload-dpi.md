@@ -3,8 +3,8 @@ name: Raster upload DPI handling
 description: Physical-size defaults and metadata rules for uploaded PNG/JPEG artwork.
 ---
 
-Raster uploads must use a stable 300 DPI default when physical-resolution metadata is missing or invalid, and valid metadata must not be silently rewritten to a lower DPI based on pixel dimensions. For PNGs, Sharp may report 72 DPI even when no pHYs chunk exists; treat that as synthetic metadata.
+The PNG DPI fallback is conditional on placement behavior. In codebases without an artboard size clamp, metadata-free PNGs need a 300 DPI fallback because 72 DPI can create enormous initial physical sizes. In this editor, oversized uploads are clamped with `initialS = Math.min(1, maxSx, maxSy)`, so preserve Sharp's `metadata.density || 72` behavior to avoid making uploads open four times smaller.
 
-**Why:** Dividing pixels by a fallback such as 72 or 144 DPI can make a correctly prepared 12-inch design appear 25–50 inches wide; browser image dimensions alone do not provide print size. Sharp’s default 72 density caused metadata-free uploads to bypass the intended fallback.
+**Why:** A 300 DPI fallback fixes overflow only when no client-side size ceiling exists. With artboard clamping, DPI controls the initial placed size while the clamp already guarantees fit; changing 72 to 300 changes established placement behavior rather than fixing overflow.
 
-**How to apply:** Keep client and server fallbacks aligned at the production print DPI, cap only invalid/excessive values as intended, and treat metadata inspection as sizing input rather than a reason to resize the artwork.
+**How to apply:** Before changing server DPI handling, inspect the upload placement function for a shared scale ceiling such as `Math.min(1, maxSx, maxSy)`. Only use the 300 fallback when that clamp is absent, and never silently lower valid embedded DPI based on pixel dimensions.
