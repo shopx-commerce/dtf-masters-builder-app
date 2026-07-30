@@ -10,9 +10,9 @@ import { ImageInfo, ResizeSettings, type ImageTransform, type DesignItem } from 
 import { computeLayerRect } from "@/lib/types";
 
 const BASE_DPI_SCALE = 2;
-/** Keep selection controls compact when the whole sheet is fit into view. */
+/** Keep selection controls compact only when the canvas is genuinely zoomed out. */
 function getLowZoomHandleScale(zoom: number): number {
-  return zoom < 1 ? 0.25 : 1;
+  return zoom < 0.5 ? 0.25 : 1;
 }
 const ZOOM_MIN_ABSOLUTE = 0.1;
 const ZOOM_WHEEL_FACTOR = 1.1;
