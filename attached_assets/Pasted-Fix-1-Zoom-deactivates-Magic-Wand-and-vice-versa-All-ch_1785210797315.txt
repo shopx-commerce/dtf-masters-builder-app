@@ -1,0 +1,83 @@
+Fix 1 — Zoom deactivates Magic Wand (and vice versa)
+All changes are in preview-section.tsx and image-editor.tsx.
+
+Step A — Add onWandDeactivate prop to PreviewSectionProps interface
+/** Called whenever the user initiates a zoom gesture so the parent can deactivate wand mode. */
+onWandDeactivate?: () => void;
+
+Step B — Destructure it and create a ref (inside the component, alongside the other wand refs)
+const onWandDeactivateRef = useRef<typeof onWandDeactivate>(onWandDeactivate);
+onWandDeactivateRef.current = onWandDeactivate;
+
+Add onWandDeactivate to the destructured props in the component signature.
+
+Step C — Call it from every zoom trigger inside preview-section.tsx
+Ctrl/Cmd + scroll wheel (inside the onWheel handler, at the top of the if (e.ctrlKey || e.metaKey) block):
+
+if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
+
+Two-finger pinch start (inside handleTouchStart, at the top of the if (e.touches.length === 2) block, before the distance calculation):
+
+if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
+
+Zoom Out button onClick (first line):
+
+if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
+
+Zoom In button onClick (first line):
+
+if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
+
+Mobile "Reset/Fit" button — replace onClick={resetView} with:
+
+onClick={() => { if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.(); resetView(); }}
+
+handleTouchMove — add this guard right after the single-touch e.preventDefault(), before any panning/interaction logic, to stop finger drift from nudging a design while wand is active:
+
+if (wandDeleteActiveRef.current) return;
+
+Step D — Wire it up in image-editor.tsx on the <PreviewSection> JSX
+onWandDeactivate={() => setWandDeleteModeActive(false)}
+
+Also wrap onSelectionZoomChange to deactivate wand when selection-zoom mode turns on:
+
+onSelectionZoomChange={(active) => { setSelectionZoomActive(active); if (active) setWandDeleteModeActive(false); }}
+
+Deactivate wand when a fluorescent channel activates:
+
+onActiveChannelChange={(ch) => { setActiveSpotChannel(ch); setPanModeActive(false); if (ch) setWandDeleteModeActive(false); }}
+
+Mobile "Controls" tab button — deactivate wand when user navigates away from preview:
+
+onClick={() => { setMobilePanel("controls"); setWandDeleteModeActive(false); }}
+
+Fix 2 — Magic Wand cursor
+Do NOT use a custom SVG data: URI cursor — CSS parsers silently reject %22-encoded quotes inside url(), so the cursor falls back to default with no error.
+
+Use crosshair — same cursor as the fluorescent channel picker, zero compatibility risk.
+
+In preview-section.tsx — useEffect that imperatively sets cursor on mode change:
+useEffect(() => {
+  const area = canvasAreaRef.current;
+  if (!area) return;
+  if (panModeActive && activeSpotChannel) {
+    area.style.cursor = 'grab';
+  } else if (wandDeleteActive) {
+    area.style.cursor = 'crosshair';   // ← magic wand cursor
+  } else if (activeSpotChannel) {
+    area.style.cursor = 'crosshair';
+  } else {
+    area.style.cursor = '';
+  }
+}, [activeSpotChannel, panModeActive, wandDeleteActive]);
+
+Guard every other cursor-write site in preview-section.tsx so hover/move events don't override the crosshair while wand is active:
+Anywhere you see canvasAreaRef.current.style.cursor = ... (in handleMouseMove, handleMouseLeave, handleMouseUp, etc.), wrap it:
+
+if (canvasAreaRef.current && !wandDeleteActiveRef.current) {
+  canvasAreaRef.current.style.cursor = /* whatever it was */;
+}
+
+Also in handleMouseMove, add an early return at the very top so hover logic is fully skipped:
+
+if (wandDeleteActiveRef.current) return;

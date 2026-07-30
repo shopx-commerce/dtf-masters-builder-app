@@ -1,0 +1,156 @@
+The system uses a normalized coordinate transform model where each design layer stores position/scale/rotation as abstract values independent of the banner's pixel dimensions. This means changing banner size preserves all design positioning automatically.
+
+Core Data Types (shared/schema.ts)
+ImageTransform — every layer has one:
+
+nx, ny: 0–1 normalized center position relative to the banner (0.5 = centered)
+s: user zoom multiplier relative to the baseline scale (1.0 = baseline fit/fill)
+mode: "fit" (contained inside banner) or "fill" (cover entire banner)
+rotation: degrees (0–359)
+DesignLayer — the full layer object:
+
+id: UUID string
+file: the original File object
+bitmap: ImageBitmap (used for canvas drawing)
+transform: ImageTransform
+nativeWidthInches, nativeHeightInches: computed from bitmap pixel dimensions ÷ DPI
+locked: boolean — prevents drag/resize/rotate when true
+opacity: 0–1 for layer transparency
+The Key Shared Function: computeLayerRect()
+This is the single source of truth for converting a layer's normalized transform into pixel coordinates, used identically in both the preview canvas and download compositing:
+
+computeLayerRect(layer, bannerWidthPx, bannerHeightPx, bannerDims)
+It computes:
+
+Baseline scale: fitScale = min(Bw/Dw, Bh/Dh) or fillScale = max(Bw/Dw, Bh/Dh) depending on mode
+Final scale = baseline * s (the user's zoom multiplier)
+Rendered size: Sw = Dw * scale, Sh = Dh * scale
+Center position: cx = nx * bannerWidthPx, cy = ny * bannerHeightPx
+Clamping: keeps at least 30% of the layer visible: cx ∈ [-Sw*0.3, Bw+Sw*0.3]
+Returns { x: cx - Sw/2, y: cy - Sh/2, width: Sw, height: Sh }
+Feature Implementations
+1. MOVE (Drag to Reposition)
+Location: PreviewCanvas.tsx → startDrag(), moveDrag(), endDrag()
+
+How it works:
+
+On mousedown/touchstart, hitTestLayers() checks click position against all layers (top-to-bottom z-order) using rotation-aware coordinate inversion
+If a layer is hit and not locked, dragging begins — stores the start mouse position and the layer's current {nx, ny}
+On mousemove, computes pixel delta from start, converts to normalized coords: dnx = dx / bannerRect.width, dny = dy / bannerRect.height
+Updates transform: nx = startNx + dnx, ny = startNy + dny
+Snap guides: during drag, if layer center is within 6px of banner center, cyan dashed crosshairs are drawn on canvas
+Touch support via native addEventListener with passive: false + touch-none CSS
+Handler in Home.tsx: handleLayerTransformChange(layerId, transform) — updates the layer's transform in state.
+
+2. RESIZE (Corner Handle Drag)
+Location: PreviewCanvas.tsx → startDrag() (handle detection), moveDrag() (resize logic)
+
+How it works:
+
+4 white square handles (10×10px) drawn at each corner of the selected layer, rotating with the image
+hitTestHandles() checks if click is within 14px of any handle
+On handle drag start, records: the layer center, the initial distance from center to cursor, and the current s value
+On drag move: ratio = currentDist / startDist, then newS = startS * ratio, clamped to [0.1, 5.0]
+Only modifies the s multiplier — position stays the same, proportions are preserved
+Cursor changes to nwse-resize or nesw-resize depending on corner
+3. ROTATE (Corner Rotate Handles)
+Location: PreviewCanvas.tsx → same drag system with isRotatingRef
+
+How it works:
+
+4 cyan circle handles (radius 5px) drawn at offset (24px outward) from each corner along the diagonal
+Connected to corners by faint white lines
+hitTestHandles() detects rotate handles (keys: rot-tl, rot-tr, rot-bl, rot-br)
+On start: records startAngle = atan2(localY - cy, localX - cx) and current rotation
+On drag: deltaAngle = currentAngle - startAngle, newRotation = startRotation + deltaAngle
+Normalized to 0–359° and rounded to integer degrees
+Custom SVG rotate cursor icon
+In Pro mode, the toolbar shows a clickable rotation degree display that can be edited as a text input, plus CCW/CW buttons that rotate by 90°
+Handler in Home.tsx: handleRotateLayer(degrees) — normalizes to 0–359° and updates transform.
+
+4. CENTER
+Handler in Home.tsx: handleCenterImage()
+
+handleSelectedTransformChange({
+  ...selectedLayer.transform,
+  nx: 0.5,
+  ny: 0.5,
+});
+Simply sets the normalized center to (0.5, 0.5) — the exact center of the banner — while preserving scale, mode, and rotation.
+
+5. FIT TO BANNER
+Handler in Home.tsx: handleFitImageToBanner()
+
+handleSelectedTransformChange({
+  nx: 0.5, ny: 0.5, s: 1, mode: "fit",
+  rotation: selectedLayer.transform.rotation || 0,
+});
+Centers the layer and sets it to fit mode with s=1 (so baseline = min(Bw/Dw, Bh/Dh), the entire image is visible inside the banner). Preserves rotation.
+
+6. FILL BANNER
+Handler in Home.tsx: handleFillBanner()
+
+handleSelectedTransformChange({
+  nx: 0.5, ny: 0.5, s: 1, mode: "fill",
+  rotation: selectedLayer.transform.rotation || 0,
+});
+Same as fit but uses fill mode where baseline = max(Bw/Dw, Bh/Dh), so the image covers the entire banner (may crop edges).
+
+7. RESET
+Handler in Home.tsx: handleResetLayer()
+
+handleSelectedTransformChange({ nx: 0.5, ny: 0.5, s: 1, mode: "fit", rotation: 0 });
+Full reset: centered, fit mode, no zoom, no rotation.
+
+8. DUPLICATE
+Handler in Home.tsx: handleDuplicateLayer()
+
+const newId = crypto.randomUUID();
+const newLayer = {
+  ...selectedLayer,
+  id: newId,
+  transform: {
+    ...selectedLayer.transform,
+    nx: selectedLayer.transform.nx + 0.05,
+    ny: selectedLayer.transform.ny + 0.05,
+  },
+};
+setLayers(prev => [...prev, newLayer]);
+setSelectedLayerId(newId);
+Creates a shallow copy of the selected layer with a new UUID, offset by 5% of banner size so you can see both. Selects the new copy.
+
+9. DELETE (Trash)
+Handler in Home.tsx: handleRemoveLayer(layerId)
+
+Filters the layer out of the array
+If it was the last layer: clears all file state, resets dimensions, clears selection
+If the deleted layer was selected: selects the first remaining layer
+Revokes any object URLs if no layers remain
+Canvas Drawing Pipeline (draw() callback)
+Layer order on canvas (bottom to top):
+
+Navy blue viewport background (#1e2a4a)
+Banner rectangle with bannerBgColor fill + subtle shadow
+Design layers (in array order) — each clipped to banner bounds, rotated, with opacity
+Selection outline on selected layer: cyan dashed border + resize handles + rotate handles (all rotating with the image)
+Grommet overlay (from Web Worker)
+Safe zone guides (orange hem line at 0.5", red grommet clearance at 1", cyan center crosshairs)
+Snap guides during drag
+Dimension arrows (bold white with dual format labels)
+Design Toolbar (Bottom of Canvas)
+Appears when a layer is selected. Shows:
+
+Dimensions: rendered W × H in inches
+Trash button (red): deletes selected layer
+Fit: fits design to banner
+Center: centers design
+Reset: full reset
+Pro mode only: rotate CCW/CW buttons, editable rotation degree display, and Duplicate button
+The toolbar stops mouse/touch event propagation so clicking it doesn't trigger canvas drag interactions.
+
+Key Technical Patterns
+Refs for drag state (isDraggingRef, isResizingRef, isRotatingRef, etc.) — avoids re-renders during drag operations for smooth performance
+Hit testing accounts for rotation by inverse-rotating the test point around the layer center
+layersRef.current — always-current ref to layers array so drag callbacks don't need to re-bind on every state change
+ResizeObserver on the container div to auto-update canvas size
+devicePixelRatio scaling for crisp rendering on high-DPI displays

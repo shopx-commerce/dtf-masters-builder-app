@@ -1,0 +1,105 @@
+Bug: Resize handles are enormous on large gangsheets
+File: client/src/components/preview-section.tsx
+
+Root Cause
+Handle size is computed as 5 * (dpiScaleRef.current / zoom) canvas-buffer pixels, which always comes out to ~5 screen pixels regardless of artboard size. This is fine for a 12" sheet where previewDims.width ≈ 750px and a 3" design is ~92px wide on screen. But for a 150" tall sheet, previewDims.width shrinks to ~90px (to preserve the tall aspect ratio), so a 3" design is only ~11px wide on screen — and a 5px handle covers 45% of it.
+
+Fix: 4 edits in preview-section.tsx
+Edit 1 — drawSelectionHandles function: Replace the inv line and the block that computes handleSize/handleR/borderW.
+
+Find:
+
+      const z = Math.max(0.25, zoomRef.current);
+      const inv = dpiScaleRef.current / z;
+      const corners = [
+
+Replace with:
+
+      const z = Math.max(0.25, zoomRef.current);
+      // inv keeps line widths / shadows a constant screen size regardless of zoom/DPI
+      const inv = dpiScaleRef.current / z;
+      // Handle size: target 10 screen-pixels, but cap at 25% of the design's smallest
+      // canvas-buffer dimension so handles never overwhelm designs that appear tiny on
+      // screen (e.g. a 3" design on a 150" gangsheet viewed at full-sheet zoom).
+      const canvasBuf = canvasRef.current;
+      const dims = previewDimsRef.current;
+      const actualDpi = canvasBuf && dims.width > 0 ? canvasBuf.width / dims.width : dpiScaleRef.current;
+      const targetHandlePx = 10 * actualDpi / z;
+      const designMin = Math.min(rect.width, rect.height);
+      const cappedHandlePx = Math.min(targetHandlePx, Math.max(designMin * 0.25, actualDpi * 2));
+      const corners = [
+
+Also find (a few lines lower in the same function):
+
+      const hScale = getLowZoomHandleScale(z);
+      const handleSize = 5 * inv * hScale;
+      const handleR = 1.5 * inv * hScale;
+      const borderW = 1.5 * inv;
+
+Replace with:
+
+      const hScale = getLowZoomHandleScale(z);
+      const handleSize = cappedHandlePx * hScale;
+      const handleR = Math.max(1, handleSize * 0.30);
+      const borderW = 1.5 * inv;
+
+Edit 2 — Multi-select group handle drawing: Find the comment and three lines below it:
+
+          // Resize handles at corners (br is 2x on mobile for easier touch)
+          const hScale = getLowZoomHandleScale(z);
+          const handleR = 4.5 * inv * hScale;
+          const brHandleR = isMobile ? handleR * 2 : handleR;
+
+Replace with:
+
+          // Resize handles at corners (br is 2x on mobile for easier touch).
+          // Cap size at 15% of group bbox so they stay proportionate on tall sheets.
+          const hScale = getLowZoomHandleScale(z);
+          const groupMin = Math.min(groupBBox.width, groupBBox.height);
+          const cappedGroupPx = Math.min(10 * actualDpi / z, Math.max(groupMin * 0.15, actualDpi * 2));
+          const handleR = cappedGroupPx * hScale;
+          const brHandleR = isMobile ? handleR * 2 : handleR;
+
+(Note: actualDpi is already computed earlier in the same render block — if it isn't in scope, compute it the same way: const canvasBuf = canvasRef.current; const dims = previewDimsRef.current; const actualDpi = canvasBuf && dims.width > 0 ? canvasBuf.width / dims.width : dpiScaleRef.current;)
+
+Edit 3 — hitTestHandles useCallback: Find:
+
+      const z = Math.max(0.25, zoomRef.current);
+      const inv = dpiScaleRef.current / z;
+      const hScale = getLowZoomHandleScale(z);
+      const resizeR = 7 * inv * hScale;
+      const rotateOuterR = 18 * inv * hScale;
+
+Replace with:
+
+      const z = Math.max(0.25, zoomRef.current);
+      const hScale = getLowZoomHandleScale(z);
+      const canvasBuf = canvasRef.current;
+      const dims = previewDimsRef.current;
+      const actualDpi = canvasBuf && dims.width > 0 ? canvasBuf.width / dims.width : dpiScaleRef.current;
+      const designMin = Math.min(rect.width, rect.height);
+      const cappedHandlePx = Math.min(10 * actualDpi / z, Math.max(designMin * 0.25, actualDpi * 2));
+      // Hit-test radius slightly larger than visual so it's easy to grab
+      const resizeR = cappedHandlePx * 1.4 * hScale;
+      const rotateOuterR = cappedHandlePx * 3.0 * hScale;
+
+Edit 4 — hitTestMultiHandles useCallback: Find:
+
+      const z = Math.max(0.25, zoomRef.current);
+      const inv = dpiScaleRef.current / z;
+      const hScale = getLowZoomHandleScale(z);
+      const resizeR = 9 * inv * hScale;
+      const rotateOuterR = 20 * inv * hScale;
+
+Replace with:
+
+      const bbox = getMultiSelectionBBox();
+      const z = Math.max(0.25, zoomRef.current);
+      const hScale = getLowZoomHandleScale(z);
+      const canvasBuf = canvasRef.current;
+      const dims = previewDimsRef.current;
+      const actualDpi = canvasBuf && dims.width > 0 ? canvasBuf.width / dims.width : dpiScaleRef.current;
+      const groupMin = bbox ? Math.min(bbox.width, bbox.height) : actualDpi * 20;
+      const cappedGroupPx = Math.min(10 * actualDpi / z, Math.max(groupMin * 0.15, actualDpi * 2));
+      const resizeR = cappedGroupPx * 1.4 * hScale;
+      const rotateOuterR = cappedGroupPx * 3.0 * hScale;

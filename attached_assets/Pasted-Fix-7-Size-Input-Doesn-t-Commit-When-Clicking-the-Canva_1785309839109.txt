@@ -1,0 +1,78 @@
+Fix 7 — Size Input Doesn't Commit When Clicking the Canvas (the Blue-Circle Bug)
+What the bug was:
+User types a new width/height → clicks anywhere on the canvas → the value reverts to what it was before. Nothing was saved.
+
+Why it happened — three interacting problems:
+
+The canvas mousedown handler calls e.preventDefault() to stop the browser from moving focus during drag operations. But this also prevents the browser from naturally blurring the focused size input — so onBlur never fires and the typed value is never committed.
+
+Clicking empty canvas space calls handleSelectDesign(null) which uses flushSync(() => setSelectedDesignId(null)). flushSync forces a synchronous React re-render before the browser event queue continues. This means by the time onBlur eventually does fire, the onCommit prop that SizeInput received is already a new closure where selectedDesignId === null — so even if it commits, it commits to nothing.
+
+Even lastActiveDesignIdRef could be stale because useLayoutEffect (which keeps it in sync) fires after the flushSync re-render, not before the blur.
+
+Three-part fix — all three pieces are required together:
+
+Part A — preview-section.tsx handleMouseDown: Manually blur any focused input before doing anything else, so the value commits before the design is deselected:
+
+const handleMouseDown = useCallback((e: React.MouseEvent) => {
+  e.preventDefault();
+  // Manually commit any focused size input — e.preventDefault() above blocks
+  // the browser from naturally firing onBlur, so we trigger it ourselves.
+  const activeEl = document.activeElement;
+  if (activeEl instanceof HTMLInputElement || activeEl instanceof HTMLTextAreaElement) {
+    activeEl.blur();
+  }
+  // ... rest of mousedown logic
+}, [...]);
+
+Part B — image-editor.tsx handleSelectDesign: Save lastActiveDesignIdRef before the flushSync call, not after — so blur handlers firing synchronously inside flushSync can still read the correct design ID:
+
+const lastActiveDesignIdRef = useRef<string | null>(null);
+// Keep in sync via useLayoutEffect as a belt-and-suspenders backup
+useLayoutEffect(() => {
+  if (selectedDesignId !== null) {
+    lastActiveDesignIdRef.current = selectedDesignId;
+  }
+}, [selectedDesignId]);
+const handleSelectDesign = useCallback((id: string | null) => {
+  // Set BEFORE flushSync — blur handlers fire synchronously inside flushSync
+  // and need to read the correct ID before selectedDesignId becomes null.
+  if (id) lastActiveDesignIdRef.current = id;
+  flushSync(() => {
+    setSelectedDesignId(id);
+    setSelectedDesignIds(id ? new Set([id]) : new Set());
+  });
+}, []);
+
+Then in handleEffectiveSizeChange, fall back to lastActiveDesignIdRef when selectedDesignId is null:
+
+const targetId = selectedDesignId ?? lastActiveDesignIdRef.current;
+if (!targetId || value <= 0) return;
+
+Part C — SizeInput component onCommitAtFocusRef: Capture the onCommit prop at the moment the input receives focus, not at blur time. By blur time the prop may already reference a stale closure with selectedDesignId = null:
+
+// Captured once at focus time — immune to prop changes during the edit
+const onCommitAtFocusRef = useRef<typeof onCommit>(onCommit);
+// In the display input's onFocus:
+onFocus={() => {
+  onCommitAtFocusRef.current = onCommit; // snapshot the current closure
+  setDraft(display);
+  setEditing(true);
+}}
+// In onBlur and onKeyDown Enter — use the ref, NOT the prop directly:
+onBlur={() => {
+  commit(draft, onCommitAtFocusRef.current); // NOT onCommit
+  setEditing(false);
+}}
+onKeyDown={(e) => {
+  if (e.key === 'Enter') {
+    commit(draft, onCommitAtFocusRef.current); // NOT onCommit
+    setEditing(false);
+  }
+}}
+
+Why all three are needed:
+
+Part A alone fixes clicking empty canvas, but not clicking a different design (which also calls flushSync)
+Part B alone fixes the ref timing, but the onCommit closure is still stale if Part C is missing
+Part C alone doesn't help if activeEl.blur() is never called (Part A), because onBlur never fires at all

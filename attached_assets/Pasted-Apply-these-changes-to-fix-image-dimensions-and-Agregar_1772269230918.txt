@@ -1,0 +1,134 @@
+Apply these changes to fix image dimensions and "Agregar Diseños" overlap in desktop view when using cm/m (Spanish/French):
+
+---
+
+## FILE 1: client/src/components/image-editor.tsx
+
+### Change 1: Layers panel header (around line 2451)
+Replace:
+<div className="flex items-center px-3 py-1.5">
+  <button
+    onClick={() => setShowDesignInfo(!showDesignInfo)}
+    className="flex items-center gap-2 flex-1 min-w-0 text-sm text-gray-700 hover:text-gray-900 transition-colors"
+  >
+    <Layers className="w-3.5 h-3.5 text-cyan-400" />
+    <span className="font-medium text-xs">{t("editor.layers")}</span>
+    <span className="text-[10px] text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded-full">{designs.length}</span>
+    {showDesignInfo ? <ChevronUp className="w-3 h-3 text-gray-600" /> : <ChevronDown className="w-3 h-3 text-gray-600" />}
+  </button>
+  <button
+    onClick={() => sidebarFileRef.current?.click()}
+    className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-600 text-[11px] font-medium transition-colors"
+    title={t("editor.addDesignTitle")}
+  >
+    <Plus className="w-3 h-3" />
+    <span>{t("editor.addDesigns")}</span>
+  </button>
+
+With:
+<div className="flex items-center gap-2 px-3 py-1.5 min-w-0">
+  <button
+    onClick={() => setShowDesignInfo(!showDesignInfo)}
+    className="flex items-center gap-2 flex-1 min-w-0 text-sm text-gray-700 hover:text-gray-900 transition-colors overflow-hidden"
+  >
+    <Layers className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />
+    <span className="font-medium text-xs truncate">{t("editor.layers")}</span>
+    <span className="text-[10px] text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded-full flex-shrink-0">{designs.length}</span>
+    {showDesignInfo ? <ChevronUp className="w-3 h-3 text-gray-600 flex-shrink-0" /> : <ChevronDown className="w-3 h-3 text-gray-600 flex-shrink-0" />}
+  </button>
+  <button
+    onClick={() => sidebarFileRef.current?.click()}
+    className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-600 font-medium transition-colors flex-shrink-0 whitespace-nowrap"
+    title={t("editor.addDesignTitle")}
+  >
+    <Plus className="w-3 h-3 flex-shrink-0" />
+    <span className={lang !== 'en' ? 'text-[10px]' : 'text-[11px]'}>{t("editor.addDesigns")}</span>
+  </button>
+
+### Change 2: Layer row dimensions (around line 2538)
+Replace:
+<div className="min-w-0 flex-1">
+  <p className="text-[11px] text-gray-900 truncate">
+    {d.name}
+    {isResized && <span className="ml-1 text-[9px] text-amber-400/80 font-medium">{t("editor.resized")}</span>}
+  </p>
+  <p className="text-[10px] text-gray-600">
+    {(d.widthInches * d.transform.s).toFixed(1)}" × {(d.heightInches * d.transform.s).toFixed(1)}"
+  </p>
+</div>
+
+With:
+<div className="min-w-0 flex-1 overflow-hidden">
+  <p className="text-[11px] text-gray-900 truncate">
+    {d.name}
+    {isResized && <span className="ml-1 text-[9px] text-amber-400/80 font-medium">{t("editor.resized")}</span>}
+  </p>
+  <p className={`text-gray-600 truncate tabular-nums ${lang !== 'en' ? 'text-[9px]' : 'text-[10px]'}`} title={formatDimensions(d.widthInches * d.transform.s, d.heightInches * d.transform.s, lang)}>
+    {formatDimensions(d.widthInches * d.transform.s, d.heightInches * d.transform.s, lang)}
+  </p>
+</div>
+
+### Change 3: Top bar container (around line 2585)
+Replace:
+<div className="flex-shrink-0 flex flex-col lg:flex-row lg:items-center gap-1.5 lg:gap-2 bg-white border-b border-gray-200 px-2 py-1 lg:px-3 lg:py-1.5">
+  <div className="flex items-center gap-1.5 lg:gap-2 min-w-0 flex-wrap lg:flex-nowrap">
+
+With:
+<div className={`flex-shrink-0 flex flex-col gap-1.5 lg:gap-2 bg-white border-b border-gray-200 px-2 py-1 lg:px-3 lg:py-1.5 ${useMetric(lang) ? 'lg:flex-wrap lg:flex-row lg:items-center' : 'lg:flex-row lg:items-center'}`}>
+  <div className="flex items-center gap-1.5 lg:gap-2 min-w-0 flex-wrap lg:flex-nowrap flex-shrink-0">
+
+### Change 4: Row 2 (Size, DPI, etc.) (around line 2665)
+Replace:
+<div className="flex items-center gap-1.5 lg:gap-2 flex-wrap lg:flex-nowrap lg:flex-1 lg:justify-end">
+
+With:
+<div className={`flex items-center gap-1.5 lg:gap-2 lg:flex-1 lg:justify-end ${useMetric(lang) ? 'flex-wrap' : 'flex-wrap lg:flex-nowrap'}`}>
+
+### Change 5: W/H block container (around line 2668)
+Replace:
+<div className="flex items-center gap-1.5 min-w-0 overflow-hidden flex-shrink-0">
+  <div className="flex items-center gap-0.5 flex-shrink-0">
+
+With:
+<div className="flex items-center gap-1.5 min-w-0 flex-shrink-0">
+  <div className="flex items-center gap-0.5 flex-shrink-0 flex-wrap">
+
+---
+
+## FILE 2: client/src/components/upload-section.tsx
+
+### Change 1: Add import (at top after useLanguage import)
+Add:
+import { useMetric } from "@/lib/format-length";
+
+### Change 2: Add lang and metric (inside component)
+Replace:
+const { toast } = useToast();
+const { t } = useLanguage();
+
+With:
+const { toast } = useToast();
+const { t, lang } = useLanguage();
+const metric = useMetric(lang);
+
+### Change 3: Upload button text when not empty (around line 171)
+Replace:
+{!isEmptyState && (
+  <p className="font-medium text-white text-[11px] whitespace-nowrap">
+    {t("editor.addDesigns")}
+  </p>
+)}
+
+With:
+{!isEmptyState && (
+  <p className={`font-medium text-white whitespace-nowrap ${metric ? 'text-[10px]' : 'text-[11px]'}`}>
+    {t("editor.addDesigns")}
+  </p>
+)}
+
+---
+
+## Notes
+- image-editor.tsx must import formatDimensions and useMetric from "@/lib/format-length" (already present)
+- image-editor.tsx must have lang from useLanguage()
+- format-length.ts must export useMetric

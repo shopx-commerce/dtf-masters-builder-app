@@ -1,0 +1,73 @@
+Apply these changes to fix metric (cm/m) display overlap in Spanish/French:
+
+---
+
+## FILE 1: client/src/components/image-editor.tsx
+
+### Change 1: SizeInput editing input (around line 72)
+Find the className with `w-14 text-[11px]` in the SizeInput component and replace with:
+${metric ? 'w-16 text-[10px]' : 'w-14 text-[11px]'}
+
+### Change 2: SizeInput read-only (around line 95)
+Find the readOnly input className and replace with:
+${metric ? 'w-16 text-[10px]' : 'w-14 text-[11px]'}
+
+### Change 3: Top bar W/H unit suffix spans (around lines 2675 and 2691)
+Replace both unit suffix spans. Change from text-[10px] to:
+className={`text-gray-600 ${lang === 'en' ? 'text-[10px]' : 'text-[9px]'}`}
+
+---
+
+## FILE 2: client/src/components/controls-section.tsx
+
+### Change 1: Gangsheet artboard width span (around line 265)
+Replace:
+<span className="text-xs font-semibold text-gray-700">{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
+With:
+<span className={`font-semibold text-gray-700 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
+
+### Change 2: × separator (around line 266)
+Replace:
+<span className="text-gray-600 text-xs">×</span>
+With:
+<span className={`text-gray-600 ${lang === 'en' ? 'text-xs' : 'text-[10px]'}`}>×</span>
+
+### Change 3: SelectTrigger (around line 268)
+Replace:
+<SelectTrigger className="w-[68px] h-7 text-xs font-semibold text-gray-900 bg-gray-100 border-gray-200">
+With:
+<SelectTrigger className={`h-7 font-semibold text-gray-900 bg-gray-100 border-gray-200 ${lang === 'en' ? 'w-[68px] text-xs' : 'w-[80px] text-[10px]'}`}>
+
+### Change 4: SelectItem formatLength span (around line 275)
+Replace:
+<span>{formatLength(h, lang)}{lang === "en" ? '"' : ""}</span>
+With:
+<span className={lang !== 'en' ? 'text-[10px]' : ''}>{formatLength(h, lang)}{lang === "en" ? '"' : ""}</span>
+
+### Change 5: Download bar dimensions (around line 453)
+Replace:
+<span className="tabular-nums">{artboardWidth}" × {artboardHeight}"</span>
+With:
+<span className={`tabular-nums ${lang !== 'en' ? 'text-[10px]' : ''}`}>{formatLength(artboardWidth, lang)}{lang === 'en' ? '"' : ''} × {formatLength(artboardHeight, lang)}{lang === 'en' ? '"' : ''}</span>
+
+Note: controls-section.tsx must import formatLength from "@/lib/format-length" and use useLanguage() for lang.
+
+---
+
+## FILE 3: client/src/components/preview-section.tsx
+
+### Change: Design dimensions span in bottom toolbar (around line 2990)
+Replace:
+<span className="text-[11px] text-gray-600 font-medium tabular-nums">
+  {formatDimensions(...)}
+</span>
+With:
+<span className={`font-medium tabular-nums text-gray-600 ${lang !== 'en' ? 'text-[10px] max-w-[110px] truncate sm:max-w-none' : 'text-[11px]'}`}>
+  {formatDimensions(
+    resizeSettings.widthInches * (designTransform.s || 1),
+    resizeSettings.heightInches * (designTransform.s || 1),
+    lang
+  )}
+</span>
+
+Note: preview-section.tsx must have lang from useLanguage() and import formatDimensions from "@/lib/format-length".

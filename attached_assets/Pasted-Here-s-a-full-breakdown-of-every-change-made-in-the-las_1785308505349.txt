@@ -1,0 +1,44 @@
+Here's a full breakdown of every change made in the last 4 hours, organized so another agent can implement them clearly:
+
+Changes Made — Last 4 Hours
+1. Multi-Select Sizing (W/H Inputs)
+File: client/src/components/image-editor.tsx
+
+Extended handleEffectiveSizeChange to loop over all selectedDesignIds when multiple designs are selected
+Typing a W or H value now resizes all selected designs simultaneously, not just the active one
+Each design's proportional lock still uses its own individual aspect ratio
+Added a ×N cyan badge next to the "Size" label in the toolbar when multiple designs are selected
+2. Multi-Select Drag-Resize Wall Clamping
+File: client/src/components/image-editor.tsx
+
+Rewrote handleMultiResizeDelta entirely
+Old behavior: computed unclamped positions then group-shifted after the fact — designs could still escape the artboard boundary
+New behavior: analytically computes the maximum allowed scaleRatio across all four edges for every selected design, applies that single clamped ratio uniformly — all designs stop together at the wall
+3. Alignment + Rotation Panel (Desktop Toolbar)
+File: client/src/components/image-editor.tsx
+
+Added a new panel to the desktop toolbar Row 2, after the Duplicate group
+Contains two alignment buttons: Vert (center vertically) and Horiz (center horizontally), using AlignCenterVertical and AlignCenterHorizontal icons from lucide-react
+For multi-select, alignment snaps to the group centroid (not always canvas center)
+Contains a rotation display showing the current rotation degree
+Four quick-preset buttons: 0° / 90° / 180° / 270°
+New callback handleSetRotation(deg) applies absolute rotation to single or all selected designs, with position clamping
+Panel only renders on desktop when at least one design is selected
+4. Rotation Handle — Removed Stick+Circle, Restored Corner Zone
+File: client/src/components/preview-section.tsx
+
+Removed the line-and-circle rotation handle that extended out from the top-center of the design bounding box (the "stick") — it was causing accidental rotations when users tried to drag/move the design
+Removed the dedicated handle from both single-design and multi-select draw code
+Restored the corner donut rotation zone: dragging just outside any of the 4 corner resize handles triggers rotation, exactly as it was originally
+Both hitTestHandles and hitTestMultiHandles updated accordingly
+5. Icon Updates
+File: client/src/components/image-editor.tsx
+
+Magic Wand button: replaced custom inline SVG (MagicWandIcon) with WandSparkles from lucide-react — a proper wand-with-sparkles icon
+White BG button: replaced Sun icon with Eraser from lucide-react — matches the "erase background" action semantically
+Import line updated: removed Sun, added WandSparkles, Eraser
+Summary of Files Changed
+File	What changed
+client/src/components/image-editor.tsx	Multi-select size inputs, drag-resize clamping, alignment+rotation panel, icon updates
+client/src/components/preview-section.tsx	Removed stick+circle rotation handle, restored corner rotation zone
+All of these are live on the feature/gangsheet-editor-updates branch in both repos. The other agent should check out that branch and use this as the implementation spec.

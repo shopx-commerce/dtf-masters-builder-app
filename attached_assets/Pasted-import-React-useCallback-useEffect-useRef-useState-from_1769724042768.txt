@@ -1,0 +1,144 @@
+import React, { useCallback, useEffect, useRef, useState } from "react";
+
+type PreviewWindowProps = {
+  image?: HTMLImageElement | HTMLCanvasElement | null;
+  backgroundColor?: string; // e.g. "transparent" or "#fff"
+};
+
+export default function PreviewWindow({
+  image,
+  backgroundColor = "transparent",
+}: PreviewWindowProps) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const [zoom, setZoom] = useState(1);
+  const [panX, setPanX] = useState(0); // %
+  const [panY, setPanY] = useState(0); // %
+  const [previewDims, setPreviewDims] = useState({ width: 360, height: 360 });
+
+  // resize observer to keep preview responsive
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const updateSize = () => {
+      const width = containerRef.current?.clientWidth || 0;
+      const height = containerRef.current?.clientHeight || 0;
+      const safeWidth = Math.max(220, Math.min(720, width));
+      const safeHeight = Math.max(220, Math.min(720, height));
+      setPreviewDims({ width: safeWidth || 360, height: safeHeight || 360 });
+    };
+    updateSize();
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  // fit to view
+  const fitToView = useCallback(() => {
+    if (!containerRef.current) return;
+    const viewPadding = Math.max(
+      4,
+      Math.round(Math.min(previewDims.width, previewDims.height) * 0.03)
+    );
+    const containerWidth = containerRef.current.clientWidth - viewPadding * 2;
+    const containerHeight = containerRef.current.clientHeight - viewPadding * 2;
+    const scaleX = containerWidth / previewDims.width;
+    const scaleY = containerHeight / previewDims.height;
+    const fitZoom = Math.min(scaleX, scaleY, 1);
+    setZoom(Math.max(0.2, Math.round(fitZoom * 20) / 20));
+    setPanX(0);
+    setPanY(0);
+  }, [previewDims.height, previewDims.width]);
+
+  // render
+  useEffect(() => {
+    if (!canvasRef.current) return;
+    const canvas = canvasRef.current;
+    canvas.width = previewDims.width;
+    canvas.height = previewDims.height;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const padding = Math.max(
+      4,
+      Math.round(Math.min(previewDims.width, previewDims.height) * 0.03)
+    );
+    const availableWidth = previewDims.width - padding * 2;
+    const availableHeight = previewDims.height - padding * 2;
+
+    // background
+    if (backgroundColor === "transparent") {
+      const grid = 10;
+      for (let y = 0; y < canvas.height; y += grid) {
+        for (let x = 0; x < canvas.width; x += grid) {
+          const isEven = ((x / grid) + (y / grid)) % 2 === 0;
+          ctx.fillStyle = isEven ? "#e8e8e8" : "#d0d0d0";
+          ctx.fillRect(x, y, grid, grid);
+        }
+      }
+    } else {
+      ctx.fillStyle = backgroundColor;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    if (!image) return;
+
+    const aspect = image.width / image.height;
+    let drawW = availableWidth;
+    let drawH = availableHeight;
+
+    if (aspect > availableWidth / availableHeight) {
+      drawW = availableWidth;
+      drawH = drawW / aspect;
+    } else {
+      drawH = availableHeight;
+      drawW = drawH * aspect;
+    }
+
+    const x = (canvas.width - drawW) / 2;
+    const y = (canvas.height - drawH) / 2;
+
+    ctx.drawImage(image, x, y, drawW, drawH);
+  }, [image, backgroundColor, previewDims.height, previewDims.width]);
+
+  return (
+    <div style={{ width: "100%" }}>
+      <div
+        ref={containerRef}
+        style={{
+          width: "100%",
+          maxWidth: 720,
+          aspectRatio: image ? `${image.width} / ${image.height}` : "1 / 1",
+          maxHeight: "70vh",
+          borderRadius: 16,
+          border: "1px solid #e5e7eb",
+          background: backgroundColor === "transparent" ? "#f8f8f8" : backgroundColor,
+          overflow: "hidden",
+          position: "relative",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <canvas
+          ref={canvasRef}
+          style={{
+            maxWidth: "100%",
+            maxHeight: "100%",
+            transform: `translate(${panX}%, ${panY}%) scale(${zoom})`,
+            transformOrigin: "center",
+            transition: "transform 200ms ease",
+          }}
+        />
+      </div>
+
+      <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+        <button onClick={() => setZoom((z) => Math.max(0.2, z - 0.1))}>-</button>
+        <button onClick={() => setZoom((z) => Math.min(3, z + 0.1))}>+</button>
+        <button onClick={fitToView}>Fit</button>
+        <button onClick={() => { setZoom(1); setPanX(0); setPanY(0); }}>Reset</button>
+      </div>
+    </div>
+  );
+}

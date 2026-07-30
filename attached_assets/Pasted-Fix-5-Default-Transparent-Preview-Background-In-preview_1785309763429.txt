@@ -1,0 +1,59 @@
+Fix 5 — Default Transparent Preview Background
+In preview-section.tsx, the gangsheet canvas has a background color selector with 5 swatches (Transparent, White, Light Gray, Gray, Black). The default was changed from white to transparent.
+
+Change this:
+
+const [previewBgColor, setPreviewBgColor] = useState('#ffffff');
+
+To:
+
+const [previewBgColor, setPreviewBgColor] = useState('transparent');
+
+How transparent renders — when previewBgColor === 'transparent', draw a checkerboard pattern behind the artboard instead of a solid fill:
+
+if (previewBgColor === 'transparent') {
+  ctx.fillStyle = getCheckerboardPattern(ctx, tileSize, tileSize); // returns a CanvasPattern
+} else {
+  ctx.fillStyle = previewBgColor;
+}
+ctx.fillRect(artboardX, artboardY, artboardW, artboardH);
+
+The checkerboard is built once and cached in a checkerboardPatternRef. The swatch for transparent renders as:
+
+background: color === 'transparent'
+  ? 'repeating-conic-gradient(#ccc 0% 25%, #fff 0% 50%) 50% / 6px 6px'
+  : color
+
+The full swatch list in order:
+
+[
+  { color: 'transparent', label: 'Transparent' },
+  { color: '#ffffff',     label: 'White' },
+  { color: '#d1d5db',     label: 'Light Gray' },
+  { color: '#6b7280',     label: 'Gray' },
+  { color: '#000000',     label: 'Black' },
+]
+
+Fix 6 — Bigger Desktop Toolbar Buttons
+The main action buttons in the desktop toolbar (Clean Alpha, White BG, Magic Wand, Halftone, Auto-Arrange) were made larger on lg: screens using responsive Tailwind classes. The pattern applied to every action button:
+
+Before (small, uniform):
+
+className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium min-h-[36px] ..."
+// icons: w-3 h-3
+
+After (responsive — grows on desktop):
+
+className="flex items-center gap-1 px-2 py-1 lg:px-4 lg:py-2 rounded-md transition-all whitespace-nowrap text-[11px] lg:text-sm font-medium shadow-sm min-h-[36px] ..."
+// icons: w-3 h-3 lg:w-4 lg:h-4
+
+Icon-only square buttons (Undo, Redo, Delete, flip buttons):
+
+// Before:
+className="w-8 h-8 ..."
+// icon: w-4 h-4
+// After:
+className="w-8 h-8 lg:w-10 lg:h-10 ..."
+// icon: w-4 h-4 lg:w-5 lg:h-5
+
+The rule: every button in the desktop toolbar Row 1 gets lg:px-4 lg:py-2 padding, lg:text-sm text, and lg:w-4 lg:h-4 icons. Square icon-only buttons get lg:w-10 lg:h-10. The min-h-[36px] stays on all buttons to keep the row height consistent at smaller breakpoints. shadow-sm was also added to all action buttons for subtle depth.

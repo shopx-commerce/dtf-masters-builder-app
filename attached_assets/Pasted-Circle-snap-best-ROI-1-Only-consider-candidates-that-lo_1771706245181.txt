@@ -1,0 +1,149 @@
+Circle snap (best ROI)
+1) Only consider candidates that look like “big smooth outer boundary”
+
+Quick gates (fast, keeps it safe):
+
+Npoints >= 40 (enough samples)
+
+areaPx is “large” vs image (ex: area > 0.02 * w*h) or vs component area
+
+bboxAspect = w/h close to 1 (ex: 0.90–1.10)
+
+circularity = 4πA / P² high (ex: > 0.92)
+
+If it passes, do a real fit.
+
+2) Fit circle to points
+
+Use a least-squares circle fit (Kåsa / Pratt / Taubin). You’ll get center (cx, cy) and radius r.
+
+Then compute error metrics:
+
+For each point pi, distance to circle: di = | |pi - c| - r |
+
+Use robust stats:
+
+rmse = sqrt(mean(di²))
+
+p95 = percentile(di, 95)
+
+radStd = std(|pi-c|) / r (normalized)
+
+3) Confidence thresholds (tuneable)
+
+Pick strict thresholds so it only triggers when it’s truly a circle:
+
+p95 <= max(0.75px, 0.004 * r)
+
+rmse <= max(0.35px, 0.002 * r)
+
+radStd <= 0.0035
+
+Also ensure coverage: the points wrap nearly full circle
+
+compute angles θi = atan2(pi.y-cy, pi.x-cx)
+
+if angleSpan (after unwrap) >= 330° → good
+
+If it passes → snap.
+
+4) Replace with perfect circle path
+
+Internally in your vector:
+
+If SVG/canvas: use an actual circle primitive if possible.
+
+If you must emit béziers: use the classic 4-cubic approximation:
+
+k = 0.5522847498307936
+
+Build 4 cubic segments around the circle.
+
+This will make your “outer ring” perfect even if the pixel trace is slightly stepped.
+
+B: Rectangle / rounded-rectangle snap
+1) Rectangle candidates
+
+Gates:
+
+solidity high (if it’s a filled rect), or if it’s an outline boundary then check straightness
+
+bboxEdges should dominate (lots of points near minX/maxX/minY/maxY)
+
+Corner angles near 90°
+
+A robust and simple method:
+
+Line-fit the contour into 4 sides
+
+Run RDP simplification lightly first (small epsilon like 0.5–1.0px) to reduce noise.
+
+Compute turning angles along the simplified polyline.
+
+Find 4 strong corners (local maxima in turning angle).
+
+Between corners, fit a line (total least squares).
+
+Measure max perpendicular deviation per side.
+
+Thresholds:
+
+4 corners found
+
+Each side deviation p95 <= 0.75px (or <= 0.001 * sideLen)
+
+Corner angles between 85°–95°
+
+If passes → snap to perfect rectangle:
+
+Set snapped corners to the best-fit rectangle (use bbox or intersection of the 4 fitted lines).
+
+2) Rounded rectangle (common in badges, labels)
+
+Same as rectangle, but corners are arcs:
+
+Detect 4 “corner regions” where curvature stays consistently high
+
+Fit each corner arc radius (or just snap to consistent radius if all similar)
+
+Fit 4 straight sides between corners
+
+Strict trigger:
+
+The 4 corner radii should be close: std(rCorner)/mean(rCorner) <= 0.08 (or tighter)
+
+Side deviation still low
+
+If passes → output a perfect rounded-rect path (lines + quarter-circle arcs).
+
+C: Where to insert this (minimal disruption)
+
+Put this after you already have a final contour polyline, right before:
+
+smoothing pass output, or
+
+PDF/SVG path emission
+
+So your pipeline is:
+
+mask → traceBoundary → (your smoothing/simplify) → primitiveSnap (circle/rect) → emit
+
+If primitiveSnap returns null, you emit original.
+
+D: Safety rules (so it doesn’t “ruin” real artwork)
+
+To avoid snapping letters/logos unintentionally:
+
+Only snap the largest outer contour of a component (by area or perimeter).
+
+Only snap if the fit confidence is very high (strict thresholds above).
+
+Require “mostly convex” for circles/rects:
+
+concavity score low, or convex hull area ratio near 1.
+
+Never snap contours with holes/inner islands unless you specifically target “outer boundary only”.
+
+E: Tiny extra improvement that helps a lot
+
+If your jaggies are coming from pixel stair-stepping, make sure your candidate contour for fitting comes from the smoothed preview points (Chaikin output), not the raw traced points. Fit quality becomes much higher and you’ll snap more reliably only when appropriate.

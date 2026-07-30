@@ -1,0 +1,6 @@
+- [Fluorescent editor port](fluorescent-editor-port.md) — keep source-repository improvements selective and route wand state through the existing editor preview/control boundary.
+- [Raster upload DPI handling](raster-upload-dpi.md) — use a stable 300 DPI default and never silently lower valid DPI based on pixel dimensions.
+- [Group rotation clamping](group-rotation-clamping.md) — rotate selected designs around one group center and clamp with one shared translation.
+- [Copy-count arrangement](copy-count-arrangement.md) — layer copy-count changes must repack the whole sheet, not use selected-only obstacle mode.
+- [Low-zoom selection controls](low-zoom-selection-controls.md) — shrink corner handles and rotation hit zones only below 100% zoom.
+- [Halftone resize pipeline](halftone-resize-pipeline.md) — rebuild halftone screens from original pixels at the design’s final physical size.
