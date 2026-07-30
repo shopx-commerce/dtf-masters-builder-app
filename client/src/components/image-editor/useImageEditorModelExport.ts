@@ -54,6 +54,7 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
           cvs.height = drawH;
           const cctx = cvs.getContext('2d');
           if (!cctx) continue;
+          cctx.imageSmoothingEnabled = !design.alphaThresholded;
           if (design.transform.flipX || design.transform.flipY) {
             cctx.save();
             cctx.translate(design.transform.flipX ? drawW : 0, design.transform.flipY ? drawH : 0);

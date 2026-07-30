@@ -24,6 +24,13 @@ export interface ImageTransform {
   flipY?: boolean;
 }
 
+export type HalftoneStrength = 'light' | 'balanced' | 'strong';
+
+export interface HalftoneSettings {
+  color: { r: number; g: number; b: number };
+  strength: HalftoneStrength;
+}
+
 export interface DesignItem {
   id: string;
   imageInfo: ImageInfo;
@@ -37,6 +44,10 @@ export interface DesignItem {
    *  guarantee binary alpha (0 or 255) and uses nearest-neighbour scaling so
    *  bilinear interpolation cannot reintroduce semi-transparent edge pixels. */
   halftoned?: boolean;
+  /** Settings used to rebuild the halftone when its physical size changes. */
+  halftoneSettings?: HalftoneSettings;
+  /** Original pixels kept in memory so resizing never halftones the halftone. */
+  halftoneSourceImage?: HTMLImageElement;
   printFileName?: boolean;
 }
 

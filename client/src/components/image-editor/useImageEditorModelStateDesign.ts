@@ -180,7 +180,15 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       json = cache.json;
       infoMap = cache.infoMap;
     } else {
-      json = JSON.stringify(currentDesigns.map(d => ({ id: d.id, transform: d.transform, widthInches: d.widthInches, heightInches: d.heightInches, name: d.name })));
+       json = JSON.stringify(currentDesigns.map(d => ({
+         id: d.id,
+         transform: d.transform,
+         widthInches: d.widthInches,
+         heightInches: d.heightInches,
+         name: d.name,
+         halftoned: d.halftoned,
+         halftoneSettings: d.halftoneSettings,
+       })));
       infoMap = new Map(currentDesigns.map(d => [d.id, d.imageInfo]));
       snapshotCacheRef.current = { designs: currentDesigns, json, infoMap };
     }
@@ -192,7 +200,15 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   }, [pushSnapshot, getSnapshot]);
 
   const applySnapshot = useCallback((snap: HistorySnapshot) => {
-    let parsed: Array<{ id: string; transform: ImageTransform; widthInches: number; heightInches: number; name: string }>;
+    let parsed: Array<{
+      id: string;
+      transform: ImageTransform;
+      widthInches: number;
+      heightInches: number;
+      name: string;
+      halftoned?: boolean;
+      halftoneSettings?: DesignItem["halftoneSettings"];
+    }>;
     try {
       parsed = JSON.parse(snap.designsJson);
     } catch {
@@ -214,11 +230,26 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
             widthInches: p.widthInches,
             heightInches: p.heightInches,
             name: p.name,
-            ...(savedInfo ? { alphaThresholded: undefined } : {}),
+             alphaThresholded: savedInfo ? undefined : existing.alphaThresholded,
+             halftoned: p.halftoned,
+             halftoneSettings: p.halftoneSettings,
+             // The original source image is retained in-memory when possible;
+             // restored layers reload their original asset before rebuilding.
+             halftoneSourceImage: p.halftoned ? existing.halftoneSourceImage : undefined,
           };
         }
         if (savedInfo) {
-          return { id: p.id, imageInfo: savedInfo, transform: p.transform, widthInches: p.widthInches, heightInches: p.heightInches, name: p.name, originalDPI: savedInfo.dpi } as DesignItem;
+           return {
+             id: p.id,
+             imageInfo: savedInfo,
+             transform: p.transform,
+             widthInches: p.widthInches,
+             heightInches: p.heightInches,
+             name: p.name,
+             originalDPI: savedInfo.dpi,
+             halftoned: p.halftoned,
+             halftoneSettings: p.halftoneSettings,
+           } as DesignItem;
         }
         return null;
       }).filter(Boolean) as DesignItem[];

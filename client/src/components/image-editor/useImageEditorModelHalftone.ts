@@ -1,5 +1,5 @@
-import { useState, useCallback } from "react";
-import type { ImageInfo } from "@/lib/types";
+import { useState, useCallback, useEffect, useRef } from "react";
+import type { ImageInfo, HalftoneSettings, HalftoneStrength } from "@/lib/types";
 import type { ImageEditorBagAfterUploadCrop } from "./image-editor-hook-bag.types";
 
 // ── OKLab colour conversion (matches reference app srgbToOklab) ──────────────
@@ -58,8 +58,6 @@ export function thresholdImageInfo(info: ImageInfo): Promise<ImageInfo | null> {
   });
 }
 
-export type HalftoneStrength = 'light' | 'balanced' | 'strong';
-
 export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) {
   const {
     designs,
@@ -75,6 +73,8 @@ export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) 
   const [halftoneTopColors, setHalftoneTopColors] = useState<
     Array<{ r: number; g: number; b: number; hex: string; name?: string }>
   >([]);
+  const halftoneJobRef = useRef(new Map<string, number>());
+  const halftoneSizeSignatureRef = useRef('');
 
   /**
    * Apply AM halftone screen to a design, matching the reference app at
@@ -92,26 +92,26 @@ export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) 
     designId: string,
     tr: number, tg: number, tb: number,
     strength: HalftoneStrength = 'balanced',
+    options?: { skipSnapshot?: boolean },
   ) => {
     const design = designs.find(d => d.id === designId);
     if (!design) return;
-    const src = design.imageInfo.image;
+    // Always rebuild from the original pixels. Once a design has been
+    // halftoned, imageInfo.image is the screened raster and must never become
+    // the input to another screen when the design is resized.
+    const src = design.halftoneSourceImage ?? design.imageInfo.image;
     const w = src.naturalWidth || src.width;
     const h = src.naturalHeight || src.height;
     if (!w || !h) return;
+    const job = (halftoneJobRef.current.get(designId) ?? 0) + 1;
+    halftoneJobRef.current.set(designId, job);
 
-    // ── Screen params ──────────────────────────────────────────────────────────
-    // Cap effective DPI at 300 (matches reference app which resizes to 300 DPI
-    // first).  300 DPI → cell = 300/35 ≈ 8.57 px — correct physical 35 LPI pitch.
-    const nativeDpi    = design.widthInches > 0 ? w / design.widthInches : 300;
-    const effectiveDpi = Math.min(nativeDpi, 300);
+    // The screen is based on the final physical size, including the transform
+    // scale. Otherwise resizing with the corner handle changes the printed dot
+    // pitch even though the source artwork has not changed.
+    const printWidthInches = Math.max(0.01, design.widthInches * Math.abs(design.transform.s || 1));
     const LPI   = 35;
     const ANGLE = 22.5 * Math.PI / 180;
-    const MIN_DOT = (0.20 / 25.4) * effectiveDpi; // 0.20 mm in pixels
-    const cell  = Math.max(2, effectiveDpi / LPI);
-    const maxR  = cell * 0.72;
-    const ca = Math.cos(ANGLE), sa = Math.sin(ANGLE);
-
     // ── Strength presets (source: INTENSITIES.negra in reference app) ──────────
     //   light:    bc=0,  wc=80  | tol=25, feather=22
     //   balanced: bc=27, wc=132 | tol=40, feather=30
@@ -126,19 +126,26 @@ export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) 
     const FEATHER= featherUI / 200;
     const UPPER  = TOL + FEATHER;
 
-    // ── 1. Resize to 300 DPI then read pixels ─────────────────────────────────
-    // Without this a 1063 DPI image (3189 px @ 3") has 10 M+ pixels and the
-    // five O(N) loops take 10–30 s, freezing the main thread.
+    // ── 1. Resize to the final printed resolution then read pixels ─────────────
+    // The halftone raster must represent the size that will actually be printed.
+    // This is especially important when the design is made smaller: a source
+    // screen generated at 300 DPI would otherwise be downscaled and its dots
+    // would become too fine.
     const TARGET_DPI = 300;
     let procW: number, procH: number;
-    if (design.widthInches > 0) {
-      procW = Math.min(w, Math.max(1, Math.round(design.widthInches * TARGET_DPI)));
+    if (printWidthInches > 0) {
+      procW = Math.min(w, Math.max(1, Math.round(printWidthInches * TARGET_DPI)));
       procH = Math.min(h, Math.max(1, Math.round(procW * h / w)));
     } else {
       const scale = Math.min(1, 2000 / Math.max(w, h));
       procW = Math.max(1, Math.round(w * scale));
       procH = Math.max(1, Math.round(h * scale));
     }
+    const effectiveDpi = Math.min(procW / printWidthInches, 300);
+    const MIN_DOT = (0.20 / 25.4) * effectiveDpi; // 0.20 mm in pixels
+    const cell  = Math.max(2, effectiveDpi / LPI);
+    const maxR  = cell * 0.72;
+    const ca = Math.cos(ANGLE), sa = Math.sin(ANGLE);
 
     const cvs = document.createElement('canvas');
     cvs.width = procW; cvs.height = procH;
@@ -290,19 +297,31 @@ export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) 
       ctx.putImageData(verify, 0, 0);
     }
 
-    saveSnapshot();
+    if (!options?.skipSnapshot) saveSnapshot();
     cvs.toBlob(blob => {
       if (!blob) return;
       const url = URL.createObjectURL(blob);
       const img = new Image();
       img.onload = () => {
         URL.revokeObjectURL(url);
+        if (halftoneJobRef.current.get(designId) !== job) return;
         const newInfo: ImageInfo = { ...design.imageInfo, image: img };
+        const halftoneSettings: HalftoneSettings = {
+          color: { r: tr, g: tg, b: tb },
+          strength,
+        };
         // halftoned: true  → export pipeline pre-cleans before drawing
         // alphaThresholded → nearest-neighbour scaling in export so bilinear
         //   interpolation cannot reintroduce semi-transparent edge pixels
         setDesigns(prev => prev.map(d => d.id === designId
-          ? { ...d, imageInfo: newInfo, halftoned: true, alphaThresholded: true }
+          ? {
+              ...d,
+              imageInfo: newInfo,
+              halftoned: true,
+              halftoneSettings,
+              halftoneSourceImage: src,
+              alphaThresholded: true,
+            }
           : d));
         if (selectedDesignId === designId) setImageInfo(newInfo);
       };
@@ -310,6 +329,42 @@ export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) 
       img.src = url;
     }, 'image/png');
   }, [designs, selectedDesignId, saveSnapshot, setDesigns, setImageInfo]);
+
+  // The editor stores physical size separately from the pixels. Rebuild the
+  // screen after a resize so the dot pitch remains 35 LPI at the new printed
+  // size instead of stretching the old 300-DPI raster. A short debounce keeps
+  // corner-drag resizing responsive and the job token prevents stale results
+  // from winning if the user changes size again while processing.
+  useEffect(() => {
+    const halftoned = designs.filter(d => d.halftoned && d.halftoneSettings);
+    if (halftoned.length === 0) {
+      halftoneSizeSignatureRef.current = '';
+      return;
+    }
+    const signature = halftoned
+      .map(d => `${d.id}:${d.widthInches}:${d.heightInches}:${d.transform.s}`)
+      .join('|');
+    const hasRestoredSource = halftoned.some(d => !d.halftoneSourceImage);
+    const changed = signature !== halftoneSizeSignatureRef.current;
+    halftoneSizeSignatureRef.current = signature;
+    if (!changed && !hasRestoredSource) return;
+
+    const timer = window.setTimeout(() => {
+      for (const d of halftoned) {
+        const settings = d.halftoneSettings;
+        if (!settings) continue;
+        handleApplyHalftone(
+          d.id,
+          settings.color.r,
+          settings.color.g,
+          settings.color.b,
+          settings.strength,
+          { skipSnapshot: true },
+        );
+      }
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [designs, handleApplyHalftone]);
 
   /** Open the halftone colour-picker dropdown, pre-loading top colours. */
   const handleOpenHalftoneMenu = useCallback(async () => {

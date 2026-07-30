@@ -9,6 +9,7 @@ import {
 import type { ImageEditorBagAfterExport } from "./image-editor-hook-bag.types";
 import type { InitialDesignState } from "./types";
 import type { SpotPreviewData } from "../controls-section";
+import { thresholdImageInfo } from "./useImageEditorModelHalftone";
 
 export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
   // Only the bag fields these two handlers actually use are destructured here;
@@ -66,6 +67,8 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       scaleY: d.transform.s * (d.transform.flipY ? -1 : 1),
       settings: {
         alphaThresholded: Boolean(d.alphaThresholded),
+        halftoned: Boolean(d.halftoned),
+        halftoneSettings: d.halftoneSettings,
         printFileName: Boolean(d.printFileName),
         originalDpi: d.originalDPI,
       },
@@ -179,6 +182,18 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
     try {
       const exportProductionPng = async (): Promise<{ pngBlob: Blob; exportWorkerBuffer: ArrayBuffer | null }> => {
         const currentDesigns = designsRef.current;
+        const cleaned = new Map<string, import("@/lib/types").ImageInfo>();
+        await Promise.all(
+          currentDesigns
+            .filter(d => d.halftoned)
+            .map(async d => {
+              const info = await thresholdImageInfo(d.imageInfo);
+              if (info) cleaned.set(d.id, info);
+            }),
+        );
+        const exportDesignsSource = currentDesigns.map(d =>
+          cleaned.has(d.id) ? { ...d, imageInfo: cleaned.get(d.id)! } : d,
+        );
         const exportDpi = EXPORT_DPI;
         const outW = Math.max(1, Math.round(artboardWidth * exportDpi));
         const outH = Math.max(1, Math.round(artboardHeight * exportDpi));
@@ -188,8 +203,8 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         let exportWorkerBuffer: ArrayBuffer | null = null;
 
         if (useWorker) {
-          const bitmaps = await Promise.all(currentDesigns.map((d) => createImageBitmap(d.imageInfo.image)));
-          const exportDesigns = currentDesigns.map((d, i) => ({
+          const bitmaps = await Promise.all(exportDesignsSource.map((d) => createImageBitmap(d.imageInfo.image)));
+          const exportDesigns = exportDesignsSource.map((d, i) => ({
             widthInches: d.widthInches,
             heightInches: d.heightInches,
             nx: d.transform.nx,
@@ -232,7 +247,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
           ctx.clearRect(0, 0, outW, outH);
           ctx.imageSmoothingEnabled = true;
           ctx.imageSmoothingQuality = 'high';
-          for (const design of currentDesigns) {
+          for (const design of exportDesignsSource) {
             const img = design.imageInfo.image;
             const drawW = Math.max(1, Math.round(design.widthInches * design.transform.s * exportDpi));
             const drawH = Math.max(1, Math.round(design.heightInches * design.transform.s * exportDpi));
@@ -242,7 +257,9 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
             ctx.translate(centerX, centerY);
             ctx.rotate((design.transform.rotation * Math.PI) / 180);
             ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
+            ctx.imageSmoothingEnabled = !design.alphaThresholded;
             ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
+            ctx.imageSmoothingEnabled = true;
             ctx.restore();
           }
           const rawBlob: Blob = await new Promise((res, rej) =>
@@ -265,7 +282,20 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
         const exportDpi = EXPORT_DPI;
 
-        for (const design of designsRef.current) {
+        const currentDesigns = designsRef.current;
+        const cleaned = new Map<string, import("@/lib/types").ImageInfo>();
+        await Promise.all(
+          currentDesigns
+            .filter(d => d.halftoned)
+            .map(async d => {
+              const info = await thresholdImageInfo(d.imageInfo);
+              if (info) cleaned.set(d.id, info);
+            }),
+        );
+        const exportDesignsSource = currentDesigns.map(d =>
+          cleaned.has(d.id) ? { ...d, imageInfo: cleaned.get(d.id)! } : d,
+        );
+        for (const design of exportDesignsSource) {
           const drawW = Math.max(1, Math.round(design.widthInches * design.transform.s * exportDpi));
           const drawH = Math.max(1, Math.round(design.heightInches * design.transform.s * exportDpi));
           const canvas = document.createElement("canvas");

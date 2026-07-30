@@ -155,6 +155,12 @@ export function useRestoreDesignState({
                   flipY: Number.isFinite(sy) ? sy < 0 : false,
                 },
                 alphaThresholded: Boolean(layer.settings?.alphaThresholded),
+                halftoned: Boolean(layer.settings?.halftoned),
+                halftoneSettings:
+                  layer.settings?.halftoneSettings &&
+                  typeof layer.settings.halftoneSettings === "object"
+                    ? layer.settings.halftoneSettings as DesignItem["halftoneSettings"]
+                    : undefined,
                 printFileName: Boolean(layer.settings?.printFileName),
               };
             } catch (err) {
