@@ -10,9 +10,9 @@ import { ImageInfo, ResizeSettings, type ImageTransform, type DesignItem } from 
 import { computeLayerRect } from "@/lib/types";
 
 const BASE_DPI_SCALE = 2;
-/** Keep selection controls compact only when the canvas is genuinely zoomed out. */
-function getLowZoomHandleScale(zoom: number): number {
-  return zoom < 0.5 ? 0.25 : 1;
+/** Keep selection controls compact only at the actual fit-to-sheet zoom. */
+function getLowZoomHandleScale(zoom: number, fitZoom: number): number {
+  return zoom <= fitZoom + 0.001 ? 0.25 : 1;
 }
 const ZOOM_MIN_ABSOLUTE = 0.1;
 const ZOOM_WHEEL_FACTOR = 1.1;
@@ -675,7 +675,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       if (!rect) return null;
       const z = Math.max(0.25, zoomRef.current);
       const inv = dpiScaleRef.current / z;
-      const handleScale = getLowZoomHandleScale(z);
+      const handleScale = getLowZoomHandleScale(zoomRef.current, minZoomRef.current);
       // Keep the resize target generous enough to grab, especially when the
       // sheet is fit to view. The visible corner squares use the same 2x
       // increase below so the hit area stays aligned with what is shown.
@@ -751,7 +751,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       if (handles.length === 0) return null;
       const z = Math.max(0.25, zoomRef.current);
       const inv = dpiScaleRef.current / z;
-      const handleScale = getLowZoomHandleScale(z);
+      const handleScale = getLowZoomHandleScale(zoomRef.current, minZoomRef.current);
       const resizeR = 18 * inv * handleScale;
       const rotateOuterR = 20 * inv * handleScale;
 
@@ -2897,7 +2897,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           ctx.restore();
 
           // Resize handles at corners (br is 2x on mobile for easier touch)
-          const handleScale = getLowZoomHandleScale(z);
+          const handleScale = getLowZoomHandleScale(zoomRef.current, minZoomRef.current);
           const handleR = 9 * inv * handleScale;
           const brHandleR = isMobile ? handleR * 2 : handleR;
           const groupHandles = [
@@ -3061,7 +3061,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         ctx.restore();
       }
 
-      const handleScale = getLowZoomHandleScale(z);
+      const handleScale = getLowZoomHandleScale(zoomRef.current, minZoomRef.current);
       const handleSize = 10 * inv * handleScale;
       const handleR = 1.5 * inv * handleScale;
       const borderW = 1.5 * inv;
