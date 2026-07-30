@@ -674,13 +674,20 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const rect = getDesignRect();
       if (!rect) return null;
       const z = Math.max(0.25, zoomRef.current);
-      const inv = dpiScaleRef.current / z;
       const handleScale = getLowZoomHandleScale(z);
-      // Keep the resize target generous enough to grab, especially when the
-      // sheet is fit to view. The visible corner squares use the same 2x
-      // increase below so the hit area stays aligned with what is shown.
-      const resizeR = 14 * inv * handleScale;
-      const rotateOuterR = 18 * inv * handleScale;
+      const canvasBuf = canvasRef.current;
+      const dims = previewDimsRef.current;
+      const actualDpi = canvasBuf && dims.width > 0
+        ? canvasBuf.width / dims.width
+        : dpiScaleRef.current;
+      const designMin = Math.min(rect.width, rect.height);
+      const cappedHandlePx = Math.min(
+        10 * actualDpi / z,
+        Math.max(designMin * 0.25, actualDpi * 2),
+      );
+      // Hit-test radius is slightly larger than visual for easy grabbing.
+      const resizeR = cappedHandlePx * 1.4 * handleScale;
+      const rotateOuterR = cappedHandlePx * 3.0 * handleScale;
 
       for (const h of handles) {
         const d = Math.sqrt((px - h.x) ** 2 + (py - h.y) ** 2);
@@ -750,10 +757,20 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const handles = getMultiHandlePositions();
       if (handles.length === 0) return null;
       const z = Math.max(0.25, zoomRef.current);
-      const inv = dpiScaleRef.current / z;
       const handleScale = getLowZoomHandleScale(z);
-      const resizeR = 18 * inv * handleScale;
-      const rotateOuterR = 20 * inv * handleScale;
+      const bbox = getMultiSelectionBBox();
+      const canvasBuf = canvasRef.current;
+      const dims = previewDimsRef.current;
+      const actualDpi = canvasBuf && dims.width > 0
+        ? canvasBuf.width / dims.width
+        : dpiScaleRef.current;
+      const groupMin = bbox ? Math.min(bbox.width, bbox.height) : actualDpi * 20;
+      const cappedGroupPx = Math.min(
+        10 * actualDpi / z,
+        Math.max(groupMin * 0.15, actualDpi * 2),
+      );
+      const resizeR = cappedGroupPx * 1.4 * handleScale;
+      const rotateOuterR = cappedGroupPx * 3.0 * handleScale;
 
       for (const h of handles) {
         const d = Math.sqrt((px - h.x) ** 2 + (py - h.y) ** 2);
@@ -2898,7 +2915,13 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
           // Resize handles at corners (br is 2x on mobile for easier touch)
           const handleScale = getLowZoomHandleScale(z);
-          const handleR = 9 * inv * handleScale;
+          const actualDpi = canvasWidth / Math.max(1, previewDims.width);
+          const groupMin = Math.min(groupBBox.width, groupBBox.height);
+          const cappedGroupPx = Math.min(
+            10 * actualDpi / z,
+            Math.max(groupMin * 0.15, actualDpi * 2),
+          );
+          const handleR = cappedGroupPx * handleScale;
           const brHandleR = isMobile ? handleR * 2 : handleR;
           const groupHandles = [
             { x: groupBBox.x, y: groupBBox.y },
@@ -3019,6 +3042,19 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
       const z = Math.max(0.25, zoomRef.current);
       const inv = dpiScaleRef.current / z;
+      // Keep handles usable at normal sizes, but cap them proportionally when
+      // a very tall sheet makes the selected design tiny on screen.
+      const canvasBuf = canvasRef.current;
+      const dims = previewDimsRef.current;
+      const actualDpi = canvasBuf && dims.width > 0
+        ? canvasBuf.width / dims.width
+        : dpiScaleRef.current;
+      const targetHandlePx = 10 * actualDpi / z;
+      const designMin = Math.min(rect.width, rect.height);
+      const cappedHandlePx = Math.min(
+        targetHandlePx,
+        Math.max(designMin * 0.25, actualDpi * 2),
+      );
 
       const corners = [
         { lx: -hw, ly: -hh },
@@ -3062,8 +3098,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       }
 
       const handleScale = getLowZoomHandleScale(z);
-      const handleSize = 10 * inv * handleScale;
-      const handleR = 1.5 * inv * handleScale;
+      const handleSize = cappedHandlePx * handleScale;
+      const handleR = Math.max(1, handleSize * 0.30);
       const borderW = 1.5 * inv;
       const brHandleSize = isMobile ? handleSize * 2 : handleSize;
       const brHandleR = isMobile ? handleR * 2 : handleR;
