@@ -11,6 +11,7 @@ import {
   clampDesignToArtboard,
   fetchImageDpi,
   imageHasCleanAlpha,
+  isPngWithoutEmbeddedDpi,
   inchesFromPixelsPair,
   normalizeRasterDpiForInches,
 } from "./utils";
@@ -50,12 +51,34 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
     applyImageDirectly,
   } = bag;
 
+  const resolveUploadDpi = useCallback(async (
+    file: File,
+    image: HTMLImageElement,
+    suppliedDpi?: number,
+  ): Promise<number> => {
+    if (suppliedDpi !== undefined) return normalizeRasterDpiForInches(suppliedDpi, image);
+
+    const dpiRaw = await fetchImageDpi(file).catch((err) => {
+      console.warn('[fetchImageDpi] failed:', err);
+      return RASTER_DPI_FALLBACK;
+    });
+
+    // A transparent PNG without pHYs metadata is the specific class of
+    // artwork that needs the 300-DPI print fallback. Do not apply this to
+    // opaque/JPEG uploads: those intentionally retain the existing 72-DPI
+    // behavior and changing them would make normal designs open smaller.
+    const metadataFreeTransparentPng =
+      await isPngWithoutEmbeddedDpi(file) && !isOpaqueRasterUpload(image);
+    const effectiveRawDpi = metadataFreeTransparentPng ? RASTER_DPI_FALLBACK : dpiRaw;
+    return normalizeRasterDpiForInches(effectiveRawDpi, image);
+  }, []);
+
   const handleFallbackImage = useCallback(async (
     file: File,
     image: HTMLImageElement,
     opts?: { dpi?: number; skipCrop?: boolean }
   ) => {
-    const dpiRaw = opts?.dpi ?? (await fetchImageDpi(file).catch((err) => { console.warn('[fetchImageDpi] failed:', err); return RASTER_DPI_FALLBACK; }));
+    const dpi = await resolveUploadDpi(file, image, opts?.dpi);
 
     let croppedCanvas: HTMLCanvasElement | null = null;
     if (opts?.skipCrop) {
@@ -77,8 +100,6 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
         document.activeElement.blur();
       }
       setIsUploading(false);
-
-      const dpi = normalizeRasterDpiForInches(dpiRaw, finalImage);
 
       const { widthInches, heightInches } = inchesFromPixelsPair(
         finalImage.naturalWidth || finalImage.width,
@@ -115,7 +136,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
     } else {
       processImage(image);
     }
-  }, [applyImageDirectly, isMobile, toast]);
+  }, [applyImageDirectly, isMobile, resolveUploadDpi, toast]);
 
   const handleImageUpload = useCallback(async (file: File, image: HTMLImageElement) => {
     try {
@@ -135,8 +156,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
       await new Promise(r => setTimeout(r, 0));
       setUploadProgress(25);
       
-      const dpiRaw = await fetchImageDpi(file).catch((err) => { console.warn('[fetchImageDpi] failed:', err); return RASTER_DPI_FALLBACK; });
-      const dpi = normalizeRasterDpiForInches(dpiRaw, image);
+      const dpi = await resolveUploadDpi(file, image);
       const imgWidthInches = image.width / dpi;
       const imgHeightInches = image.height / dpi;
       const ARTBOARD_MATCH_TOLERANCE = 0.05;
@@ -262,8 +282,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
         setIsUploading(false);
         setUploadProgress(0);
         try {
-          const dpiFallbackRaw = await fetchImageDpi(file).catch((err) => { console.warn('[fetchImageDpi] failed:', err); return RASTER_DPI_FALLBACK; });
-          const dpiFallback = normalizeRasterDpiForInches(dpiFallbackRaw, image);
+          const dpiFallback = await resolveUploadDpi(file, image);
           const wIn = image.width / dpiFallback;
           const hIn = image.height / dpiFallback;
           const match = Math.abs(wIn - artboardWidth) / Math.max(artboardWidth, 0.1) <= 0.05 &&
@@ -274,7 +293,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
         toast({ title: t("toast.uploadFailed"), description: t("toast.uploadFailedDesc"), variant: "destructive" });
       }
     }
-  }, [applyImageDirectly, isMobile, toast, handleFallbackImage, artboardWidth, artboardHeight]);
+  }, [applyImageDirectly, isMobile, resolveUploadDpi, toast, handleFallbackImage, artboardWidth, artboardHeight]);
 
   const handlePDFUpload = useCallback((file: File, pdfData: ParsedPDFData) => {
     if (document.activeElement instanceof HTMLElement) {

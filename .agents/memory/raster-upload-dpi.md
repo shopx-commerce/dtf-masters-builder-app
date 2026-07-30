@@ -3,8 +3,8 @@ name: Raster upload DPI handling
 description: Physical-size defaults and metadata rules for uploaded PNG/JPEG artwork.
 ---
 
-The PNG DPI fallback is conditional on placement behavior. In codebases without an artboard size clamp, metadata-free PNGs need a 300 DPI fallback because 72 DPI can create enormous initial physical sizes. In this editor, oversized uploads are clamped with `initialS = Math.min(1, maxSx, maxSy)`, so preserve Sharp's `metadata.density || 72` behavior to avoid making uploads open four times smaller.
+The PNG DPI fallback is conditional on both placement behavior and artwork type. In this editor, metadata-free transparent PNG artwork uses a 300 DPI upload fallback, while ordinary opaque/JPEG uploads preserve Sharp's 72-DPI behavior. The client still clamps oversized uploads with `initialS = Math.min(1, maxSx, maxSy)`.
 
-**Why:** A 300 DPI fallback fixes overflow only when no client-side size ceiling exists. With artboard clamping, DPI controls the initial placed size while the clamp already guarantees fit; changing 72 to 300 changes established placement behavior rather than fixing overflow.
+**Why:** Transparent PNG exports often contain print-resolution pixels but no pHYs chunk; Sharp's synthetic 72 DPI makes those designs open several times too large. Applying 300 DPI to opaque/JPEG artwork changes normal designs that intentionally rely on their existing metadata behavior.
 
-**How to apply:** Before changing server DPI handling, inspect the upload placement function for a shared scale ceiling such as `Math.min(1, maxSx, maxSy)`. Only use the 300 fallback when that clamp is absent, and never silently lower valid embedded DPI based on pixel dimensions.
+**How to apply:** Keep the server fallback unchanged. In the client, detect a PNG with no real pHYs metadata and meaningful transparency before using the 300 DPI fallback. Preserve valid embedded DPI and leave opaque/JPEG uploads on their existing path.

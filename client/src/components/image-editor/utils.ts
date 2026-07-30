@@ -38,6 +38,7 @@ export {
   normalizeRasterDpiForInches,
   imageHasCleanAlpha,
   fetchImageDpi,
+  isPngWithoutEmbeddedDpi,
   injectPngDpi,
   clampDesignToArtboard,
   getRotatedBounds,
@@ -148,6 +149,29 @@ async function fetchImageDpi(file: File): Promise<number> {
     return Math.min(d, EXPORT_DPI);
   } catch {
     return RASTER_DPI_FALLBACK;
+  }
+}
+
+/**
+ * Detect PNG artwork that has no real physical-resolution metadata.
+ *
+ * Transparent PNG artwork is commonly exported as pixel art at print
+ * resolution without a pHYs chunk. Sharp reports 72 DPI synthetically for
+ * those files, which is not the intended print resolution. This stays
+ * separate from fetchImageDpi because the server's 72-DPI fallback is still
+ * intentional for ordinary opaque uploads such as JPEGs.
+ */
+async function isPngWithoutEmbeddedDpi(file: File): Promise<boolean> {
+  try {
+    const headerBytes = new Uint8Array(await file.slice(0, 65536).arrayBuffer());
+    const pngSig = [137, 80, 78, 71, 13, 10, 26, 10];
+    if (headerBytes.length < pngSig.length) return false;
+    for (let i = 0; i < pngSig.length; i++) {
+      if (headerBytes[i] !== pngSig[i]) return false;
+    }
+    return parseDpiFromHeader(headerBytes) == null;
+  } catch {
+    return false;
   }
 }
 
