@@ -230,6 +230,8 @@ function useImageEditorModel(props: ImageEditorProps) {
     isEditMode: bag.isEditMode,
     isAddingToCart: bag.isAddingToCart,
     isProcessing: bag.isProcessing,
+    handleIncreaseQuality: bag.handleIncreaseQuality,
+    isUpscaling: bag.isUpscaling,
   };
 
   return { ...bag, handleSetGroupCount, actionToolbarProps };

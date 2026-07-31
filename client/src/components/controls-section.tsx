@@ -165,6 +165,7 @@ export default function ControlsSection({
   const colorCacheRef = useRef<Map<string, ExtractedColor[]>>(new Map());
   const spotSelectionsRef = useRef<Map<string, ExtractedColor[]>>(new Map());
   const prevDesignIdRef = useRef<string | null | undefined>(null);
+  const imageIdentityByDesignRef = useRef<Map<string, HTMLImageElement>>(new Map());
 
   useEffect(() => {
     if (clearActiveChannelRef) clearActiveChannelRef.current = () => setActiveChannel(null);
@@ -181,6 +182,16 @@ export default function ControlsSection({
       spotSelectionsRef.current.set(prevDesignIdRef.current, extractedColors);
     }
     prevDesignIdRef.current = selectedDesignId;
+    if (selectedDesignId && imageInfo?.image) {
+      const previousImage = imageIdentityByDesignRef.current.get(selectedDesignId);
+      if (previousImage && previousImage !== imageInfo.image) {
+        // Pixel-derived spot selections belong to the old raster. Do not
+        // restore them after an upscale or another image replacement.
+        spotSelectionsRef.current.delete(selectedDesignId);
+        autoAssignSnapshotsRef.current.delete(selectedDesignId);
+      }
+      imageIdentityByDesignRef.current.set(selectedDesignId, imageInfo.image);
+    }
     const savedAutoSnapshot = selectedDesignId
       ? autoAssignSnapshotsRef.current.get(selectedDesignId) ?? null
       : null;

@@ -15,6 +15,7 @@ import {
   inchesFromPixelsPair,
   normalizeRasterDpiForInches,
 } from "./utils";
+import { getContourWorkerManager } from "@/lib/contour-worker-manager";
 import type { ImageInfo, ResizeSettings } from "@/lib/types";
 import type { ImageEditorBagAfterArrange } from "./image-editor-hook-bag.types";
 
@@ -49,7 +50,12 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
     artboardWidthRef,
     artboardHeightRef,
     applyImageDirectly,
+    thumbnailCacheRef,
+    contentFillCacheRef,
+    assetDataUrlCacheRef,
+    restoredLayerAssetRef,
   } = bag;
+  const [isUpscaling, setIsUpscaling] = useState(false);
 
   const resolveUploadDpi = useCallback(async (
     file: File,
@@ -513,6 +519,144 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
     }
   }, [imageInfo, selectedDesign, selectedDesignId, saveSnapshot, resizeSettings]);
 
+  const handleIncreaseQuality = useCallback(async (scaleFactor: number) => {
+    const design = selectedDesignId ? designs.find(d => d.id === selectedDesignId) : null;
+    const sourceInfo = design?.imageInfo ?? imageInfo;
+    if (!design || !sourceInfo?.image || isUpscaling) return;
+
+    const source = sourceInfo.image;
+    const sourceWidth = source.naturalWidth || source.width;
+    const sourceHeight = source.naturalHeight || source.height;
+    if (!sourceWidth || !sourceHeight) {
+      toast({ title: t("toast.upscaleFailed"), description: t("toast.upscaleFailedDesc"), variant: "destructive" });
+      return;
+    }
+
+    setIsUpscaling(true);
+    toast({ title: t("toast.upscaleStarted"), description: t("toast.upscaleStartedDesc") });
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = sourceWidth;
+      canvas.height = sourceHeight;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Could not create image canvas");
+      context.drawImage(source, 0, 0, sourceWidth, sourceHeight);
+
+      const pngBlob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error("Could not encode image")), "image/png");
+      });
+      const fileName = sourceInfo.file?.name?.replace(/\.[^.]+$/, "") || "design";
+      let resultBlob: Blob | null = null;
+      let lastError: Error | null = null;
+      const maxAttempts = 4;
+
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+          const body = new FormData();
+          body.append("image", new File([pngBlob], `${fileName}.png`, { type: "image/png" }));
+          body.append("scaleFactor", String(scaleFactor));
+          const response = await fetch("/api/upscale-image", { method: "POST", body });
+          if (!response.ok) {
+            const payload = await response.json().catch(() => null) as { error?: string } | null;
+            const error = new Error(payload?.error || `Upscale request failed (${response.status})`);
+            if ((response.status === 502 || response.status === 503) && attempt < maxAttempts - 1) {
+              lastError = error;
+              await new Promise(resolve => setTimeout(resolve, 4000));
+              continue;
+            }
+            throw error;
+          }
+          resultBlob = await response.blob();
+          break;
+        } catch (error) {
+          lastError = error instanceof Error ? error : new Error("Upscale request failed");
+          const retryableNetworkError =
+            error instanceof TypeError ||
+            (error instanceof Error && /network|fetch|failed to fetch/i.test(error.message));
+          if (!retryableNetworkError || attempt >= maxAttempts - 1) throw lastError;
+          await new Promise(resolve => setTimeout(resolve, 4000));
+        }
+      }
+
+      if (!resultBlob) throw lastError ?? new Error("Upscale returned no image");
+      const resultUrl = URL.createObjectURL(resultBlob);
+      const upscaledImage = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const nextImage = new Image();
+        nextImage.onload = () => {
+          URL.revokeObjectURL(resultUrl);
+          resolve(nextImage);
+        };
+        nextImage.onerror = () => {
+          URL.revokeObjectURL(resultUrl);
+          reject(new Error("Could not load upscaled image"));
+        };
+        nextImage.src = resultUrl;
+      });
+
+      const outputWidth = upscaledImage.naturalWidth || upscaledImage.width;
+      const outputHeight = upscaledImage.naturalHeight || upscaledImage.height;
+      const outputDpi = Math.min(
+        outputWidth / Math.max(0.01, design.widthInches),
+        outputHeight / Math.max(0.01, design.heightInches),
+      );
+      const nextFile = new File([resultBlob], `${fileName}-upscaled.png`, { type: "image/png" });
+      const nextInfo: ImageInfo = {
+        ...sourceInfo,
+        file: nextFile,
+        image: upscaledImage,
+        originalWidth: outputWidth,
+        originalHeight: outputHeight,
+        dpi: outputDpi,
+        isPDF: false,
+        originalPdfData: undefined,
+      };
+
+      saveSnapshot();
+      const oldSrc = sourceInfo.image.src;
+      thumbnailCacheRef.current.delete(oldSrc);
+      contentFillCacheRef.current.delete(oldSrc);
+      assetDataUrlCacheRef.current.delete(design.id);
+      restoredLayerAssetRef.current.delete(design.id);
+      getContourWorkerManager().clearCache();
+      setDesigns(prev => prev.map(current => current.id === design.id
+        ? {
+            ...current,
+            imageInfo: nextInfo,
+            originalDPI: outputDpi,
+            alphaThresholded: false,
+            halftoned: false,
+            halftoneSettings: undefined,
+            halftoneSourceImage: undefined,
+          }
+        : current
+      ));
+      setImageInfo(nextInfo);
+      setResizeSettings(prev => ({ ...prev, widthInches: design.widthInches, heightInches: design.heightInches }));
+      toast({ title: t("toast.upscaleSuccess"), description: t("toast.upscaleSuccessDesc", { scale: scaleFactor }) });
+    } catch (error) {
+      console.error("[upscale] failed:", error);
+      toast({
+        title: t("toast.upscaleFailed"),
+        description: error instanceof Error ? error.message : t("toast.upscaleFailedDesc"),
+        variant: "destructive",
+      });
+    } finally {
+      setIsUpscaling(false);
+    }
+  }, [
+    selectedDesignId,
+    designs,
+    imageInfo,
+    isUpscaling,
+    toast,
+    t,
+    saveSnapshot,
+    thumbnailCacheRef,
+    contentFillCacheRef,
+    assetDataUrlCacheRef,
+    restoredLayerAssetRef,
+  ]);
+
 
   const thresholdAlphaForDesign = useCallback((info: ImageInfo): Promise<ImageInfo | null> => {
     return new Promise(resolve => {
@@ -636,5 +780,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
     handleThresholdAlphaAll,
     handleCropDesign,
     handleCropApply,
+    handleIncreaseQuality,
+    isUpscaling,
   };
 }

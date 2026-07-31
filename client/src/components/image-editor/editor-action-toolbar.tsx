@@ -10,6 +10,7 @@ import {
   ChevronUp,
   Copy,
   Droplets,
+  Sparkles,
   LayoutGrid,
   Link,
   Loader2,
@@ -83,6 +84,8 @@ export type EditorActionToolbarProps = {
   isEditMode?: boolean;
   isAddingToCart?: boolean;
   isProcessing?: boolean;
+  handleIncreaseQuality: (scaleFactor: number) => Promise<void>;
+  isUpscaling: boolean;
 };
 
 export default function EditorActionToolbar(props: EditorActionToolbarProps) {
@@ -141,6 +144,8 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
     isEditMode,
     isAddingToCart,
     isProcessing,
+    handleIncreaseQuality,
+    isUpscaling,
   } = props;
   const metric = useMetric(lang);
   const maxGangsheetHeight = GANGSHEET_HEIGHTS.length > 0
@@ -158,6 +163,7 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
         : t("controls.addToCart");
   const cartButtonTitle = !canAddToCart ? t("controls.uploadFirst") : cartButtonLabel;
   const [showSizeHint, setShowSizeHint] = useState(false);
+  const [upscaleScale, setUpscaleScale] = useState<2 | 3>(2);
   const hadImageRef = useRef(false);
 
   useEffect(() => {
@@ -222,6 +228,31 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
             <Droplets className="w-3 h-3 lg:w-4 lg:h-4" />
             {t("editor.cleanAlphaAll")}
           </button>
+          <div className="flex items-center gap-0.5">
+            <button
+              onClick={() => void handleIncreaseQuality(upscaleScale)}
+              disabled={!selectedDesignId || isUpscaling}
+              className={`flex items-center gap-1.5 rounded-l-md border px-2 py-1 lg:px-3 lg:py-2 text-[11px] lg:text-sm font-medium shadow-sm min-h-[36px] ${
+                selectedDesignId && !isUpscaling
+                  ? 'border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100'
+                  : 'border-gray-200 bg-gray-200 text-gray-500 opacity-50'
+              }`}
+              title={t("editor.increaseQualityTitle")}
+            >
+              {isUpscaling ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3 lg:h-4 lg:w-4" />}
+              {isUpscaling ? t("editor.increasingQuality") : t("editor.increaseQuality")}
+            </button>
+            <select
+              aria-label={t("editor.increaseQualityScale")}
+              value={upscaleScale}
+              onChange={event => setUpscaleScale(Number(event.target.value) as 2 | 3)}
+              disabled={isUpscaling}
+              className="h-9 rounded-r-md border border-l-0 border-violet-300 bg-white px-1 text-[11px] font-bold text-violet-700 outline-none disabled:opacity-50"
+            >
+              <option value="2">2×</option>
+              <option value="3">3×</option>
+            </select>
+          </div>
         </div>
         {!isMobile && (
           <div className="flex items-center gap-1">
