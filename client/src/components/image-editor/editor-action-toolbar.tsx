@@ -143,6 +143,9 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
     isProcessing,
   } = props;
   const metric = useMetric(lang);
+  const maxGangsheetHeight = GANGSHEET_HEIGHTS.length > 0
+    ? Math.max(...GANGSHEET_HEIGHTS)
+    : artboardHeight;
   const canAddToCart = !!activeImageInfo || designs.length > 0;
   const cartButtonDisabled = !!isProcessing || !canAddToCart;
   const cartButtonBusy = !!isAddingToCart || !!isProcessing;
@@ -396,7 +399,7 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
                 value={activeResizeSettings.heightInches * activeDesignTransform.s}
                 onCommit={(v) => { handleEffectiveSizeChange("height", v); setShowSizeHint(false); }}
                 title={useMetric(lang) ? t("editor.heightTitleCm") : t("editor.heightTitle")}
-                max={artboardHeight}
+                max={maxGangsheetHeight}
                 lang={lang}
               />
               <span className={`font-medium text-gray-700 ${lang === 'en' ? 'text-[11px]' : 'text-[10px]'}`}>{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>

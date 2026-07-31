@@ -4,3 +4,4 @@
 - [Copy-count arrangement](copy-count-arrangement.md) — layer copy-count changes must repack the whole sheet, not use selected-only obstacle mode.
 - [Low-zoom selection controls](low-zoom-selection-controls.md) — shrink corner handles and rotation hit zones only below 100% zoom.
 - [Halftone resize pipeline](halftone-resize-pipeline.md) — rebuild halftone screens from original pixels at the design’s final physical size.
+- [Design resize sheet expansion](design-resize-sheet-expansion.md) — promote the gangsheet before applying a manual design height beyond the current bound.

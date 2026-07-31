@@ -76,6 +76,14 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   artboardWidthRef.current = artboardWidth;
   const artboardHeightRef = useRef(artboardHeight);
   artboardHeightRef.current = artboardHeight;
+  const availableGangsheetHeights = useMemo(() => {
+    if (initialGangsheetHeights && initialGangsheetHeights.length > 0) {
+      return initialGangsheetHeights;
+    }
+    const base = profile.gangsheetHeights;
+    if (!initialHeight || base.includes(initialHeight)) return base;
+    return [...base, initialHeight].sort((a, b) => a - b);
+  }, [profile.gangsheetHeights, initialHeight, initialGangsheetHeights]);
   const contentFillCacheRef = useRef<Map<string, number>>(new Map());
   const handleAutoArrangeRef = useRef<(
     opts?: { skipSnapshot?: boolean; preserveSelection?: boolean; arrangeAll?: boolean }
@@ -688,13 +696,13 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     const targets = designs.filter(d => ids.has(d.id));
     if (targets.length === 0) return;
     saveSnapshot();
-    setDesigns(prev => prev.map(design => {
+    const requested = Math.max(0.01, value);
+    const resizedDesigns = designs.map(design => {
       if (!ids.has(design.id)) return design;
       const currentS = design.transform.s;
       const currentW = design.widthInches;
       const currentH = design.heightInches;
       if (currentW <= 0 || currentH <= 0 || currentS <= 0) return design;
-      const requested = Math.max(0.01, value);
       const next = { ...design };
       if (proportionalLock) {
         const newS = axis === 'width' ? requested / currentW : requested / currentH;
@@ -702,12 +710,55 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       } else if (axis === 'width') {
         next.widthInches = Math.min(artboardWidth, requested / currentS);
       } else {
-        next.heightInches = Math.min(artboardHeight, requested / currentS);
+        // Height can exceed the current sheet. The sheet is promoted to the
+        // next configured bound below so the requested value is not silently
+        // reduced to the current artboard height.
+        next.heightInches = requested / currentS;
       }
-      const clamped = clampDesignToArtboard(next, artboardWidth, artboardHeight);
-      next.transform = { ...next.transform, nx: clamped.nx, ny: clamped.ny };
       return next;
-    }));
+    });
+
+    // Match copy-count expansion: choose the smallest configured gangsheet
+    // bound that can contain the resized design(s), then repack the sheet.
+    const requiredHeight = resizedDesigns.reduce((maxHeight, design) => {
+      const bounds = getRotatedBounds(design);
+      return Math.max(maxHeight, bounds.maxY - bounds.minY);
+    }, artboardHeight);
+    const nextHeight = availableGangsheetHeights.find(h => h >= requiredHeight) ?? artboardHeight;
+    const expanded = nextHeight > artboardHeight;
+
+    const positionedDesigns = resizedDesigns.map(design => {
+      const absCy = design.transform.ny * artboardHeight;
+      const resizedTransform = expanded
+        ? { ...design.transform, ny: absCy / nextHeight }
+        : design.transform;
+      const clamped = clampDesignToArtboard(
+        { ...design, transform: resizedTransform },
+        artboardWidth,
+        nextHeight,
+      );
+      return {
+        ...design,
+        transform: { ...resizedTransform, nx: clamped.nx, ny: clamped.ny },
+      };
+    });
+
+    setDesigns(() => positionedDesigns);
+    if (expanded) {
+      setArtboardHeight(nextHeight);
+      // Give React time to commit the new dimensions before arranging, just
+      // like the copy-count flow does when it expands the gangsheet.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          handleAutoArrangeRef.current({
+            skipSnapshot: true,
+            preserveSelection: true,
+            arrangeAll: true,
+          });
+        });
+      });
+    }
+
     const active = targets.find(d => d.id === targetId);
     if (active) {
       if (proportionalLock) {
@@ -715,10 +766,19 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       } else {
         setResizeSettings(prev => axis === 'width'
           ? { ...prev, widthInches: Math.min(artboardWidth, value / active.transform.s) }
-          : { ...prev, heightInches: Math.min(artboardHeight, value / active.transform.s) });
+          : { ...prev, heightInches: value / active.transform.s });
       }
     }
-  }, [selectedDesignId, selectedDesignIds, designs, proportionalLock, saveSnapshot, artboardWidth, artboardHeight]);
+  }, [
+    selectedDesignId,
+    selectedDesignIds,
+    designs,
+    proportionalLock,
+    saveSnapshot,
+    artboardWidth,
+    artboardHeight,
+    availableGangsheetHeights,
+  ]);
 
   const isArtboardFull = useCallback((extraDesigns?: DesignItem[]) => {
     if (designs.length === 0) return false;
