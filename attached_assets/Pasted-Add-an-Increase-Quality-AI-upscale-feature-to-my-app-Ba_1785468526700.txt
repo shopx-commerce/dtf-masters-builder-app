@@ -1,0 +1,19 @@
+Add an "Increase Quality" AI upscale feature to my app:
+
+Backend (Express + sharp + replicate npm packages):
+
+Create POST /api/upscale-image accepting a PNG upload via multer (in-memory) plus a scaleFactor field (clamp to 2–4, default 2).
+Run the upscale with the Real-ESRGAN model on Replicate: model nightmareai/real-esrgan:f121d640bd286e1fdc67f9799164c1d5be36ff74576ee11c803ae5b665dd46aa, input { image: <data URI of the PNG>, scale: scaleFactor, face_enhance: false }. Use my REPLICATE_API_TOKEN secret (ask me to add it if it's not set). It typically finishes in 5–15 seconds.
+Validate the returned URL is https, download it with a timeout, and re-encode to PNG with sharp before responding.
+Critical — transparency restore: AI upscalers flatten the alpha channel to an opaque background. If the source PNG has transparency, extract the source's alpha channel, resize it to the output dimensions, and re-apply it to the upscaled image using a sharp composite with blend: 'dest-in' (build an RGBA mask image for it). Do NOT use sharp's joinChannel for this — it silently drops the 4th band on PNG write. Verify the output actually has alpha (stats min/max on channel 4).
+Add fetch timeouts (AbortSignal) on all external calls, and return explicit JSON errors — no silent fallbacks.
+Frontend:
+
+Add an "Increase Quality" button with a small dropdown offering 2x and 3x.
+On click: draw the current image (with all edits applied) to a canvas, export as PNG blob, POST as FormData with the chosen scaleFactor.
+Retry the request up to 3 times (4s apart) on 502/503 or network errors — the server can be briefly busy right after upload.
+On success: load the returned PNG, swap it in as the current image, and invalidate every image-derived cache (contours, color extractions, worker caches, anything keyed to the old pixels or dimensions). Keep the physical print size unchanged — only pixel density improves.
+Show progress/success/failure toasts, and disable the button while an upscale is in flight.
+Verify before finishing: upscale a test PNG that has transparency, and confirm the output is the right dimensions AND still transparent (alpha min 0 / max 255).
+
+Two notes for you: the other app needs its own REPLICATE_API_TOKEN (each Replit app has separate secrets — you can reuse the same token value from replicate.com), and point #4 on the frontend is where app-specific work lives, since it depends on what that app derives from its images.
