@@ -16,7 +16,6 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
   // the full bag is still re-spread into the return so downstream consumers are unaffected.
   const {
     initialDesignState,
-    initialDesignId,
     isEditMode,
     shopifyVariants,
     initialVariantId,
@@ -39,6 +38,9 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
     selectedDesignIdsRef,
     assetDataUrlCacheRef,
     restoredLayerAssetRef,
+    designIdRef,
+    getLayerAssetRef,
+    releaseLayerAssetOwnership,
     fileToDataUrl,
     addToCartInFlightRef,
     profile,
@@ -83,6 +85,18 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
 
     const layerAssets = await Promise.all(
       currentDesigns.map(async (d) => {
+        // Eagerly uploaded while designing — send the R2 reference instead of the bytes.
+        const uploaded = getLayerAssetRef(d);
+        if (uploaded) {
+          return {
+            layerId: d.id,
+            filename: uploaded.filename,
+            mimeType: uploaded.mimeType,
+            url: uploaded.url,
+            key: uploaded.key,
+          };
+        }
+
         const f = d.imageInfo?.file;
         const fileSig = f ? `${f.name}:${f.size}:${f.lastModified}` : "";
         const restored = restoredLayerAssetRef.current.get(d.id);
@@ -129,12 +143,10 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         };
       }),
     );
+    releaseLayerAssetOwnership();
 
     return {
-      designId:
-        (initialDesignState as { designId?: string | null } | null)?.designId ||
-        initialDesignId ||
-        null,
+      designId: designIdRef.current,
       builderPath: typeof window !== "undefined" ? window.location.pathname : null,
       canvas: {
         artboardWidthInches: artboardWidth,
@@ -156,13 +168,15 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
     quantity,
     designGap,
     initialDesignState,
-    initialDesignId,
     isEditMode,
     designsRef,
     selectedDesignIdRef,
     selectedDesignIdsRef,
     restoredLayerAssetRef,
     assetDataUrlCacheRef,
+    designIdRef,
+    getLayerAssetRef,
+    releaseLayerAssetOwnership,
   ]);
 
   const handleAddToCart = useCallback(async () => {
@@ -486,9 +500,8 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       } else if (uploadInBuilder) {
         const uploadOpts = {
           objectKey: productionKey || filename,
-          // Prefer the signed upload endpoint when the parent provides one.
-          // The legacy shell relay may still return a PNG URL for PDF uploads.
-          useShellRelay: !uploadUrl && canUseShellRelay(),
+          // Inside the shell the relay is the only reliable transport; uploadUrl is the shell's own.
+          useShellRelay: canUseShellRelay(),
           productionFormat: productionIsPdf ? "pdf" as const : "png" as const,
         };
         const uploadBody =

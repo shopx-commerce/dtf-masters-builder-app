@@ -43,3 +43,7 @@ export const ADD_TO_CART_LABEL_MAX_LEN = 34;
 export const EXPORT_TIMEOUT_MS = 300_000;
 /** Delay before hiding the upload progress bar, so the 100% state is visible. */
 export const UPLOAD_PROGRESS_HIDE_DELAY_MS = 300;
+/** Concurrent background layer-asset uploads while the customer designs. */
+export const LAYER_ASSET_UPLOAD_CONCURRENCY = 3;
+/** Grace period before a removed layer's uploaded asset is deleted, so undo can reclaim it. */
+export const LAYER_ASSET_GC_DELAY_MS = 8_000;

@@ -10,7 +10,7 @@ import {
 } from "./constants";
 import type { InitialDesignState } from "./types";
 
-type RestoredAsset = { url: string; key?: string; mimeType?: string; fileSig: string };
+export type RestoredAsset = { url: string; key?: string; mimeType?: string; fileSig: string };
 
 function resolveArtboardSize(state: InitialDesignState): { w: number; h: number } | null {
   const parsedSize = (() => {
