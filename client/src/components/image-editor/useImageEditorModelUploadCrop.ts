@@ -16,6 +16,7 @@ import {
   normalizeRasterDpiForInches,
 } from "./utils";
 import { getContourWorkerManager } from "@/lib/contour-worker-manager";
+import { revokeThumbnailCacheEntry } from "@/lib/thumbnail-cache";
 import type { ImageInfo, ResizeSettings } from "@/lib/types";
 import type { ImageEditorBagAfterArrange } from "./image-editor-hook-bag.types";
 
@@ -613,7 +614,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
 
       saveSnapshot();
       const oldSrc = sourceInfo.image.src;
-      thumbnailCacheRef.current.delete(oldSrc);
+      revokeThumbnailCacheEntry(thumbnailCacheRef.current, oldSrc);
       contentFillCacheRef.current.delete(oldSrc);
       assetDataUrlCacheRef.current.delete(design.id);
       restoredLayerAssetRef.current.delete(design.id);

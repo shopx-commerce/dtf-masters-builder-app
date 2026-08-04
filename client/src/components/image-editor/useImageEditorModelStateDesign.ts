@@ -26,6 +26,11 @@ import {
   restoreEditorDraft,
   saveCurrentEditorDraft,
 } from "@/lib/editor-draft-storage";
+import ThumbnailWorker from "@/lib/thumbnail-worker?worker";
+import { revokeThumbnailCacheEntry } from "@/lib/thumbnail-cache";
+
+const THUMBNAIL_PLACEHOLDER =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' fill='%23f3f4f6'/%3E%3C/svg%3E";
 
 export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   const {
@@ -164,6 +169,12 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   const nudgeSnapshotSavedRef = useRef(false);
   const nudgeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const thumbnailCacheRef = useRef<Map<string, string>>(new Map());
+  const thumbnailWorkerRef = useRef<Worker | null>(null);
+  const thumbnailWorkerRequestIdRef = useRef(0);
+  const thumbnailPendingRef = useRef<Map<number, { key: string }>>(new Map());
+  const thumbnailPendingKeysRef = useRef<Set<string>>(new Set());
+  const thumbnailWorkerFailedRef = useRef(false);
+  const [, setThumbnailVersion] = useState(0);
   const assetDataUrlCacheRef = useRef<
     Map<string, { sig: string; dataUrl: string; filename?: string; mimeType?: string }>
   >(new Map());
@@ -584,29 +595,98 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   }, []);
 
   const getLayerThumbnail = useCallback((design: DesignItem): string => {
-    try {
-      const cache = thumbnailCacheRef.current;
-      const key = design.imageInfo?.image?.src ?? design.id;
-      if (cache.has(key)) return cache.get(key)!;
-      const THUMB_SIZE = LAYER_THUMBNAIL_SIZE;
-      const img = design.imageInfo.image;
-      if (!img || !img.width || !img.height) return '';
-      const aspect = img.width / img.height;
-      const tw = Math.max(1, aspect >= 1 ? THUMB_SIZE : Math.round(THUMB_SIZE * aspect));
-      const th = Math.max(1, aspect >= 1 ? Math.round(THUMB_SIZE / aspect) : THUMB_SIZE);
-      const c = document.createElement('canvas');
-      c.width = tw;
-      c.height = th;
-      const ctx = c.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(img, 0, 0, tw, th);
-        const dataUrl = c.toDataURL('image/png');
-        cache.set(key, dataUrl);
-        return dataUrl;
+    const cache = thumbnailCacheRef.current;
+    const key = design.imageInfo?.image?.src ?? design.id;
+    if (cache.has(key)) return cache.get(key)!;
+
+    const img = design.imageInfo.image;
+    if (!img || !img.width || !img.height) return "";
+    const aspect = img.width / img.height;
+    const tw = Math.max(1, aspect >= 1 ? LAYER_THUMBNAIL_SIZE : Math.round(LAYER_THUMBNAIL_SIZE * aspect));
+    const th = Math.max(1, aspect >= 1 ? Math.round(LAYER_THUMBNAIL_SIZE / aspect) : LAYER_THUMBNAIL_SIZE);
+
+    const getWorker = (): Worker | null => {
+      if (thumbnailWorkerRef.current) return thumbnailWorkerRef.current;
+      try {
+        const worker = new ThumbnailWorker();
+        worker.onmessage = (event: MessageEvent<{ type: string; requestId: number; blob?: Blob }>) => {
+          const request = thumbnailPendingRef.current.get(event.data.requestId);
+          if (!request) return;
+          thumbnailPendingRef.current.delete(event.data.requestId);
+          thumbnailPendingKeysRef.current.delete(request.key);
+          if (event.data.type !== "result" || !event.data.blob) {
+            thumbnailWorkerFailedRef.current = true;
+            setThumbnailVersion(version => version + 1);
+            return;
+          }
+          revokeThumbnailCacheEntry(cache, request.key);
+          cache.set(request.key, URL.createObjectURL(event.data.blob));
+          setThumbnailVersion(version => version + 1);
+        };
+        worker.onerror = () => {
+          thumbnailWorkerFailedRef.current = true;
+          thumbnailWorkerRef.current?.terminate();
+          thumbnailWorkerRef.current = null;
+          thumbnailPendingRef.current.clear();
+          thumbnailPendingKeysRef.current.clear();
+          setThumbnailVersion(version => version + 1);
+        };
+        thumbnailWorkerRef.current = worker;
+        return worker;
+      } catch {
+        return null;
       }
-      return key;
+    };
+
+    const worker = !thumbnailWorkerFailedRef.current &&
+      typeof createImageBitmap === "function" && typeof OffscreenCanvas !== "undefined"
+      ? getWorker()
+      : null;
+    if (worker) {
+      if (!thumbnailPendingKeysRef.current.has(key)) {
+        thumbnailPendingKeysRef.current.add(key);
+        const requestId = ++thumbnailWorkerRequestIdRef.current;
+        thumbnailPendingRef.current.set(requestId, { key });
+        void createImageBitmap(img).then(bitmap => {
+          if (!thumbnailPendingRef.current.has(requestId)) {
+            bitmap.close();
+            return;
+          }
+          worker.postMessage({ type: "thumbnail", requestId, bitmap, width: tw, height: th }, [bitmap]);
+        }).catch(() => {
+          thumbnailPendingRef.current.delete(requestId);
+          thumbnailPendingKeysRef.current.delete(key);
+          thumbnailWorkerFailedRef.current = true;
+          setThumbnailVersion(version => version + 1);
+        });
+      }
+      return THUMBNAIL_PLACEHOLDER;
+    }
+
+    // Compatibility fallback for older browsers or worker initialization
+    // failures. This preserves the existing thumbnail behavior.
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = tw;
+      canvas.height = th;
+      const context = canvas.getContext("2d");
+      if (!context) return "";
+      context.drawImage(img, 0, 0, tw, th);
+      const dataUrl = canvas.toDataURL("image/png");
+      cache.set(key, dataUrl);
+      return dataUrl;
     } catch {
-      return '';
+      return "";
+    }
+  }, []);
+
+  useEffect(() => () => {
+    thumbnailWorkerRef.current?.terminate();
+    thumbnailWorkerRef.current = null;
+    thumbnailPendingRef.current.clear();
+    thumbnailPendingKeysRef.current.clear();
+    for (const value of thumbnailCacheRef.current.values()) {
+      if (value.startsWith("blob:")) URL.revokeObjectURL(value);
     }
   }, []);
 
@@ -1143,7 +1223,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     for (const d of toDelete) {
       const srcStillUsed = remaining.some(r => r.imageInfo.image.src === d.imageInfo.image.src);
       if (!srcStillUsed) {
-        thumbnailCacheRef.current.delete(d.imageInfo.image.src);
+        revokeThumbnailCacheEntry(thumbnailCacheRef.current, d.imageInfo.image.src);
         contentFillCacheRef.current.delete(d.imageInfo.image.src);
       }
     }
@@ -1168,7 +1248,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     if (toDelete) {
       const srcStillUsed = remaining.some(d => d.imageInfo.image.src === toDelete.imageInfo.image.src);
       if (!srcStillUsed) {
-        thumbnailCacheRef.current.delete(toDelete.imageInfo.image.src);
+        revokeThumbnailCacheEntry(thumbnailCacheRef.current, toDelete.imageInfo.image.src);
         contentFillCacheRef.current.delete(toDelete.imageInfo.image.src);
       }
     }
@@ -1195,7 +1275,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     const remainingSrcs = new Set(remaining.map(d => d.imageInfo.image.src));
     for (const d of designsRef.current) {
       if (ids.has(d.id) && !remainingSrcs.has(d.imageInfo.image.src)) {
-        thumbnailCacheRef.current.delete(d.imageInfo.image.src);
+        revokeThumbnailCacheEntry(thumbnailCacheRef.current, d.imageInfo.image.src);
         contentFillCacheRef.current.delete(d.imageInfo.image.src);
       }
     }
