@@ -18,6 +18,14 @@ import type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/li
 import { HOT_PEEL_PROFILE } from "@/lib/profiles";
 import type { ImageEditorProps } from "./types";
 import type { SpotPreviewData } from "../controls-section";
+import {
+  buildEditorDraft,
+  deleteCurrentEditorDraft,
+  getCurrentEditorDraft,
+  requestPersistentEditorStorage,
+  restoreEditorDraft,
+  saveCurrentEditorDraft,
+} from "@/lib/editor-draft-storage";
 
 export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   const {
@@ -108,6 +116,10 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   }, [clampDuplicateCount]);
   const [designTransform, setDesignTransform] = useState<ImageTransform>(DEFAULT_DESIGN_TRANSFORM);
   const [designs, setDesigns] = useState<DesignItem[]>([]);
+  const [draftRecoveryAvailable, setDraftRecoveryAvailable] = useState(false);
+  const [isRecoveringDraft, setIsRecoveringDraft] = useState(false);
+  const draftFileKeysRef = useRef<Set<string>>(new Set());
+  const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (designs.length > 0) return;
     if (initialWidth != null && initialWidth > 0) setArtboardWidth(initialWidth);
@@ -173,6 +185,128 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     setQuantity,
     setDesignGap,
   });
+
+  useEffect(() => {
+    void requestPersistentEditorStorage();
+    void getCurrentEditorDraft().then(draft => {
+      if (!draft || draft.designs.length === 0) return;
+      // A remotely saved design/edit flow is authoritative and should never
+      // be replaced by an older browser-local draft.
+      if (initialDesignState?.designId || isEditMode) return;
+      setDraftRecoveryAvailable(true);
+    }).catch(error => {
+      console.warn("[editor-draft] availability check failed", error);
+    });
+  }, [initialDesignState?.designId, isEditMode]);
+
+  const discardEditorDraft = useCallback(async () => {
+    try {
+      await deleteCurrentEditorDraft();
+    } catch (error) {
+      console.warn("[editor-draft] discard failed", error);
+    } finally {
+      draftFileKeysRef.current.clear();
+      setDraftRecoveryAvailable(false);
+    }
+  }, []);
+
+  const recoverEditorDraft = useCallback(async () => {
+    if (isRecoveringDraft) return;
+    setIsRecoveringDraft(true);
+    try {
+      const draft = await getCurrentEditorDraft();
+      if (!draft) {
+        setDraftRecoveryAvailable(false);
+        return;
+      }
+      const restored = await restoreEditorDraft(draft);
+      if (restored.designs.length === 0) {
+        await discardEditorDraft();
+        return;
+      }
+      setIsProcessing(true);
+      setArtboardWidth(restored.artboardWidth);
+      setArtboardHeight(restored.artboardHeight);
+      setQuantity(restored.quantity);
+      setDesignGap(restored.designGap);
+      setDesigns(restored.designs);
+      setSelectedDesignId(restored.selectedDesignId);
+      setSelectedDesignIds(restored.selectedDesignIds);
+      const selected = restored.designs.find(design => design.id === restored.selectedDesignId);
+      setImageInfo(selected?.imageInfo ?? null);
+      setDesignTransform(selected?.transform ?? DEFAULT_DESIGN_TRANSFORM);
+      draftFileKeysRef.current = new Set(draft.designs.map(design => design.fileKey));
+      setDraftRecoveryAvailable(false);
+      setIsProcessing(false);
+    } catch (error) {
+      console.error("[editor-draft] restore failed", error);
+      setIsProcessing(false);
+    } finally {
+      setIsRecoveringDraft(false);
+    }
+  }, [
+    discardEditorDraft,
+    isRecoveringDraft,
+    setArtboardHeight,
+    setArtboardWidth,
+    setDesignGap,
+    setQuantity,
+  ]);
+
+  // Keep a browser-local recovery point while editing. The first save waits
+  // until designs exist, so initial setup and remote restore are not captured
+  // as accidental blank drafts.
+  useEffect(() => {
+    if (draftRecoveryAvailable || isRecoveringDraft || isProcessing || designs.length === 0) return;
+    if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
+    draftSaveTimerRef.current = setTimeout(() => {
+      const { draft, files } = buildEditorDraft(
+        profile.id,
+        designs,
+        artboardWidth,
+        artboardHeight,
+        quantity,
+        designGap ?? 0,
+        selectedDesignId,
+        selectedDesignIds,
+      );
+      const newFiles = files.filter(file => !draftFileKeysRef.current.has(file.key));
+      void saveCurrentEditorDraft(draft, newFiles)
+        .then(() => {
+          for (const file of newFiles) draftFileKeysRef.current.add(file.key);
+        })
+        .catch(error => console.warn("[editor-draft] save failed", error));
+    }, 750);
+    return () => {
+      if (draftSaveTimerRef.current) {
+        clearTimeout(draftSaveTimerRef.current);
+        draftSaveTimerRef.current = null;
+      }
+    };
+  }, [
+    artboardHeight,
+    artboardWidth,
+    designGap,
+    designs,
+    draftRecoveryAvailable,
+    isProcessing,
+    isRecoveringDraft,
+    profile.id,
+    quantity,
+    selectedDesignId,
+    selectedDesignIds,
+  ]);
+
+  useEffect(() => {
+    if (!draftRecoveryAvailable || designs.length === 0 || isRecoveringDraft) return;
+    // Starting a fresh upload while the recovery banner is visible means the
+    // user chose new work. Remove the old draft so it cannot return later.
+    void discardEditorDraft();
+  }, [discardEditorDraft, draftRecoveryAvailable, designs.length, isRecoveringDraft]);
+
+  useEffect(() => () => {
+    if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
+  }, []);
 
   const multiDragAccumRef = useRef<{ totalDnx: number; totalDny: number; starts: Map<string, {nx: number; ny: number}> } | null>(null);
   const multiResizeStartRef = useRef<Map<string, { nx: number; ny: number; s: number }> | null>(null);
@@ -1191,5 +1325,5 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
 
 
   // Base editor state; arrange/upload/export/cart hooks extend this bag in image-editor-provider.
-  return { onDesignUploaded, profile, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode, toast, t, lang, isMobile, isLgUp, imageInfo, setImageInfo, resizeSettings, setResizeSettings, isProcessing, setIsProcessing, isAddingToCart, setIsAddingToCart, isUpdateFlow, setIsUpdateFlow, addToCartProgressLabel, setAddToCartProgressLabel, addToCartInFlightRef, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, refreshAddToCartStallTimeout, isUploading, setIsUploading, uploadProgress, setUploadProgress, artboardWidth, setArtboardWidth, artboardHeight, setArtboardHeight, artboardWidthRef, artboardHeightRef, contentFillCacheRef, handleAutoArrangeRef, quantity, setQuantity, designGap, setDesignGap, duplicateCount, setDuplicateCount, clampDuplicateCount, parseDuplicateCount, handleDuplicateCountKeyDown, designTransform, setDesignTransform, designs, setDesigns, selectedDesignId, setSelectedDesignId, selectedDesignIds, setSelectedDesignIds, mobilePanel, setMobilePanel, showDesignInfo, setShowDesignInfo, selectionZoomActive, setSelectionZoomActive, editingLayerName, setEditingLayerName, editingNameValue, setEditingNameValue, clipboardRef, proportionalLock, setProportionalLock, designInfoRef, sidebarFileRef, headerUploadInputRef, canvasRef, downloadContainer, setDownloadContainer, spotPreviewData, setSpotPreviewData, fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer, copySpotSelectionsRef, contextMenu, setContextMenu, cropModalDesignId, setCropModalDesignId, pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo, mountedRef, designsRef, nudgeSnapshotSavedRef, nudgeTimeoutRef, thumbnailCacheRef, assetDataUrlCacheRef, restoredLayerAssetRef, multiDragAccumRef, multiResizeStartRef, multiRotateStartRef, snapshotCacheRef, getSnapshot, saveSnapshot, applySnapshot, handleUndo, handleRedo, handleInteractionEnd, handleRemoveWhiteBackground, handleWandDelete, wandDeleteModeActive, setWandDeleteModeActive, wandTolerance, setWandTolerance, selectedDesign, activeImageInfo, activeDesignTransform, activeWidthInches, activeHeightInches, activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, handleSelectDesign, handleMultiSelect, getLayerThumbnail, handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta, handleEffectiveSizeChange, isArtboardFull, handleDuplicateDesign, handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleCopySelected, handlePaste, handleDeleteGroup, handleDeleteDesign, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleCanvasContextMenu };
+  return { onDesignUploaded, profile, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode, toast, t, lang, isMobile, isLgUp, imageInfo, setImageInfo, resizeSettings, setResizeSettings, isProcessing, setIsProcessing, isAddingToCart, setIsAddingToCart, isUpdateFlow, setIsUpdateFlow, addToCartProgressLabel, setAddToCartProgressLabel, addToCartInFlightRef, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, refreshAddToCartStallTimeout, isUploading, setIsUploading, uploadProgress, setUploadProgress, artboardWidth, setArtboardWidth, artboardHeight, setArtboardHeight, artboardWidthRef, artboardHeightRef, contentFillCacheRef, handleAutoArrangeRef, quantity, setQuantity, designGap, setDesignGap, duplicateCount, setDuplicateCount, clampDuplicateCount, parseDuplicateCount, handleDuplicateCountKeyDown, designTransform, setDesignTransform, designs, setDesigns, selectedDesignId, setSelectedDesignId, selectedDesignIds, setSelectedDesignIds, mobilePanel, setMobilePanel, showDesignInfo, setShowDesignInfo, selectionZoomActive, setSelectionZoomActive, editingLayerName, setEditingLayerName, editingNameValue, setEditingNameValue, clipboardRef, proportionalLock, setProportionalLock, designInfoRef, sidebarFileRef, headerUploadInputRef, canvasRef, downloadContainer, setDownloadContainer, spotPreviewData, setSpotPreviewData, fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer, copySpotSelectionsRef, contextMenu, setContextMenu, cropModalDesignId, setCropModalDesignId, pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo, mountedRef, designsRef, nudgeSnapshotSavedRef, nudgeTimeoutRef, thumbnailCacheRef, assetDataUrlCacheRef, restoredLayerAssetRef, multiDragAccumRef, multiResizeStartRef, multiRotateStartRef, snapshotCacheRef, getSnapshot, saveSnapshot, applySnapshot, handleUndo, handleRedo, handleInteractionEnd, handleRemoveWhiteBackground, handleWandDelete, wandDeleteModeActive, setWandDeleteModeActive, wandTolerance, setWandTolerance, selectedDesign, activeImageInfo, activeDesignTransform, activeWidthInches, activeHeightInches, activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, draftRecoveryAvailable, isRecoveringDraft, recoverEditorDraft, discardEditorDraft, handleSelectDesign, handleMultiSelect, getLayerThumbnail, handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta, handleEffectiveSizeChange, isArtboardFull, handleDuplicateDesign, handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleCopySelected, handlePaste, handleDeleteGroup, handleDeleteDesign, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleCanvasContextMenu };
 }

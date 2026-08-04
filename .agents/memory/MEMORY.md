@@ -6,3 +6,4 @@
 - [Halftone resize pipeline](halftone-resize-pipeline.md) — rebuild halftone screens from original pixels at the design’s final physical size.
 - [Design resize sheet expansion](design-resize-sheet-expansion.md) — promote the gangsheet before applying a manual design height beyond the current bound.
 - [Replicate upscale timeouts](replicate-upscale-timeouts.md) — keep synchronous waits below Replicate’s 60-second header limit and use a separate outer timeout.
+- [Editor draft recovery](editor-draft-recovery.md) — use IndexedDB for debounced editor snapshots and uploaded file blobs so browser resets are recoverable.

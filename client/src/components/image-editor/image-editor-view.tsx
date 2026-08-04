@@ -60,7 +60,8 @@ export default function ImageEditorView() {
     handleCanvasContextMenu, handleInteractionEnd, handleUndo, handleRedo, canUndo, canRedo,
     handleAutoArrangeRef, actionToolbarProps, getLayerThumbnail, setDesignGap, setDuplicateCount,
     parseDuplicateCount, handleDuplicateCountKeyDown, clampDuplicateCount, setArtboardWidth,
-    setArtboardHeight, setQuantity,
+    setArtboardHeight, setQuantity, draftRecoveryAvailable, isRecoveringDraft,
+    recoverEditorDraft, discardEditorDraft,
   } = useImageEditorContext();
   const [activeSpotChannel, setActiveSpotChannel] = useState<string | null>(null);
   const [editingCountKey, setEditingCountKey] = useState<string | null>(null);
@@ -79,6 +80,31 @@ export default function ImageEditorView() {
         onDragOver={handleDragOver}
         onDrop={handleDrop}
       >
+        {draftRecoveryAvailable && (
+          <div className="absolute inset-x-2 top-2 z-[60] flex items-center justify-between gap-3 rounded-lg border border-cyan-300 bg-white/95 px-3 py-2 text-sm shadow-lg backdrop-blur-sm">
+            <div className="min-w-0">
+              <p className="font-semibold text-gray-900">{t("editor.draftRecoveryTitle")}</p>
+              <p className="truncate text-xs text-gray-600">{t("editor.draftRecoveryDescription")}</p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void discardEditorDraft()}
+                className="rounded-md px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100"
+              >
+                {t("editor.draftDiscard")}
+              </button>
+              <button
+                type="button"
+                onClick={() => void recoverEditorDraft()}
+                disabled={isRecoveringDraft}
+                className="rounded-md bg-cyan-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-cyan-700 disabled:opacity-60"
+              >
+                {isRecoveringDraft ? t("editor.draftRecovering") : t("editor.draftRecover")}
+              </button>
+            </div>
+          </div>
+        )}
         <input
           ref={headerUploadInputRef}
           type="file"
@@ -136,6 +162,31 @@ export default function ImageEditorView() {
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
+      {draftRecoveryAvailable && (
+        <div className="absolute inset-x-2 top-2 z-[60] flex items-center justify-between gap-3 rounded-lg border border-cyan-300 bg-white/95 px-3 py-2 text-sm shadow-lg backdrop-blur-sm">
+          <div className="min-w-0">
+            <p className="font-semibold text-gray-900">{t("editor.draftRecoveryTitle")}</p>
+            <p className="truncate text-xs text-gray-600">{t("editor.draftRecoveryDescription")}</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void discardEditorDraft()}
+              className="rounded-md px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100"
+            >
+              {t("editor.draftDiscard")}
+            </button>
+            <button
+              type="button"
+              onClick={() => void recoverEditorDraft()}
+              disabled={isRecoveringDraft}
+              className="rounded-md bg-cyan-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-cyan-700 disabled:opacity-60"
+            >
+              {isRecoveringDraft ? t("editor.draftRecovering") : t("editor.draftRecover")}
+            </button>
+          </div>
+        </div>
+      )}
       <input
         ref={headerUploadInputRef}
         type="file"
