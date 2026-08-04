@@ -10,3 +10,4 @@
 - [Preview worker boundary](preview-worker-boundary.md) — offload preview-only thumbnails/color work while leaving export and cart rendering unchanged.
 - [Editor file rehydration](editor-file-rehydration.md) — repair invalid image references from IndexedDB once before retrying arrange, export, or cart work.
 - [Local upscale provider](local-upscale-provider.md) — local ncnn-Vulkan inference is the default deployment path with a serialized queue, bounded cache, and alpha restoration.
+- [Restored layer assets](restored-layer-asset-normalization.md) — crop padded transparent sources only when alpha bounds match saved physical dimensions.
