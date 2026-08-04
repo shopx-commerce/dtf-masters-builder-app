@@ -46,26 +46,28 @@ export default function SizeInput({
   };
 
   const arrows = (
-    <div className="flex flex-col" style={{ gap: 1 }}>
+    <div className="flex flex-col" style={{ gap: 3 }}>
       <button
         type="button"
         tabIndex={-1}
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => step(stepInches)}
-        className="flex h-[10px] w-3.5 items-center justify-center rounded-t border border-gray-300 bg-gray-100 text-gray-400 transition-colors hover:bg-cyan-100 hover:text-cyan-600"
+        aria-label="Increase size"
+        className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors hover:bg-cyan-100 hover:text-cyan-600 active:bg-cyan-200"
         title="Increase size"
       >
-        <ChevronUp className="h-2.5 w-2.5" strokeWidth={3} />
+        <ChevronUp className="h-3 w-3" strokeWidth={3} />
       </button>
       <button
         type="button"
         tabIndex={-1}
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => step(-stepInches)}
-        className="flex h-[10px] w-3.5 items-center justify-center rounded-b border border-t-0 border-gray-300 bg-gray-100 text-gray-400 transition-colors hover:bg-cyan-100 hover:text-cyan-600"
+        aria-label="Decrease size"
+        className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors hover:bg-cyan-100 hover:text-cyan-600 active:bg-cyan-200"
         title="Decrease size"
       >
-        <ChevronDown className="h-2.5 w-2.5" strokeWidth={3} />
+        <ChevronDown className="h-3 w-3" strokeWidth={3} />
       </button>
     </div>
   );

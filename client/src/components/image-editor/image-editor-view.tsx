@@ -503,17 +503,18 @@ export default function ImageEditorView() {
                             }}
                             title="Click to set exact copy count"
                           />
-                          <div className="flex flex-col gap-px">
+                          <div className="flex flex-col gap-[3px]">
                             <button
                               type="button"
                               tabIndex={-1}
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={() => handleSetGroupCount(row, count + 1)}
                               disabled={count >= 200}
-                              className="flex h-[10px] w-3.5 items-center justify-center rounded-t border border-gray-300 bg-gray-100 text-gray-400 transition-colors hover:bg-cyan-100 hover:text-cyan-600 disabled:opacity-30"
+                              aria-label="Increase copies"
+                              className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors hover:bg-cyan-100 hover:text-cyan-600 active:bg-cyan-200 disabled:opacity-30"
                               title="Increase copies"
                             >
-                              <ChevronUp className="h-2.5 w-2.5" strokeWidth={3} />
+                              <ChevronUp className="h-3 w-3" strokeWidth={3} />
                             </button>
                             <button
                               type="button"
@@ -521,10 +522,11 @@ export default function ImageEditorView() {
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={() => handleSetGroupCount(row, count - 1)}
                               disabled={count <= 1}
-                              className="flex h-[10px] w-3.5 items-center justify-center rounded-b border border-t-0 border-gray-300 bg-gray-100 text-gray-400 transition-colors hover:bg-cyan-100 hover:text-cyan-600 disabled:opacity-30"
+                              aria-label="Decrease copies"
+                              className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors hover:bg-cyan-100 hover:text-cyan-600 active:bg-cyan-200 disabled:opacity-30"
                               title="Decrease copies"
                             >
-                              <ChevronDown className="h-2.5 w-2.5" strokeWidth={3} />
+                              <ChevronDown className="h-3 w-3" strokeWidth={3} />
                             </button>
                           </div>
                         </div>
