@@ -2111,7 +2111,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     }, [handleInteractionEnd]);
     
     // Fit entire sheet in the gray preview viewport (same behavior as changing sheet size — not the old paper-box math).
-    const fitToView = useCallback(() => {
+    const fitToView = useCallback((forceReset = false) => {
       const area = canvasAreaRef.current;
       if (!area) return;
       const dims = previewDimsRef.current;
@@ -2131,7 +2131,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       minZoomRef.current = z;
       const shouldInitialFit = !hasInitialViewportFitRef.current;
       hasInitialViewportFitRef.current = true;
-      if (shouldInitialFit) {
+      if (forceReset || shouldInitialFit) {
         setZoom(z);
         queuePanStateCommit(0, 0);
       } else {
@@ -2152,7 +2152,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
     // Reset view to fit the full gangsheet in view
     const resetView = useCallback(() => {
-      fitToView();
+      fitToView(true);
       if (canvasAreaRef.current && !selectionZoomActiveRef.current) {
         requestAnimationFrame(() => {
           if (canvasAreaRef.current) {
