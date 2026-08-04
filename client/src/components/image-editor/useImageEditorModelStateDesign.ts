@@ -184,7 +184,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   >(new Map());
   /** R2 refs captured on admin restore — reuse on update when layer pixels unchanged. */
   const restoredLayerAssetRef = useRef<
-    Map<string, { url: string; key?: string; mimeType?: string; fileSig: string }>
+    Map<string, { url: string; key?: string; mimeType?: string; fileSig: string; needsUpload?: boolean }>
   >(new Map());
 
   useRestoreDesignState({

@@ -93,7 +93,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         const savedKey = savedLayer?.asset?.key || restored?.key;
 
         // Edit: layer already in saved JSON — reuse R2 asset unless pixels changed (new upload).
-        if (isEditMode && savedUrl && restored && fileSig && fileSig === restored.fileSig) {
+        if (isEditMode && savedUrl && restored && !restored.needsUpload && fileSig && fileSig === restored.fileSig) {
           return {
             layerId: d.id,
             filename: f?.name || savedLayer?.name || null,

@@ -10,7 +10,13 @@ import {
 } from "./constants";
 import type { InitialDesignState } from "./types";
 
-type RestoredAsset = { url: string; key?: string; mimeType?: string; fileSig: string };
+type RestoredAsset = {
+  url: string;
+  key?: string;
+  mimeType?: string;
+  fileSig: string;
+  needsUpload?: boolean;
+};
 
 function resolveArtboardSize(state: InitialDesignState): { w: number; h: number } | null {
   const parsedSize = (() => {
@@ -64,6 +70,145 @@ async function loadImageFromPublicUrl(
   }
 }
 
+function loadImageFromBlob(blob: Blob): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(blob);
+    const image = new Image();
+    const cleanup = () => URL.revokeObjectURL(objectUrl);
+    image.onload = () => {
+      cleanup();
+      resolve(image);
+    };
+    image.onerror = () => {
+      cleanup();
+      reject(new Error("Image decode failed"));
+    };
+    image.src = objectUrl;
+  });
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
+  return new Promise((resolve) => {
+    canvas.toBlob(resolve, "image/png");
+  });
+}
+
+function cropRestoredImageToContent(image: HTMLImageElement): HTMLCanvasElement | null {
+  const sourceWidth = image.naturalWidth || image.width;
+  const sourceHeight = image.naturalHeight || image.height;
+  if (!sourceWidth || !sourceHeight) return null;
+
+  // Restore can contain many copies of the same large upload. A small alpha
+  // probe is enough to find the transparent padding, then the final crop is
+  // taken from the original pixels so the artwork remains full quality.
+  const sampleScale = Math.min(1, 256 / Math.max(sourceWidth, sourceHeight));
+  const sampleWidth = Math.max(1, Math.round(sourceWidth * sampleScale));
+  const sampleHeight = Math.max(1, Math.round(sourceHeight * sampleScale));
+  const sample = document.createElement("canvas");
+  sample.width = sampleWidth;
+  sample.height = sampleHeight;
+  const sampleContext = sample.getContext("2d", { willReadFrequently: true });
+  if (!sampleContext) return null;
+  sampleContext.drawImage(image, 0, 0, sampleWidth, sampleHeight);
+  const pixels = sampleContext.getImageData(0, 0, sampleWidth, sampleHeight).data;
+
+  let minX = sampleWidth;
+  let minY = sampleHeight;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < sampleHeight; y++) {
+    for (let x = 0; x < sampleWidth; x++) {
+      if (pixels[(y * sampleWidth + x) * 4 + 3] <= 10) continue;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+  }
+  sample.width = 0;
+  sample.height = 0;
+
+  if (maxX < minX || maxY < minY) return null;
+  if (maxX - minX + 1 < sampleWidth * 0.05 || maxY - minY + 1 < sampleHeight * 0.05) {
+    return null;
+  }
+
+  const scaleX = sourceWidth / sampleWidth;
+  const scaleY = sourceHeight / sampleHeight;
+  // Include a source-pixel margin so antialiased edge pixels are never
+  // trimmed by rounding the low-resolution bounds.
+  const cropX = Math.max(0, Math.floor(minX * scaleX) - 1);
+  const cropY = Math.max(0, Math.floor(minY * scaleY) - 1);
+  const cropRight = Math.min(sourceWidth, Math.ceil((maxX + 1) * scaleX) + 1);
+  const cropBottom = Math.min(sourceHeight, Math.ceil((maxY + 1) * scaleY) + 1);
+  const cropWidth = cropRight - cropX;
+  const cropHeight = cropBottom - cropY;
+  if (cropWidth <= 0 || cropHeight <= 0) return null;
+
+  const cropped = document.createElement("canvas");
+  cropped.width = cropWidth;
+  cropped.height = cropHeight;
+  const croppedContext = cropped.getContext("2d");
+  if (!croppedContext) return null;
+  croppedContext.drawImage(
+    image,
+    cropX,
+    cropY,
+    cropWidth,
+    cropHeight,
+    0,
+    0,
+    cropWidth,
+    cropHeight,
+  );
+  return cropped;
+}
+
+/**
+ * Older saved states can point at the original transparent upload while the
+ * saved physical dimensions describe the cropped visible artwork. Drawing the
+ * full source canvas into those dimensions stretches the artwork. Only adopt a
+ * cropped asset when its alpha bounds agree with the saved dimensions; this
+ * leaves intentional non-proportional layer resizing unchanged.
+ */
+async function normalizeRestoredAsset(
+  image: HTMLImageElement,
+  blob: Blob,
+  savedWidth: number,
+  savedHeight: number,
+): Promise<{ image: HTMLImageElement; blob: Blob; changed: boolean }> {
+  const sourceWidth = image.naturalWidth || image.width;
+  const sourceHeight = image.naturalHeight || image.height;
+  const savedAspect = savedWidth / savedHeight;
+  if (
+    !sourceWidth ||
+    !sourceHeight ||
+    !Number.isFinite(savedAspect) ||
+    savedAspect <= 0 ||
+    Math.abs(sourceWidth / sourceHeight - savedAspect) / savedAspect <= 0.05
+  ) {
+    return { image, blob, changed: false };
+  }
+
+  try {
+    const croppedCanvas = cropRestoredImageToContent(image);
+    if (!croppedCanvas?.width || !croppedCanvas.height) return { image, blob, changed: false };
+
+    const croppedAspect = croppedCanvas.width / croppedCanvas.height;
+    if (Math.abs(croppedAspect - savedAspect) / savedAspect > 0.08) {
+      return { image, blob, changed: false };
+    }
+
+    const croppedBlob = await canvasToBlob(croppedCanvas);
+    if (!croppedBlob) return { image, blob, changed: false };
+    const croppedImage = await loadImageFromBlob(croppedBlob);
+    return { image: croppedImage, blob: croppedBlob, changed: true };
+  } catch (err) {
+    console.warn("[builder] could not normalize restored transparent asset", err);
+    return { image, blob, changed: false };
+  }
+}
+
 export function useRestoreDesignState({
   initialDesignState,
   restoredLayerAssetRef,
@@ -96,6 +241,10 @@ export function useRestoreDesignState({
 
     let cancelled = false;
     setIsProcessing(true);
+    const normalizedAssetCache = new Map<
+      string,
+      Promise<{ image: HTMLImageElement; blob: Blob; changed: boolean }>
+    >();
 
     void (async () => {
       const restoredDesigns = (
@@ -108,7 +257,24 @@ export function useRestoreDesignState({
             if (!assetUrl.startsWith("http://") && !assetUrl.startsWith("https://")) return null;
 
             try {
-              const { image, blob } = await loadImageFromPublicUrl(assetUrl);
+              const savedWidth = Number(layer.width);
+              const savedHeight = Number(layer.height);
+              const cacheKey = `${assetUrl}|${savedWidth}|${savedHeight}`;
+              let normalizedAssetPromise = normalizedAssetCache.get(cacheKey);
+              if (!normalizedAssetPromise) {
+                normalizedAssetPromise = (async () => {
+                  const loaded = await loadImageFromPublicUrl(assetUrl);
+                  return normalizeRestoredAsset(
+                    loaded.image,
+                    loaded.blob,
+                    savedWidth,
+                    savedHeight,
+                  );
+                })();
+                normalizedAssetCache.set(cacheKey, normalizedAssetPromise);
+              }
+              const normalizedAsset = await normalizedAssetPromise;
+              const { image, blob } = normalizedAsset;
               const fileName =
                 String(layer.name || "").trim() ||
                 String(layer.asset?.key || "").split("/").pop() ||
@@ -123,6 +289,7 @@ export function useRestoreDesignState({
                 key: layer.asset?.key ? String(layer.asset.key) : undefined,
                 mimeType: layer.asset?.mimeType ? String(layer.asset.mimeType) : undefined,
                 fileSig: `${fileName}:${file.size}:${file.lastModified}`,
+                needsUpload: normalizedAsset.changed,
               });
               const originalDpi = Number(layer.settings?.originalDpi) || EXPORT_DPI;
               const sx = Number(layer.scaleX);
