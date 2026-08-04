@@ -2493,8 +2493,20 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const fitZoom = Math.min(1, raw);
       const z = Math.max(ZOOM_MIN_ABSOLUTE, Math.min(zoomMaxRef.current, Math.round(fitZoom * 20) / 20));
       minZoomRef.current = z;
-      setZoom(z);
-      queuePanStateCommit(0, 0);
+      const shouldInitialViewportFit = !hasInitialViewportFitRef.current;
+      hasInitialViewportFitRef.current = true;
+      if (shouldInitialViewportFit) {
+        setZoom(z);
+        queuePanStateCommit(0, 0);
+      } else {
+        // Selecting a design can resize the surrounding controls by a few
+        // pixels. That measurement change must not undo a user's zoomed view.
+        // Preserve zoom and only clamp it/pan if the new viewport is smaller.
+        const preservedZoom = Math.max(z, Math.min(zoomMaxRef.current, zoomRef.current));
+        const clamped = clampPanValue(panXRef.current, panYRef.current, preservedZoom);
+        setZoom(preservedZoom);
+        queuePanStateCommit(clamped.x, clamped.y);
+      }
       const clearSuppress = () => {
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
@@ -2507,7 +2519,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       } else {
         clearSuppress();
       }
-    }, [previewDims.width, previewDims.height, artboardWidth, artboardHeight]);
+    }, [previewDims.width, previewDims.height, artboardWidth, artboardHeight, clampPanValue]);
 
     useEffect(() => {
       const wrapper = canvasAreaRef.current;
