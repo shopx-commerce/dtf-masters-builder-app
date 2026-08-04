@@ -208,6 +208,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     }, [artboardWidth, artboardHeight]);
 
     const minZoomRef = useRef(1);
+    const showFullSheetDimensions =
+      zoom <= minZoomRef.current + 0.01 &&
+      Math.abs(panX) < 1 &&
+      Math.abs(panY) < 1;
 
     // True when artboard width overflows viewport (left-click panning takes priority over design interaction)
     const isHorizOverflow = useCallback(() => {
@@ -3292,12 +3296,16 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
 
             </div>
-            <div className="absolute bottom-0 left-0 right-3.5 flex justify-center pointer-events-none">
-              <span className={`text-gray-700 font-semibold tracking-wide ${lang === 'en' ? 'text-[11px]' : 'text-[10px]'}`} style={{ transform: 'translateY(2px)' }}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
-            </div>
-            <div className="absolute right-1 top-0 bottom-4 flex items-center pointer-events-none">
-              <span className={`text-gray-700 font-semibold tracking-wide ${lang === 'en' ? 'text-[11px]' : 'text-[10px]'}`} style={{ writingMode: 'vertical-rl' }}>{formatLength(artboardHeight, lang)}{lang === "en" ? '"' : ""}</span>
-            </div>
+            {showFullSheetDimensions && (
+              <>
+                <div className="absolute bottom-0 left-0 right-3.5 flex justify-center pointer-events-none">
+                  <span className={`text-gray-700 font-semibold tracking-wide ${lang === 'en' ? 'text-[11px]' : 'text-[10px]'}`} style={{ transform: 'translateY(2px)' }}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
+                </div>
+                <div className="absolute right-1 top-0 bottom-4 flex items-center pointer-events-none">
+                  <span className={`text-gray-700 font-semibold tracking-wide ${lang === 'en' ? 'text-[11px]' : 'text-[10px]'}`} style={{ writingMode: 'vertical-rl' }}>{formatLength(artboardHeight, lang)}{lang === "en" ? '"' : ""}</span>
+                </div>
+              </>
+            )}
           </div>
           {/* Horizontal scrollbar */}
           {(() => {
