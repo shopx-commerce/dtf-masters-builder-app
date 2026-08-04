@@ -12,6 +12,24 @@ import type { SpotPreviewData } from "../controls-section";
 import { thresholdImageInfo } from "./useImageEditorModelHalftone";
 import { isRecoverableImageInfo } from "@/lib/editor-draft-storage";
 
+function postMessageToParent(message: unknown, transfer?: Transferable[]): void {
+  try {
+    if (transfer?.length) {
+      window.parent.postMessage(message, "*", transfer);
+    } else {
+      window.parent.postMessage(message, "*");
+    }
+  } catch (error) {
+    const detail = String(error instanceof Error ? error.message : error);
+    if (/postmessage|clone|memory|out of memory|data cannot be cloned/i.test(detail)) {
+      throw new Error(
+        "This sheet is too large to transfer to the storefront. Your work is still saved; please refresh and try again.",
+      );
+    }
+    throw error;
+  }
+}
+
 export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
   // Only the bag fields these two handlers actually use are destructured here;
   // the full bag is still re-spread into the return so downstream consumers are unaffected.
@@ -261,7 +279,14 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
               else reject(new Error('Export returned no image data'));
             };
             worker.addEventListener('message', onMessage);
-            worker.postMessage({ type: 'export', requestId, designs: exportDesigns, outW, outH, exportDpi }, bitmaps);
+            try {
+              worker.postMessage({ type: 'export', requestId, designs: exportDesigns, outW, outH, exportDpi }, bitmaps);
+            } catch (error) {
+              for (const bitmap of bitmaps) {
+                try { bitmap.close(); } catch {}
+              }
+              reject(error);
+            }
           });
           exportWorkerBuffer = exportResult.buffer;
           pngBlob = new Blob([exportWorkerBuffer], { type: 'image/png' });
@@ -585,12 +610,15 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
           messageWithFile.pngBuffer = productionBuffer;
           messageWithFile.productionMimeType = "image/png";
         }
-        window.parent.postMessage(message, '*', [productionBuffer]);
+        postMessageToParent(messageWithFile, [productionBuffer]);
         refreshAddToCartStallTimeout(pngByteLength || productionBuffer.byteLength);
       } else {
-        window.parent.postMessage(message, '*');
+        postMessageToParent(message);
         refreshAddToCartStallTimeout(canReuseProduction ? 0 : pngByteLength);
       }
+      // Drop large local references after the parent has received the message.
+      productionBlob = null;
+      exportWorkerBuffer = null;
       // Keep loading state until parent redirects (upload runs in parent). Do not clear in finally.
     } catch (error) {
       console.error('Add to cart failed:', error);

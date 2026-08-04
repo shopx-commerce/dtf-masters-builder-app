@@ -11,3 +11,4 @@
 - [Editor file rehydration](editor-file-rehydration.md) — repair invalid image references from IndexedDB once before retrying arrange, export, or cart work.
 - [Local upscale provider](local-upscale-provider.md) — local ncnn-Vulkan inference is the default deployment path with a serialized queue, bounded cache, and alpha restoration.
 - [Restored layer assets](restored-layer-asset-normalization.md) — crop padded transparent sources only when alpha bounds match saved physical dimensions.
+- [Parent postMessage memory guard](postmessage-memory-guard.md) — preserve the message contract while converting structured-clone memory failures into recoverable editor errors.
