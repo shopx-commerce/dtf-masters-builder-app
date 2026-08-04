@@ -7,6 +7,14 @@ import { nanoid } from "nanoid";
 import Replicate from "replicate";
 
 import { fetchStorefrontVariantList } from "./lib/storefront-variant-config";
+import {
+  createUpscaleCacheKey,
+  getCachedUpscaleResult,
+  getUpscaleProvider,
+  isLocalUpscaleConfigured,
+  runLocalUpscaleQueued,
+  setCachedUpscaleResult,
+} from "./lib/local-upscale";
 import { normalizeShopifyPrice } from "./lib/shopify-price";
 import {
   assertSafeExternalUrl,
@@ -736,73 +744,92 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Only PNG images are supported" });
       }
 
-      const token = process.env.REPLICATE_API_TOKEN;
-      if (!token) {
-        return res.status(503).json({ error: "AI upscale is not configured on this server" });
-      }
-
       const parsedScale = Number.parseInt(String(req.body.scaleFactor ?? "2"), 10);
       const scaleFactor = Number.isFinite(parsedScale)
         ? Math.max(2, Math.min(4, parsedScale))
         : 2;
+      const provider = getUpscaleProvider();
+      if (provider === "local" && !isLocalUpscaleConfigured()) {
+        return res.status(503).json({
+          error: "Local Real-ESRGAN is not configured. Set REAL_ESRGAN_BIN or use UPSCALE_PROVIDER=auto.",
+        });
+      }
+      const token = process.env.REPLICATE_API_TOKEN;
+      if (provider === "replicate" && !token) {
+        return res.status(503).json({ error: "AI upscale is not configured on this server" });
+      }
       const sourceMetadata = await sharp(req.file.buffer).metadata();
       const sourceWidth = sourceMetadata.width ?? 0;
       const sourceHeight = sourceMetadata.height ?? 0;
       if (!sourceWidth || !sourceHeight) {
         return res.status(400).json({ error: "Could not read PNG dimensions" });
       }
+      const cacheKey = createUpscaleCacheKey(req.file.buffer, scaleFactor, provider);
+      const cachedResult = getCachedUpscaleResult(cacheKey);
+      if (cachedResult) {
+        res.setHeader("Content-Type", "image/png");
+        res.setHeader("Cache-Control", "no-store");
+        res.setHeader("X-Upscale-Provider", provider);
+        res.setHeader("X-Upscale-Cache", "hit");
+        return res.status(200).send(cachedResult);
+      }
 
       const sourceStats = await sharp(req.file.buffer).stats();
       const sourceAlpha = sourceStats.channels[3];
       const sourceHasTransparency = Boolean(sourceAlpha && sourceAlpha.min < 255);
-      const imageDataUri = `data:image/png;base64,${req.file.buffer.toString("base64")}`;
-      const replicate = new Replicate({
-        auth: token,
-        fetch: createTimedFetch(UPSCALE_REQUEST_TIMEOUT_MS),
-      });
-
-      const predictionController = new AbortController();
-      const predictionTimer = setTimeout(
-        () => predictionController.abort(),
-        UPSCALE_REQUEST_TIMEOUT_MS,
-      );
-      let output: object;
-      try {
-        output = await replicate.run(REAL_ESRGAN_VERSION, {
-          input: {
-            image: imageDataUri,
-            scale: scaleFactor,
-            face_enhance: false,
-          },
-          // Replicate's synchronous wait header accepts 1–60 seconds.
-          // Keep a little headroom below that limit; the outer abort still
-          // protects the full request, including result download.
-          wait: { mode: "block", timeout: 55 },
-          signal: predictionController.signal,
+      let outputBuffer: Buffer;
+      if (provider === "local") {
+        outputBuffer = await runLocalUpscaleQueued(req.file.buffer, scaleFactor);
+      } else {
+        const imageDataUri = `data:image/png;base64,${req.file.buffer.toString("base64")}`;
+        const replicate = new Replicate({
+          auth: token!,
+          fetch: createTimedFetch(UPSCALE_REQUEST_TIMEOUT_MS),
         });
-      } finally {
-        clearTimeout(predictionTimer);
-      }
-      const outputUrl = extractUpscaleOutputUrl(output);
-      if (!outputUrl) {
-        return res.status(502).json({ error: "Upscale service returned no image" });
-      }
 
-      let parsedOutputUrl: URL;
-      try {
-        parsedOutputUrl = new URL(outputUrl);
-      } catch {
-        return res.status(502).json({ error: "Upscale service returned an invalid image URL" });
-      }
-      if (parsedOutputUrl.protocol !== "https:") {
-        return res.status(502).json({ error: "Upscale service returned an unsafe image URL" });
-      }
+        const predictionController = new AbortController();
+        const predictionTimer = setTimeout(
+          () => predictionController.abort(),
+          UPSCALE_REQUEST_TIMEOUT_MS,
+        );
+        let output: object;
+        try {
+          output = await replicate.run(REAL_ESRGAN_VERSION, {
+            input: {
+              image: imageDataUri,
+              scale: scaleFactor,
+              face_enhance: false,
+            },
+            // Replicate's synchronous wait header accepts 1–60 seconds.
+            // Keep a little headroom below that limit; the outer abort still
+            // protects the full request, including result download.
+            wait: { mode: "block", timeout: 55 },
+            signal: predictionController.signal,
+          });
+        } finally {
+          clearTimeout(predictionTimer);
+        }
+        const outputUrl = extractUpscaleOutputUrl(output);
+        if (!outputUrl) {
+          return res.status(502).json({ error: "Upscale service returned no image" });
+        }
 
-      const outputResponse = await createTimedFetch(UPSCALE_REQUEST_TIMEOUT_MS)(parsedOutputUrl.toString());
-      if (!outputResponse.ok) {
-        return res.status(502).json({ error: `Could not download upscaled image (${outputResponse.status})` });
+        let parsedOutputUrl: URL;
+        try {
+          parsedOutputUrl = new URL(outputUrl);
+        } catch {
+          return res.status(502).json({ error: "Upscale service returned an invalid image URL" });
+        }
+        if (parsedOutputUrl.protocol !== "https:") {
+          return res.status(502).json({ error: "Upscale service returned an unsafe image URL" });
+        }
+
+        const outputResponse = await createTimedFetch(UPSCALE_REQUEST_TIMEOUT_MS)(parsedOutputUrl.toString());
+        if (!outputResponse.ok) {
+          return res.status(502).json({ error: `Could not download upscaled image (${outputResponse.status})` });
+        }
+        outputBuffer = Buffer.from(await outputResponse.arrayBuffer());
       }
-      const outputBuffer = Buffer.from(await outputResponse.arrayBuffer());
       const outputMetadata = await sharp(outputBuffer).metadata();
       const outputWidth = outputMetadata.width ?? 0;
       const outputHeight = outputMetadata.height ?? 0;
@@ -836,8 +863,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(502).json({ error: "Upscale output lost PNG transparency" });
       }
 
+      setCachedUpscaleResult(cacheKey, pngBuffer);
       res.setHeader("Content-Type", "image/png");
       res.setHeader("Cache-Control", "no-store");
+      res.setHeader("X-Upscale-Provider", provider);
+      res.setHeader("X-Upscale-Cache", "miss");
       return res.status(200).send(pngBuffer);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown upscale error";
