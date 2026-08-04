@@ -160,6 +160,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const lastStablePreviewDimsRef = useRef<{ w: number; h: number } | null>(null);
     /** Only auto–fit zoom when preview size or artboard actually changes (not on every parent re-render). */
     const lastViewportFitSigRef = useRef<string>('');
+    /** The first measured viewport is the only layout measurement allowed to establish the initial zoom. */
+    const hasInitialViewportFitRef = useRef(false);
     const spotPulseRef = useRef(1);
     const spotAnimFrameRef = useRef<number | null>(null);
     const spotOverlayCacheRef = useRef<{ key: string; canvas: HTMLCanvasElement } | null>(null);
@@ -2118,8 +2120,20 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const fitZoom = Math.min(1, raw);
       const z = Math.max(ZOOM_MIN_ABSOLUTE, Math.min(zoomMaxRef.current, Math.round(fitZoom * 20) / 20));
       minZoomRef.current = z;
-      setZoom(z);
-      queuePanStateCommit(0, 0);
+      const shouldInitialFit = !hasInitialViewportFitRef.current;
+      hasInitialViewportFitRef.current = true;
+      if (shouldInitialFit) {
+        setZoom(z);
+        queuePanStateCommit(0, 0);
+      } else {
+        // Selecting a design can change the surrounding controls and cause
+        // the preview to be measured again. That is a layout change, not a
+        // user request to reset the view: preserve the current zoom and only
+        // keep the existing pan valid for the new bounds.
+        const preservedZoom = zoomRef.current;
+        const clamped = clampPanValue(panXRef.current, panYRef.current, preservedZoom);
+        queuePanStateCommit(clamped.x, clamped.y);
+      }
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           suppressTransitionRef.current = false;
