@@ -128,7 +128,10 @@ async function restoreStoredDesignImage(stored: StoredDraftDesign): Promise<Imag
   const image = new Image();
   try {
     await new Promise<void>((resolve, reject) => {
-      image.onload = () => resolve();
+      image.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        resolve();
+      };
       image.onerror = () => reject(new Error(`Could not restore ${stored.fileName}`));
       image.src = objectUrl;
     });
