@@ -10,6 +10,7 @@ import type { ImageEditorBagAfterExport } from "./image-editor-hook-bag.types";
 import type { InitialDesignState } from "./types";
 import type { SpotPreviewData } from "../controls-section";
 import { thresholdImageInfo } from "./useImageEditorModelHalftone";
+import { isRecoverableImageInfo } from "@/lib/editor-draft-storage";
 
 export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
   // Only the bag fields these two handlers actually use are destructured here;
@@ -43,6 +44,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
     addToCartInFlightRef,
     profile,
     spotPreviewData,
+    ensureDesignImagesAvailable,
   } = bag;
 
   const buildDesignStatePayload = useCallback(async () => {
@@ -119,7 +121,27 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
             dataUrl: cached.dataUrl,
           };
         }
-        const dataUrl = await fileToDataUrl(f);
+        let dataUrl: string;
+        try {
+          dataUrl = await fileToDataUrl(f);
+        } catch (readError) {
+          console.warn("[buildDesignStatePayload] file read failed; attempting draft rehydration", {
+            designId: d.id,
+            error: readError,
+          });
+          const repaired = await ensureDesignImagesAvailable([d], new Set([d.id]));
+          const repairedDesign = repaired.find(candidate => candidate.id === d.id);
+          if (!repairedDesign?.imageInfo?.file) {
+            throw readError;
+          }
+          dataUrl = await fileToDataUrl(repairedDesign.imageInfo.file);
+          return {
+            layerId: d.id,
+            filename: repairedDesign.imageInfo.file.name,
+            mimeType: repairedDesign.imageInfo.file.type || null,
+            dataUrl,
+          };
+        }
         assetDataUrlCacheRef.current.set(d.id, { sig, dataUrl, filename: f.name, mimeType: f.type || undefined });
         return {
           layerId: d.id,
@@ -163,6 +185,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
     selectedDesignIdsRef,
     restoredLayerAssetRef,
     assetDataUrlCacheRef,
+    ensureDesignImagesAvailable,
   ]);
 
   const handleAddToCart = useCallback(async () => {
@@ -180,6 +203,10 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       addToCartStallTimeoutRef.current = null;
     }
     try {
+      const repairedDesigns = await ensureDesignImagesAvailable(designsRef.current);
+      if (repairedDesigns.some(design => !isRecoverableImageInfo(design.imageInfo))) {
+        throw new Error("A design image could not be reloaded. Your progress is saved; recover the draft and try again.");
+      }
       const exportProductionPng = async (): Promise<{ pngBlob: Blob; exportWorkerBuffer: ArrayBuffer | null }> => {
         const currentDesigns = designsRef.current;
         const cleaned = new Map<string, import("@/lib/types").ImageInfo>();
@@ -581,7 +608,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         addToCartStallTimeoutRef.current = null;
       }
     }
-  }, [artboardWidth, artboardHeight, quantity, shopifyVariants, initialVariantId, shopDomain, toast, refreshAddToCartStallTimeout, buildDesignStatePayload, isEditMode, initialDesignState, setIsAddingToCart, setIsUpdateFlow, setIsProcessing, setAddToCartProgressLabel, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, profile, spotPreviewData]);
+  }, [artboardWidth, artboardHeight, quantity, shopifyVariants, initialVariantId, shopDomain, toast, refreshAddToCartStallTimeout, buildDesignStatePayload, isEditMode, initialDesignState, setIsAddingToCart, setIsUpdateFlow, setIsProcessing, setAddToCartProgressLabel, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, profile, spotPreviewData, ensureDesignImagesAvailable]);
 
   return {
     ...bag,

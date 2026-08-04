@@ -46,6 +46,7 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     setShowDesignInfo,
     mountedRef,
     designsRef,
+    ensureDesignImagesAvailable,
     nudgeSnapshotSavedRef,
     nudgeTimeoutRef,
     saveSnapshot,
@@ -110,6 +111,38 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
   }) => {
     const currentDesigns = designsRef.current;
     if (currentDesigns.length === 0) { console.warn('[autoArrange] no designs'); return; }
+    if (currentDesigns.some(d =>
+      !d.imageInfo?.image?.complete ||
+      !(d.imageInfo.image.naturalWidth || d.imageInfo.image.width) ||
+      !d.imageInfo.file ||
+      d.imageInfo.file.size <= 0
+    )) {
+      void ensureDesignImagesAvailable(currentDesigns).then(repairedDesigns => {
+        const hasInvalidImage = repairedDesigns.some(d =>
+          !d.imageInfo?.image?.complete ||
+          !(d.imageInfo.image.naturalWidth || d.imageInfo.image.width) ||
+          !d.imageInfo.file ||
+          d.imageInfo.file.size <= 0
+        );
+        if (hasInvalidImage) {
+          toast({
+            title: t("toast.arrangeUnavailable"),
+            description: "Your progress is saved, but one design could not be reloaded. Please recover the draft and try again.",
+            variant: "destructive",
+          });
+          return;
+        }
+        handleAutoArrangeRef.current(opts);
+      }).catch(error => {
+        console.warn("[autoArrange] image rehydration failed", error);
+        toast({
+          title: t("toast.arrangeUnavailable"),
+          description: "Your progress is saved, but one design could not be reloaded. Please recover the draft and try again.",
+          variant: "destructive",
+        });
+      });
+      return;
+    }
     if (!opts?.skipSnapshot) saveSnapshot();
 
     const usableW = artboardWidthRef.current;
@@ -460,7 +493,7 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       const best = cands[0].result;
       applyResult(best, best.some(p => p.rotation !== 0), best.some(p => p.overflows));
     }
-  }, [selectedDesignIds, saveSnapshot, toast, designGap, GANGSHEET_HEIGHTS, MAX_ARTBOARD_HEIGHT]);
+  }, [selectedDesignIds, saveSnapshot, toast, t, designGap, GANGSHEET_HEIGHTS, MAX_ARTBOARD_HEIGHT, ensureDesignImagesAvailable, handleAutoArrangeRef]);
 
   const handleArtboardResize = useCallback((newWidth: number, newHeight: number) => {
     if (newWidth <= 0 || newHeight <= 0) return;

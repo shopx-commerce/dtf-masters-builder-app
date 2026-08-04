@@ -105,6 +105,58 @@ export async function getDraftFile(key: string): Promise<DraftFileRecord | null>
   }
 }
 
+export function isRecoverableImageInfo(info: ImageInfo | null | undefined): boolean {
+  return Boolean(
+    info?.file &&
+    info.file.size > 0 &&
+    info.image &&
+    info.image.complete &&
+    (info.image.naturalWidth || info.image.width) > 0 &&
+    (info.image.naturalHeight || info.image.height) > 0,
+  );
+}
+
+async function restoreStoredDesignImage(stored: StoredDraftDesign): Promise<ImageInfo | null> {
+  const fileRecord = await getDraftFile(stored.fileKey);
+  if (!fileRecord) return null;
+
+  const file = new File([fileRecord.blob], stored.fileName, {
+    type: stored.fileType,
+    lastModified: stored.fileLastModified,
+  });
+  const objectUrl = URL.createObjectURL(file);
+  const image = new Image();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error(`Could not restore ${stored.fileName}`));
+      image.src = objectUrl;
+    });
+    return {
+      file,
+      image,
+      originalWidth: stored.originalWidth,
+      originalHeight: stored.originalHeight,
+      dpi: stored.dpi,
+      isPDF: stored.isPDF,
+      originalPdfData: stored.originalPdfData,
+    };
+  } catch (error) {
+    URL.revokeObjectURL(objectUrl);
+    console.warn("[editor-draft] targeted image restore failed", error);
+    return null;
+  }
+}
+
+export async function rehydrateDesignImageFromDraft(
+  designId: string,
+): Promise<ImageInfo | null> {
+  const draft = await getCurrentEditorDraft();
+  const stored = draft?.designs.find(design => design.id === designId);
+  if (!stored) return null;
+  return restoreStoredDesignImage(stored);
+}
+
 export async function saveCurrentEditorDraft(
   draft: EditorDraft,
   files: DraftFileRecord[],
@@ -235,45 +287,21 @@ export async function restoreEditorDraft(draft: EditorDraft): Promise<{
 }> {
   const restoredDesigns: DesignItem[] = [];
   for (const stored of draft.designs) {
-    const fileRecord = await getDraftFile(stored.fileKey);
-    if (!fileRecord) continue;
-    const file = new File([fileRecord.blob], stored.fileName, {
-      type: stored.fileType,
-      lastModified: stored.fileLastModified,
+    const imageInfo = await restoreStoredDesignImage(stored);
+    if (!imageInfo) continue;
+    restoredDesigns.push({
+      id: stored.id,
+      name: stored.name,
+      imageInfo,
+      originalDPI: stored.originalDPI,
+      widthInches: stored.widthInches,
+      heightInches: stored.heightInches,
+      transform: { ...stored.transform },
+      alphaThresholded: stored.alphaThresholded,
+      halftoned: stored.halftoned,
+      halftoneSettings: stored.halftoneSettings,
+      printFileName: stored.printFileName,
     });
-    const objectUrl = URL.createObjectURL(file);
-    const image = new Image();
-    try {
-      await new Promise<void>((resolve, reject) => {
-        image.onload = () => resolve();
-        image.onerror = () => reject(new Error(`Could not restore ${stored.fileName}`));
-        image.src = objectUrl;
-      });
-      restoredDesigns.push({
-        id: stored.id,
-        name: stored.name,
-        imageInfo: {
-          file,
-          image,
-          originalWidth: stored.originalWidth,
-          originalHeight: stored.originalHeight,
-          dpi: stored.dpi,
-          isPDF: stored.isPDF,
-          originalPdfData: stored.originalPdfData,
-        },
-        originalDPI: stored.originalDPI,
-        widthInches: stored.widthInches,
-        heightInches: stored.heightInches,
-        transform: { ...stored.transform },
-        alphaThresholded: stored.alphaThresholded,
-        halftoned: stored.halftoned,
-        halftoneSettings: stored.halftoneSettings,
-        printFileName: stored.printFileName,
-      });
-    } catch (error) {
-      URL.revokeObjectURL(objectUrl);
-      console.warn("[editor-draft] skipped unreadable file", error);
-    }
   }
 
   const validIds = new Set(restoredDesigns.map(design => design.id));

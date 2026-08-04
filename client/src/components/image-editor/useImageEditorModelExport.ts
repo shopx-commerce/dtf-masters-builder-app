@@ -8,6 +8,7 @@ import {
 } from "./utils";
 import type { ImageEditorBagAfterUploadCrop } from "./image-editor-hook-bag.types";
 import { thresholdImageInfo } from "./useImageEditorModelHalftone";
+import { isRecoverableImageInfo } from "@/lib/editor-draft-storage";
 
 export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
   // Only the bag fields handleDownload actually uses are destructured here;
@@ -20,6 +21,7 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
     toast,
     t,
     setIsProcessing,
+    ensureDesignImagesAvailable,
   } = bag;
 
   const handleDownload = useCallback(async (downloadType: string = 'standard', format: string = 'png', spotColorsByDesign?: Record<string, any[]>) => {
@@ -31,7 +33,11 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
     setIsProcessing(true);
 
     try {
-      const firstName = (designs[0]?.name || imageInfo?.file.name || 'gangsheet').replace(/\.[^/.]+$/, '');
+      const exportDesigns = await ensureDesignImagesAvailable(designs);
+      if (exportDesigns.some(design => !isRecoverableImageInfo(design.imageInfo))) {
+        throw new Error("A design image could not be reloaded. Your progress is saved; recover the draft and try again.");
+      }
+      const firstName = (exportDesigns[0]?.name || imageInfo?.file.name || 'gangsheet').replace(/\.[^/.]+$/, '');
 
       await new Promise(r => setTimeout(r, 50));
 
@@ -45,7 +51,7 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
         const pdfDoc = await PDFDocument.create();
         const page = pdfDoc.addPage([pageWidthPt, pageHeightPt]);
 
-        for (const design of designs) {
+        for (const design of exportDesigns) {
           const img = design.imageInfo.image;
           const cvs = document.createElement('canvas');
           const drawW = Math.round(design.widthInches * design.transform.s * exportDpi);
@@ -189,7 +195,7 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
               if (cleaned) halftoneCleanMap.set(d.id, cleaned);
             })
         );
-        const exportSrc = designs.map(d =>
+        const exportSrc = exportDesigns.map(d =>
           halftoneCleanMap.has(d.id)
             ? { ...d, imageInfo: halftoneCleanMap.get(d.id)! }
             : d
@@ -312,7 +318,7 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
     } finally {
       setIsProcessing(false);
     }
-  }, [imageInfo, designs, artboardWidth, artboardHeight, toast]);
+  }, [imageInfo, designs, artboardWidth, artboardHeight, toast, ensureDesignImagesAvailable]);
 
   const fileToDataUrl = useCallback((file: File): Promise<string> => {
     return new Promise((resolve, reject) => {

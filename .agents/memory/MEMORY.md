@@ -8,3 +8,4 @@
 - [Replicate upscale timeouts](replicate-upscale-timeouts.md) — keep synchronous waits below Replicate’s 60-second header limit and use a separate outer timeout.
 - [Editor draft recovery](editor-draft-recovery.md) — use IndexedDB for debounced editor snapshots and uploaded file blobs so browser resets are recoverable.
 - [Preview worker boundary](preview-worker-boundary.md) — offload preview-only thumbnails/color work while leaving export and cart rendering unchanged.
+- [Editor file rehydration](editor-file-rehydration.md) — repair invalid image references from IndexedDB once before retrying arrange, export, or cart work.

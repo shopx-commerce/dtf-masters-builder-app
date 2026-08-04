@@ -22,6 +22,8 @@ import {
   buildEditorDraft,
   deleteCurrentEditorDraft,
   getCurrentEditorDraft,
+  isRecoverableImageInfo,
+  rehydrateDesignImageFromDraft,
   requestPersistentEditorStorage,
   restoreEditorDraft,
   saveCurrentEditorDraft,
@@ -125,6 +127,8 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   const [isRecoveringDraft, setIsRecoveringDraft] = useState(false);
   const draftFileKeysRef = useRef<Set<string>>(new Set());
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rehydrationAttemptedRef = useRef<Set<string>>(new Set());
+  const rehydrationInFlightRef = useRef<Map<string, Promise<ImageInfo | null>>>(new Map());
   useEffect(() => {
     if (designs.length > 0) return;
     if (initialWidth != null && initialWidth > 0) setArtboardWidth(initialWidth);
@@ -196,6 +200,107 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     setQuantity,
     setDesignGap,
   });
+
+  const rehydrateDesignImage = useCallback((designId: string): Promise<ImageInfo | null> => {
+    const inFlight = rehydrationInFlightRef.current.get(designId);
+    if (inFlight) return inFlight;
+    const request = rehydrateDesignImageFromDraft(designId).finally(() => {
+      rehydrationInFlightRef.current.delete(designId);
+    });
+    rehydrationInFlightRef.current.set(designId, request);
+    return request;
+  }, []);
+
+  const getRehydrationAttemptKey = useCallback((design: DesignItem): string => {
+    const file = design.imageInfo?.file;
+    return [
+      design.id,
+      file?.name ?? "",
+      file?.size ?? 0,
+      file?.lastModified ?? 0,
+    ].join(":");
+  }, []);
+
+  useEffect(() => {
+    if (isProcessing || isUploading || designs.length === 0) return;
+
+    for (const design of designs) {
+      if (isRecoverableImageInfo(design.imageInfo)) continue;
+      const attemptKey = getRehydrationAttemptKey(design);
+      if (rehydrationAttemptedRef.current.has(attemptKey)) continue;
+      rehydrationAttemptedRef.current.add(attemptKey);
+
+      void rehydrateDesignImage(design.id).then(rehydratedImageInfo => {
+        if (!rehydratedImageInfo) {
+          console.warn("[editor-draft] could not rehydrate design image", design.id);
+          return;
+        }
+        setDesigns(currentDesigns => currentDesigns.map(current =>
+          current.id === design.id
+            ? { ...current, imageInfo: rehydratedImageInfo }
+            : current,
+        ));
+        if (selectedDesignId === design.id) setImageInfo(rehydratedImageInfo);
+      }).catch(error => {
+        console.warn("[editor-draft] image rehydration failed", error);
+      });
+    }
+  }, [
+    designs,
+    isProcessing,
+    isUploading,
+    getRehydrationAttemptKey,
+    rehydrateDesignImage,
+    selectedDesignId,
+    setImageInfo,
+    setDesigns,
+  ]);
+
+  const ensureDesignImagesAvailable = useCallback(async (
+    sourceDesigns: DesignItem[] = designsRef.current,
+    forceRepairIds?: Set<string>,
+  ): Promise<DesignItem[]> => {
+    const replacements = new Map<string, ImageInfo>();
+    await Promise.all(sourceDesigns.map(async design => {
+      const forceRepair = forceRepairIds?.has(design.id) ?? false;
+      if (!forceRepair && isRecoverableImageInfo(design.imageInfo)) return;
+      const attemptKey = getRehydrationAttemptKey(design);
+      if (rehydrationAttemptedRef.current.has(attemptKey)) {
+        const inFlight = rehydrationInFlightRef.current.get(design.id);
+        if (inFlight) {
+          const rehydrated = await inFlight;
+          if (rehydrated) replacements.set(design.id, rehydrated);
+        }
+        return;
+      }
+      rehydrationAttemptedRef.current.add(attemptKey);
+      const rehydrated = await rehydrateDesignImage(design.id);
+      if (rehydrated) replacements.set(design.id, rehydrated);
+    }));
+    if (replacements.size === 0) return sourceDesigns;
+
+    const nextDesigns = sourceDesigns.map(design => {
+      const imageInfo = replacements.get(design.id);
+      if (imageInfo) {
+        revokeThumbnailCacheEntry(thumbnailCacheRef.current, design.imageInfo.image.src);
+        contentFillCacheRef.current.delete(design.imageInfo.image.src);
+        assetDataUrlCacheRef.current.delete(design.id);
+        restoredLayerAssetRef.current.delete(design.id);
+      }
+      return imageInfo ? { ...design, imageInfo } : design;
+    });
+    designsRef.current = nextDesigns;
+    setDesigns(currentDesigns => currentDesigns.map(design => {
+      const imageInfo = replacements.get(design.id);
+      return imageInfo ? { ...design, imageInfo } : design;
+    }));
+    nextDesigns.forEach(design => {
+      if (design.id === selectedDesignId && replacements.has(design.id)) {
+        setImageInfo(design.imageInfo);
+      }
+    });
+    return nextDesigns;
+  }, [getRehydrationAttemptKey, rehydrateDesignImage, selectedDesignId, setImageInfo, setDesigns]);
 
   useEffect(() => {
     void requestPersistentEditorStorage();
@@ -1405,5 +1510,5 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
 
 
   // Base editor state; arrange/upload/export/cart hooks extend this bag in image-editor-provider.
-  return { onDesignUploaded, profile, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode, toast, t, lang, isMobile, isLgUp, imageInfo, setImageInfo, resizeSettings, setResizeSettings, isProcessing, setIsProcessing, isAddingToCart, setIsAddingToCart, isUpdateFlow, setIsUpdateFlow, addToCartProgressLabel, setAddToCartProgressLabel, addToCartInFlightRef, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, refreshAddToCartStallTimeout, isUploading, setIsUploading, uploadProgress, setUploadProgress, artboardWidth, setArtboardWidth, artboardHeight, setArtboardHeight, artboardWidthRef, artboardHeightRef, contentFillCacheRef, handleAutoArrangeRef, quantity, setQuantity, designGap, setDesignGap, duplicateCount, setDuplicateCount, clampDuplicateCount, parseDuplicateCount, handleDuplicateCountKeyDown, designTransform, setDesignTransform, designs, setDesigns, selectedDesignId, setSelectedDesignId, selectedDesignIds, setSelectedDesignIds, mobilePanel, setMobilePanel, showDesignInfo, setShowDesignInfo, selectionZoomActive, setSelectionZoomActive, editingLayerName, setEditingLayerName, editingNameValue, setEditingNameValue, clipboardRef, proportionalLock, setProportionalLock, designInfoRef, sidebarFileRef, headerUploadInputRef, canvasRef, downloadContainer, setDownloadContainer, spotPreviewData, setSpotPreviewData, fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer, copySpotSelectionsRef, contextMenu, setContextMenu, cropModalDesignId, setCropModalDesignId, pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo, mountedRef, designsRef, nudgeSnapshotSavedRef, nudgeTimeoutRef, thumbnailCacheRef, assetDataUrlCacheRef, restoredLayerAssetRef, multiDragAccumRef, multiResizeStartRef, multiRotateStartRef, snapshotCacheRef, getSnapshot, saveSnapshot, applySnapshot, handleUndo, handleRedo, handleInteractionEnd, handleRemoveWhiteBackground, handleWandDelete, wandDeleteModeActive, setWandDeleteModeActive, wandTolerance, setWandTolerance, selectedDesign, activeImageInfo, activeDesignTransform, activeWidthInches, activeHeightInches, activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, draftRecoveryAvailable, isRecoveringDraft, recoverEditorDraft, discardEditorDraft, handleSelectDesign, handleMultiSelect, getLayerThumbnail, handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta, handleEffectiveSizeChange, isArtboardFull, handleDuplicateDesign, handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleCopySelected, handlePaste, handleDeleteGroup, handleDeleteDesign, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleCanvasContextMenu };
+  return { onDesignUploaded, profile, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode, toast, t, lang, isMobile, isLgUp, imageInfo, setImageInfo, resizeSettings, setResizeSettings, isProcessing, setIsProcessing, isAddingToCart, setIsAddingToCart, isUpdateFlow, setIsUpdateFlow, addToCartProgressLabel, setAddToCartProgressLabel, addToCartInFlightRef, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, refreshAddToCartStallTimeout, isUploading, setIsUploading, uploadProgress, setUploadProgress, artboardWidth, setArtboardWidth, artboardHeight, setArtboardHeight, artboardWidthRef, artboardHeightRef, contentFillCacheRef, handleAutoArrangeRef, quantity, setQuantity, designGap, setDesignGap, duplicateCount, setDuplicateCount, clampDuplicateCount, parseDuplicateCount, handleDuplicateCountKeyDown, designTransform, setDesignTransform, designs, setDesigns, selectedDesignId, setSelectedDesignId, selectedDesignIds, setSelectedDesignIds, mobilePanel, setMobilePanel, showDesignInfo, setShowDesignInfo, selectionZoomActive, setSelectionZoomActive, editingLayerName, setEditingLayerName, editingNameValue, setEditingNameValue, clipboardRef, proportionalLock, setProportionalLock, designInfoRef, sidebarFileRef, headerUploadInputRef, canvasRef, downloadContainer, setDownloadContainer, spotPreviewData, setSpotPreviewData, fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer, copySpotSelectionsRef, contextMenu, setContextMenu, cropModalDesignId, setCropModalDesignId, pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo, mountedRef, designsRef, nudgeSnapshotSavedRef, nudgeTimeoutRef, thumbnailCacheRef, assetDataUrlCacheRef, restoredLayerAssetRef, multiDragAccumRef, multiResizeStartRef, multiRotateStartRef, snapshotCacheRef, getSnapshot, saveSnapshot, applySnapshot, handleUndo, handleRedo, handleInteractionEnd, handleRemoveWhiteBackground, handleWandDelete, wandDeleteModeActive, setWandDeleteModeActive, wandTolerance, setWandTolerance, selectedDesign, activeImageInfo, activeDesignTransform, activeWidthInches, activeHeightInches, activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, draftRecoveryAvailable, isRecoveringDraft, recoverEditorDraft, discardEditorDraft, rehydrateDesignImage, ensureDesignImagesAvailable, handleSelectDesign, handleMultiSelect, getLayerThumbnail, handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta, handleEffectiveSizeChange, isArtboardFull, handleDuplicateDesign, handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleCopySelected, handlePaste, handleDeleteGroup, handleDeleteDesign, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleCanvasContextMenu };
 }
