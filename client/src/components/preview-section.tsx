@@ -10,6 +10,9 @@ import { ImageInfo, ResizeSettings, type ImageTransform, type DesignItem } from 
 import { computeLayerRect } from "@/lib/types";
 
 const BASE_DPI_SCALE = 2;
+const HIGH_QUALITY_DETAIL_ZOOM = 3;
+const HIGH_QUALITY_DETAIL_MAX_AREA = 4_000_000;
+const HIGH_QUALITY_DETAIL_MAX_EDGE = 4096;
 /** Keep selection controls compact only when the canvas is genuinely zoomed out. */
 function getLowZoomHandleScale(zoom: number): number {
   return zoom < 0.5 ? 0.25 : 1;
@@ -98,6 +101,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const { t, lang } = useLanguage();
     const isMobile = useIsMobile();
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const detailCanvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const resizeLimitToastRef = useRef(0);
     const zoomMax = Math.max(10, Math.ceil(artboardHeight / Math.max(artboardWidth, 0.1)) * 3);
@@ -105,6 +109,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     zoomMaxRef.current = zoomMax;
     const [zoom, setZoom] = useState(1);
     const zoomDpiTier = useMemo(() => (zoom <= 2 ? 1 : zoom <= 5 ? 2 : 3), [zoom]);
+    const highQualityDetailZoomActive = zoom >= HIGH_QUALITY_DETAIL_ZOOM;
     const [panX, setPanX] = useState(0);
     const [panY, setPanY] = useState(0);
     const zoomRef = useRef(zoom);
@@ -2767,6 +2772,47 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       ctx.restore();
     }, [artboardWidth, artboardHeight]);
 
+    const selectedDetailDesign = selectedDesignId
+      ? designs.find(design => design.id === selectedDesignId) ?? null
+      : null;
+    const selectedDetailImage = selectedDetailDesign?.imageInfo.image ?? null;
+    const showHighQualityDetail =
+      highQualityDetailZoomActive &&
+      Boolean(selectedDetailDesign?.halftoned || selectedDetailDesign?.alphaThresholded) &&
+      Boolean(selectedDetailImage?.complete && (selectedDetailImage.naturalWidth || selectedDetailImage.width));
+
+    // Render only the selected binary-raster design at source resolution (within
+    // a bounded area). The whole-sheet canvas remains capped and fast; this
+    // focused layer prevents CSS zoom interpolation from softening halftone dots.
+    useEffect(() => {
+      const canvas = detailCanvasRef.current;
+      if (!canvas || !showHighQualityDetail || !selectedDetailDesign || !selectedDetailImage) return;
+
+      const sourceWidth = selectedDetailImage.naturalWidth || selectedDetailImage.width;
+      const sourceHeight = selectedDetailImage.naturalHeight || selectedDetailImage.height;
+      if (!sourceWidth || !sourceHeight) return;
+
+      const areaScale = Math.sqrt(HIGH_QUALITY_DETAIL_MAX_AREA / (sourceWidth * sourceHeight));
+      const edgeScale = HIGH_QUALITY_DETAIL_MAX_EDGE / Math.max(sourceWidth, sourceHeight);
+      const rasterScale = Math.min(1, areaScale, edgeScale);
+      const rasterWidth = Math.max(1, Math.round(sourceWidth * rasterScale));
+      const rasterHeight = Math.max(1, Math.round(sourceHeight * rasterScale));
+
+      canvas.width = rasterWidth;
+      canvas.height = rasterHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.clearRect(0, 0, rasterWidth, rasterHeight);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(selectedDetailImage, 0, 0, rasterWidth, rasterHeight);
+    }, [
+      showHighQualityDetail,
+      selectedDetailDesign?.id,
+      selectedDetailImage,
+      selectedDetailImage?.naturalWidth,
+      selectedDetailImage?.naturalHeight,
+    ]);
+
     useEffect(() => {
       if (!canvasRef.current) return;
 
@@ -3175,22 +3221,68 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                 marginLeft: isMobile ? 6 : 0,
               }}
             >
-              <canvas 
-                ref={canvasRef}
-                className="relative z-10 block"
+              <div
+                className="relative flex-shrink-0"
                 style={{ 
-                  width: previewDims.width,
-                  height: previewDims.height,
-                  border: '3px solid #ffffff',
-                  outline: '2px solid #000000',
-                  boxSizing: 'content-box',
+                  width: previewDims.width + 6,
+                  height: previewDims.height + 6,
                   transform: `scale(${zoom}) translate(${panX}px, ${panY}px)`,
                   transformOrigin: 'center',
                   willChange: 'transform',
                   transition: isMobile || isWheelZoomingRef.current || isPanningRef.current || suppressTransitionRef.current || activeScrollAxis ? 'none' : 'transform 0.15s ease-out',
-                  pointerEvents: 'none',
                 }}
-              />
+              >
+                <canvas
+                  ref={canvasRef}
+                  className="absolute z-10 block"
+                  style={{
+                    left: 3,
+                    top: 3,
+                    width: previewDims.width,
+                    height: previewDims.height,
+                    border: '3px solid #ffffff',
+                    outline: '2px solid #000000',
+                    boxSizing: 'content-box',
+                    pointerEvents: 'none',
+                  }}
+                />
+                {showHighQualityDetail && selectedDetailDesign && (
+                  (() => {
+                    const detailRect = computeLayerRect(
+                      selectedDetailImage?.naturalWidth || selectedDetailImage?.width || 1,
+                      selectedDetailImage?.naturalHeight || selectedDetailImage?.height || 1,
+                      selectedDetailDesign.transform,
+                      previewDims.width,
+                      previewDims.height,
+                      artboardWidth,
+                      artboardHeight,
+                      selectedDetailDesign.widthInches,
+                      selectedDetailDesign.heightInches,
+                    );
+                    return (
+                      <canvas
+                        key={`${selectedDetailDesign.id}:${selectedDetailImage?.src || ''}`}
+                        ref={detailCanvasRef}
+                        aria-hidden="true"
+                        className="absolute z-20 pointer-events-none block"
+                        style={{
+                          left: 3 + detailRect.x,
+                          top: 3 + detailRect.y,
+                          width: detailRect.width,
+                          height: detailRect.height,
+                          transformOrigin: 'center',
+                          transform: `rotate(${selectedDetailDesign.transform.rotation}deg) scale(${selectedDetailDesign.transform.flipX ? -1 : 1}, ${selectedDetailDesign.transform.flipY ? -1 : 1})`,
+                          imageRendering: 'pixelated',
+                          // Leave the edge chrome exposed so the existing
+                          // resize/rotate handles remain visible above the
+                          // focused pixel-preserving layer.
+                          clipPath: 'inset(6px)',
+                        }}
+                      />
+                    );
+                  })()
+                )}
+              </div>
               
               {!imageInfo && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">

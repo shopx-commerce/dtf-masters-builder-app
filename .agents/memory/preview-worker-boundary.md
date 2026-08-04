@@ -7,4 +7,4 @@ Keep worker offloading limited to preview-only work unless the output contract i
 
 **Why:** Large sheets need responsive interaction, but export and cart output must remain pixel- and coordinate-compatible.
 
-**How to apply:** Add worker-backed preview preparation behind capability checks, keep exports on their current path, and treat worker failure as a recoverable compatibility case.
+**How to apply:** Add worker-backed preview preparation behind capability checks, keep exports on their current path, and treat worker failure as a recoverable compatibility case. High-zoom halftone inspection may use a bounded selected-layer detail canvas, but never replace the full-sheet/export path.
