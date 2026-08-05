@@ -8,70 +8,15 @@ import { useImageEditorModelHalftone } from "./useImageEditorModelHalftone";
 import { useImageEditorModelExport } from "./useImageEditorModelExport";
 import { useImageEditorModelCart } from "./useImageEditorModelCart";
 import type { EditorActionToolbarProps } from "./editor-action-toolbar";
-import { clampDesignToArtboard, getRotatedBounds } from "./utils";
+import {
+  clampDesignToArtboard,
+  getDesignSelectionBounds,
+  getDesignSelectionUnits,
+  rotateDesignSelection,
+} from "./utils";
 import type { DesignItem } from "@/lib/types";
 
 export type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
-
-function rotateDesignGroup(
-  designs: DesignItem[],
-  ids: Set<string>,
-  angleDeg: number,
-  artboardWidth: number,
-  artboardHeight: number,
-) {
-  const targets = designs.filter(d => ids.has(d.id));
-  if (targets.length === 0) return new Map<string, { nx: number; ny: number; rotation: number }>();
-
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const d of targets) {
-    const bounds = getRotatedBounds(d);
-    const cx = d.transform.nx * artboardWidth;
-    const cy = d.transform.ny * artboardHeight;
-    minX = Math.min(minX, cx + bounds.minX);
-    maxX = Math.max(maxX, cx + bounds.maxX);
-    minY = Math.min(minY, cy + bounds.minY);
-    maxY = Math.max(maxY, cy + bounds.maxY);
-  }
-
-  const centerX = (minX + maxX) / 2;
-  const centerY = (minY + maxY) / 2;
-  const radians = (angleDeg * Math.PI) / 180;
-  const cos = Math.cos(radians);
-  const sin = Math.sin(radians);
-  const candidates = targets.map(d => {
-    const px = d.transform.nx * artboardWidth - centerX;
-    const py = d.transform.ny * artboardHeight - centerY;
-    return {
-      d,
-      nx: (centerX + px * cos - py * sin) / artboardWidth,
-      ny: (centerY + px * sin + py * cos) / artboardHeight,
-      rotation: ((d.transform.rotation + angleDeg) % 360 + 360) % 360,
-    };
-  });
-
-  let nextMinX = Infinity, nextMaxX = -Infinity, nextMinY = Infinity, nextMaxY = -Infinity;
-  for (const { d, nx, ny, rotation } of candidates) {
-    const bounds = getRotatedBounds({
-      ...d,
-      transform: { ...d.transform, nx, ny, rotation },
-    });
-    const cx = nx * artboardWidth;
-    const cy = ny * artboardHeight;
-    nextMinX = Math.min(nextMinX, cx + bounds.minX);
-    nextMaxX = Math.max(nextMaxX, cx + bounds.maxX);
-    nextMinY = Math.min(nextMinY, cy + bounds.minY);
-    nextMaxY = Math.max(nextMaxY, cy + bounds.maxY);
-  }
-
-  if (nextMinX < 0 || nextMaxX > artboardWidth || nextMinY < 0 || nextMaxY > artboardHeight) {
-    return null;
-  }
-  return new Map(candidates.map(({ d, nx, ny, rotation }) => [
-    d.id,
-    { nx, ny, rotation },
-  ]));
-}
 
 export function ImageEditorProvider({ children, ...props }: ImageEditorProps & { children: React.ReactNode }) {
   const value = useImageEditorModel(props);
@@ -172,7 +117,7 @@ function useImageEditorModel(props: ImageEditorProps) {
       if (ids.size > 1) {
         const active = prev.find(d => d.id === bagSelectedDesignId);
         const delta = active ? rotation - active.transform.rotation : 0;
-        const rotated = rotateDesignGroup(prev, ids, delta, bagArtboardWidth, bagArtboardHeight);
+         const rotated = rotateDesignSelection(prev, ids, delta, bagArtboardWidth, bagArtboardHeight);
         if (!rotated) return prev;
         return prev.map(d => {
           const next = rotated.get(d.id);
@@ -221,32 +166,61 @@ function useImageEditorModel(props: ImageEditorProps) {
       ? bagSelectedDesignIds
       : (bagSelectedDesignId ? new Set([bagSelectedDesignId]) : new Set<string>());
     if (ids.size === 0) return;
-    const targets = bagDesigns.filter(d => ids.has(d.id));
-    if (targets.length === 0) return;
+    const units = getDesignSelectionUnits(
+      bagDesigns,
+      ids,
+      bagArtboardWidth,
+      bagArtboardHeight,
+    );
+    if (units.length === 0) return;
     bagSaveSnapshot();
 
     // Field the operation writes: vertical axis → nx; horizontal axis → ny.
     const field: "nx" | "ny" = axis === "vertical" ? "nx" : "ny";
 
-    let target: number;
-    if (targets.length === 1) {
-      target = 0.5;
-    } else {
-      let min = Infinity;
-      let max = -Infinity;
-      for (const d of targets) {
-        const v = d.transform[field];
-        if (v < min) min = v;
-        if (v > max) max = v;
-      }
-      target = (min + max) / 2;
+    const selectionBounds = getDesignSelectionBounds(
+      bagDesigns,
+      ids,
+      bagArtboardWidth,
+      bagArtboardHeight,
+    );
+    if (!selectionBounds) return;
+    const targetPx = units.length === 1
+      ? (axis === "vertical" ? bagArtboardWidth : bagArtboardHeight) / 2
+      : (axis === "vertical"
+        ? (selectionBounds.minX + selectionBounds.maxX) / 2
+        : (selectionBounds.minY + selectionBounds.maxY) / 2);
+
+    const deltas = new Map<string, number>();
+    for (const unit of units) {
+      const unitCenter = field === "nx"
+        ? (unit.minX + unit.maxX) / 2
+        : (unit.minY + unit.maxY) / 2;
+      const axisSize = field === "nx" ? bagArtboardWidth : bagArtboardHeight;
+      const desired = (targetPx - unitCenter) / axisSize;
+      const minDelta = field === "nx"
+        ? -unit.minX / bagArtboardWidth
+        : -unit.minY / bagArtboardHeight;
+      const maxDelta = field === "nx"
+        ? (bagArtboardWidth - unit.maxX) / bagArtboardWidth
+        : (bagArtboardHeight - unit.maxY) / bagArtboardHeight;
+      const delta = minDelta <= maxDelta
+        ? Math.max(minDelta, Math.min(maxDelta, desired))
+        : 0;
+      for (const member of unit.members) deltas.set(member.id, delta);
     }
 
     bagSetDesigns(prev => prev.map(d => {
-      if (!ids.has(d.id)) return d;
-      const next = { ...d, transform: { ...d.transform, [field]: target } };
-      const { nx, ny } = clampDesignToArtboard(next, bagArtboardWidth, bagArtboardHeight);
-      return { ...next, transform: { ...next.transform, nx, ny } };
+      const delta = deltas.get(d.id);
+      if (delta === undefined) return d;
+      return {
+        ...d,
+        transform: {
+          ...d.transform,
+          nx: d.transform.nx + (field === "nx" ? delta : 0),
+          ny: d.transform.ny + (field === "ny" ? delta : 0),
+        },
+      };
     }));
   }, [bagSelectedDesignIds, bagSelectedDesignId, bagDesigns, bagSaveSnapshot, bagSetDesigns, bagArtboardWidth, bagArtboardHeight]);
 

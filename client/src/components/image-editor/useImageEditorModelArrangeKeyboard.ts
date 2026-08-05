@@ -4,6 +4,8 @@ import {
   clampDesignToArtboard,
   getArrangeWorker,
   getEffectiveHeight,
+  getDesignSelectionBounds,
+  getDesignSelectionUnits,
   getRotatedBounds,
   getStampExtra,
   nextArrangeRequestId,
@@ -71,26 +73,26 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
   const { selectOne } = useSelectionActions();
   const handleArtboardResizeRef = useRef<(newWidth: number, newHeight: number) => void>(() => {});
 
-  const getAlignNxNy = useCallback((corner: 'tl' | 'tr' | 'bl' | 'br') => {
-    const design = designsRef.current.find(d => d.id === selectedDesignId);
-    if (!design) return null;
-    const t = design.transform;
-    const rad = (t.rotation * Math.PI) / 180;
-    const cos = Math.abs(Math.cos(rad));
-    const sin = Math.abs(Math.sin(rad));
-    const halfW = (design.widthInches * t.s * cos + design.heightInches * t.s * sin) / 2;
-    const halfH = (design.widthInches * t.s * sin + design.heightInches * t.s * cos) / 2;
-    const left = halfW / artboardWidth;
-    const right = 1 - halfW / artboardWidth;
-    const top = halfH / artboardHeight;
-    const bottom = 1 - halfH / artboardHeight;
-    switch (corner) {
-      case 'tl': return { nx: left, ny: top };
-      case 'tr': return { nx: right, ny: top };
-      case 'bl': return { nx: left, ny: bottom };
-      case 'br': return { nx: right, ny: bottom };
-    }
-  }, [selectedDesignId, artboardWidth, artboardHeight]);
+  const getAlignDelta = useCallback((corner: 'tl' | 'tr' | 'bl' | 'br') => {
+    const ids = selectedDesignIds.size > 0
+      ? selectedDesignIds
+      : (selectedDesignId ? new Set([selectedDesignId]) : new Set<string>());
+    const bounds = getDesignSelectionBounds(
+      designsRef.current,
+      ids,
+      artboardWidth,
+      artboardHeight,
+    );
+    if (!bounds) return null;
+    const targetX = corner.endsWith('l') ? 0 : artboardWidth;
+    const targetY = corner.startsWith('t') ? 0 : artboardHeight;
+    const currentX = corner.endsWith('l') ? bounds.minX : bounds.maxX;
+    const currentY = corner.startsWith('t') ? bounds.minY : bounds.maxY;
+    return {
+      dnx: (targetX - currentX) / artboardWidth,
+      dny: (targetY - currentY) / artboardHeight,
+    };
+  }, [selectedDesignId, selectedDesignIds, artboardWidth, artboardHeight]);
 
   const GANGSHEET_HEIGHTS = useMemo(() => {
     if (initialGangsheetHeights && initialGangsheetHeights.length > 0) return initialGangsheetHeights;
@@ -101,16 +103,45 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
   const MAX_ARTBOARD_HEIGHT = GANGSHEET_HEIGHTS[GANGSHEET_HEIGHTS.length - 1];
 
   const handleAlignCorner = useCallback((corner: 'tl' | 'tr' | 'bl' | 'br') => {
-    if (!selectedDesignId) return;
-    const pos = getAlignNxNy(corner);
-    if (!pos) return;
+    const ids = selectedDesignIds.size > 0
+      ? selectedDesignIds
+      : (selectedDesignId ? new Set([selectedDesignId]) : new Set<string>());
+    const delta = getAlignDelta(corner);
+    if (!delta) return;
     saveSnapshot();
-    setDesigns(prev => prev.map(d => d.id === selectedDesignId
-      ? { ...d, transform: { ...d.transform, nx: pos.nx, ny: pos.ny } }
+    const units = getDesignSelectionUnits(
+      designsRef.current,
+      ids,
+      artboardWidth,
+      artboardHeight,
+    );
+    const memberIds = new Set(units.flatMap(unit => unit.members.map(member => member.id)));
+    setDesigns(prev => prev.map(d => memberIds.has(d.id)
+      ? {
+          ...d,
+          transform: {
+            ...d.transform,
+            nx: d.transform.nx + delta.dnx,
+            ny: d.transform.ny + delta.dny,
+          },
+        }
       : d
     ));
-    setDesignTransform(prev => ({ ...prev, nx: pos.nx, ny: pos.ny }));
-  }, [selectedDesignId, saveSnapshot, getAlignNxNy]);
+    if (selectedDesignId) {
+      setDesignTransform(prev => ({
+        ...prev,
+        nx: prev.nx + delta.dnx,
+        ny: prev.ny + delta.dny,
+      }));
+    }
+  }, [
+    selectedDesignId,
+    selectedDesignIds,
+    saveSnapshot,
+    getAlignDelta,
+    artboardWidth,
+    artboardHeight,
+  ]);
 
   const handleAutoArrange = useCallback((opts?: {
     skipSnapshot?: boolean;
@@ -781,25 +812,24 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
 
         const multiIds = selectedDesignIdsRef.current;
         if (multiIds.size > 1) {
-          // Nudge all selected designs with uniform group clamping
+          // Nudge selection units with uniform group clamping. A user group
+          // contributes one bounding box, so a member can never be clamped
+          // independently and separated from its siblings.
           const abW = artboardWidthRef.current;
           const abH = artboardHeightRef.current;
-          let allowedDnx = dnx, allowedDny = dny;
-          for (const d of designsRef.current) {
-            if (!multiIds.has(d.id)) continue;
-            const t = d.transform;
-            const rad = (t.rotation * Math.PI) / 180;
-            const cos = Math.abs(Math.cos(rad));
-            const sin = Math.abs(Math.sin(rad));
-            const halfW = (d.widthInches * t.s * cos + d.heightInches * t.s * sin) / 2;
-            const halfH = (d.widthInches * t.s * sin + d.heightInches * t.s * cos) / 2;
-            const minNx = halfW / abW, maxNx = 1 - halfW / abW;
-            const minNy = halfH / abH, maxNy = 1 - halfH / abH;
-            if (minNx <= maxNx) allowedDnx = Math.max(minNx - t.nx, Math.min(maxNx - t.nx, allowedDnx));
-            if (minNy <= maxNy) allowedDny = Math.max(minNy - t.ny, Math.min(maxNy - t.ny, allowedDny));
+          const units = getDesignSelectionUnits(designsRef.current, multiIds, abW, abH);
+          let allowedDnx = dnx;
+          let allowedDny = dny;
+          for (const unit of units) {
+            if (unit.minX <= unit.maxX) {
+              allowedDnx = Math.max(-unit.minX / abW, Math.min((abW - unit.maxX) / abW, allowedDnx));
+            }
+            if (unit.minY <= unit.maxY) {
+              allowedDny = Math.max(-unit.minY / abH, Math.min((abH - unit.maxY) / abH, allowedDny));
+            }
           }
           setDesigns(prev => prev.map(d => {
-            if (!multiIds.has(d.id)) return d;
+            if (!units.some(unit => unit.members.some(member => member.id === d.id))) return d;
             return { ...d, transform: { ...d.transform, nx: d.transform.nx + allowedDnx, ny: d.transform.ny + allowedDny } };
           }));
         } else {
@@ -987,7 +1017,7 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
 
   return {
     ...bag,
-    getAlignNxNy,
+    getAlignDelta,
     handleAlignCorner,
     handleAutoArrange,
     handleArtboardResize,

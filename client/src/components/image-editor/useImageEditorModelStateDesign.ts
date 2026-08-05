@@ -21,7 +21,12 @@ import {
   EXPORT_DPI,
   LAYER_THUMBNAIL_SIZE,
 } from "./constants";
-import { clampDesignToArtboard, getRotatedBounds } from "./utils";
+import {
+  clampDesignToArtboard,
+  getDesignSelectionUnits,
+  rotateDesignSelection,
+  getRotatedBounds,
+} from "./utils";
 import { useAddToCartStall } from "./use-add-to-cart-stall";
 import { useRestoreDesignState } from "./use-restore-design-state";
 import type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
@@ -1194,60 +1199,25 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
 
   const handleMultiDragDelta = useCallback((dnx: number, dny: number) => {
     setDesigns(prev => {
-      // On first call of a drag, capture starting positions
-      if (!multiDragAccumRef.current) {
-        multiDragAccumRef.current = {
-          totalDnx: 0,
-          totalDny: 0,
-          starts: new Map(
-            prev.filter(d => selectedDesignIds.has(d.id))
-              .map(d => [d.id, { nx: d.transform.nx, ny: d.transform.ny }])
-          ),
-        };
-      }
-
-      const accum = multiDragAccumRef.current;
-      accum.totalDnx += dnx;
-      accum.totalDny += dny;
-
-      // Find the max allowed cumulative delta so no selected design exits the artboard.
-      // Using original positions ensures perfect mouse tracking when reversing direction.
-      let allowedDnx = accum.totalDnx;
-      let allowedDny = accum.totalDny;
-
-      for (const d of prev) {
-        if (!selectedDesignIds.has(d.id)) continue;
-        const start = accum.starts.get(d.id);
-        if (!start) continue;
-        const t = d.transform;
-        const rad = (t.rotation * Math.PI) / 180;
-        const cos = Math.abs(Math.cos(rad));
-        const sin = Math.abs(Math.sin(rad));
-        const halfW = (d.widthInches * t.s * cos + d.heightInches * t.s * sin) / 2;
-        const halfH = (d.widthInches * t.s * sin + d.heightInches * t.s * cos) / 2;
-        const minNx = halfW / artboardWidth;
-        const maxNx = 1 - halfW / artboardWidth;
-        const minNy = halfH / artboardHeight;
-        const maxNy = 1 - halfH / artboardHeight;
-
-        if (minNx <= maxNx) {
-          allowedDnx = Math.max(minNx - start.nx, Math.min(maxNx - start.nx, allowedDnx));
-        }
-        if (minNy <= maxNy) {
-          allowedDny = Math.max(minNy - start.ny, Math.min(maxNy - start.ny, allowedDny));
-        }
+      // Move selection units, not individual layers. A grouped unit's
+      // bounding box is the obstacle used for clamping, so a member cannot
+      // be clamped independently and separated from its siblings.
+      const units = getDesignSelectionUnits(prev, selectedDesignIds, artboardWidth, artboardHeight);
+      let allowedDnx = dnx;
+      let allowedDny = dny;
+      for (const unit of units) {
+        allowedDnx = Math.max(-unit.minX / artboardWidth, Math.min((artboardWidth - unit.maxX) / artboardWidth, allowedDnx));
+        allowedDny = Math.max(-unit.minY / artboardHeight, Math.min((artboardHeight - unit.maxY) / artboardHeight, allowedDny));
       }
 
       return prev.map(d => {
-        if (!selectedDesignIds.has(d.id)) return d;
-        const start = accum.starts.get(d.id);
-        if (!start) return d;
+        if (!units.some(unit => unit.members.some(member => member.id === d.id))) return d;
         return {
           ...d,
           transform: {
             ...d.transform,
-            nx: start.nx + allowedDnx,
-            ny: start.ny + allowedDny,
+            nx: d.transform.nx + allowedDnx,
+            ny: d.transform.ny + allowedDny,
           },
         };
       });
@@ -1257,42 +1227,42 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   const handleMultiResizeDelta = useCallback((scaleRatio: number, centerNx: number, centerNy: number) => {
     setDesigns(prev => {
       if (!multiResizeStartRef.current) {
+        const units = getDesignSelectionUnits(prev, selectedDesignIds, artboardWidth, artboardHeight);
+        const memberIds = new Set(units.flatMap(unit => unit.members.map(member => member.id)));
         multiResizeStartRef.current = new Map(
-          prev.filter(d => selectedDesignIds.has(d.id))
+          prev.filter(d => memberIds.has(d.id))
             .map(d => [d.id, { nx: d.transform.nx, ny: d.transform.ny, s: d.transform.s }])
         );
       }
       const starts = multiResizeStartRef.current;
       const centerX = centerNx * artboardWidth;
       const centerY = centerNy * artboardHeight;
+      const startDesigns = prev.map(d => {
+        const start = starts.get(d.id);
+        return start
+          ? { ...d, transform: { ...d.transform, nx: start.nx, ny: start.ny, s: start.s } }
+          : d;
+      });
+      const units = getDesignSelectionUnits(startDesigns, selectedDesignIds, artboardWidth, artboardHeight);
 
       // Derive the largest legal group scale analytically. Every selected
       // design shares the same ratio, so each artboard edge produces a
       // linear upper bound on that ratio.
       let maxScale = Number.POSITIVE_INFINITY;
-      for (const d of prev) {
-        if (!selectedDesignIds.has(d.id)) continue;
-        const start = starts.get(d.id);
-        if (!start) continue;
-        const rad = (d.transform.rotation * Math.PI) / 180;
-        const cos = Math.abs(Math.cos(rad));
-        const sin = Math.abs(Math.sin(rad));
-        const halfW = (d.widthInches * start.s * cos + d.heightInches * start.s * sin) / 2;
-        const halfH = (d.widthInches * start.s * sin + d.heightInches * start.s * cos) / 2;
-        const dx = start.nx * artboardWidth - centerX;
-        const dy = start.ny * artboardHeight - centerY;
-        const cap = (a: number, b: number) => {
-          if (b > 0) maxScale = Math.min(maxScale, a / b);
-        };
-        cap(centerX, halfW - dx);
-        cap(artboardWidth - centerX, halfW + dx);
-        cap(centerY, halfH - dy);
-        cap(artboardHeight - centerY, halfH + dy);
+      for (const unit of units) {
+        const left = centerX - unit.minX;
+        const right = unit.maxX - centerX;
+        const top = centerY - unit.minY;
+        const bottom = unit.maxY - centerY;
+        if (unit.minX < centerX && left > 0) maxScale = Math.min(maxScale, centerX / left);
+        if (unit.maxX > centerX && right > 0) maxScale = Math.min(maxScale, (artboardWidth - centerX) / right);
+        if (unit.minY < centerY && top > 0) maxScale = Math.min(maxScale, centerY / top);
+        if (unit.maxY > centerY && bottom > 0) maxScale = Math.min(maxScale, (artboardHeight - centerY) / bottom);
       }
       const appliedRatio = Math.max(0.05, Math.min(scaleRatio, maxScale));
 
       return prev.map(d => {
-        if (!selectedDesignIds.has(d.id)) return d;
+        if (!units.some(unit => unit.members.some(member => member.id === d.id))) return d;
         const start = starts.get(d.id);
         if (!start) return d;
         const px = start.nx * artboardWidth - centerX;
@@ -1313,85 +1283,36 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   const handleMultiRotateDelta = useCallback((angleDeg: number, centerNx: number, centerNy: number) => {
     setDesigns(prev => {
       if (!multiRotateStartRef.current) {
+        const units = getDesignSelectionUnits(prev, selectedDesignIds, artboardWidth, artboardHeight);
+        const memberIds = new Set(units.flatMap(unit => unit.members.map(member => member.id)));
         multiRotateStartRef.current = new Map(
-          prev.filter(d => selectedDesignIds.has(d.id))
+          prev.filter(d => memberIds.has(d.id))
             .map(d => [d.id, { nx: d.transform.nx, ny: d.transform.ny, rotation: d.transform.rotation }])
         );
       }
       const starts = multiRotateStartRef.current;
-      const radDelta = (angleDeg * Math.PI) / 180;
-      const cosD = Math.cos(radDelta);
-      const sinD = Math.sin(radDelta);
       const centerX = centerNx * artboardWidth;
       const centerY = centerNy * artboardHeight;
-
-      const unclamped = new Map<string, { nx: number; ny: number; rotation: number }>();
-      for (const d of prev) {
-        if (!selectedDesignIds.has(d.id)) continue;
+      // Rotate from the immutable drag-start snapshot. This keeps the
+      // pointer delta non-accumulating while the helper treats each group as
+      // one unit and preserves all group membership.
+      const startDesigns = prev.map(d => {
         const start = starts.get(d.id);
-        if (!start) continue;
-        const px = start.nx * artboardWidth - centerX;
-        const py = start.ny * artboardHeight - centerY;
-        const rotPx = px * cosD - py * sinD;
-        const rotPy = px * sinD + py * cosD;
-        let newRot = start.rotation + angleDeg;
-        newRot = ((newRot % 360) + 360) % 360;
-        unclamped.set(d.id, {
-          nx: (centerX + rotPx) / artboardWidth,
-          ny: (centerY + rotPy) / artboardHeight,
-          rotation: newRot,
-        });
-      }
-
-      let groupMinX = Infinity;
-      let groupMaxX = -Infinity;
-      let groupMinY = Infinity;
-      let groupMaxY = -Infinity;
-      for (const d of prev) {
-        if (!selectedDesignIds.has(d.id)) continue;
-        const u = unclamped.get(d.id);
-        if (!u) continue;
-        const bounds = getRotatedBounds({
-          ...d,
-          transform: {
-            ...d.transform,
-            nx: u.nx,
-            ny: u.ny,
-            rotation: u.rotation,
-          },
-        });
-        const centerX = u.nx * artboardWidth;
-        const centerY = u.ny * artboardHeight;
-        groupMinX = Math.min(groupMinX, centerX + bounds.minX);
-        groupMaxX = Math.max(groupMaxX, centerX + bounds.maxX);
-        groupMinY = Math.min(groupMinY, centerY + bounds.minY);
-        groupMaxY = Math.max(groupMaxY, centerY + bounds.maxY);
-      }
-      // Rotation is bounded as one group. Do not shift or independently clamp
-      // designs at the edge: reject the invalid angle and keep the last valid
-      // group position/rotation intact.
-      if (
-        groupMinX < 0 ||
-        groupMaxX > artboardWidth ||
-        groupMinY < 0 ||
-        groupMaxY > artboardHeight
-      ) {
-        return prev;
-      }
-
+        return start
+          ? { ...d, transform: { ...d.transform, nx: start.nx, ny: start.ny, rotation: start.rotation } }
+          : d;
+      });
+      const rotated = rotateDesignSelection(
+        startDesigns,
+        selectedDesignIds,
+        angleDeg,
+        artboardWidth,
+        artboardHeight,
+      );
+      if (!rotated) return prev;
       return prev.map(d => {
-        if (!selectedDesignIds.has(d.id)) return d;
-        const u = unclamped.get(d.id);
-        if (!u) return d;
-        return {
-          ...d,
-          transform: {
-            ...d.transform,
-            rotation: Math.round(u.rotation),
-            nx: u.nx,
-            ny: u.ny,
-          },
-        };
+        const next = rotated.get(d.id);
+        return next ? { ...d, transform: { ...d.transform, ...next } } : d;
       });
     });
   }, [selectedDesignIds, artboardWidth, artboardHeight]);
@@ -1844,72 +1765,27 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     saveSnapshot();
     const idsToRotate = selectedDesignIds.size > 1 ? selectedDesignIds : new Set([selectedDesignId]);
 
-    if (idsToRotate.size <= 1) {
-      setDesigns(prev => prev.map(d => {
-        if (!idsToRotate.has(d.id)) return d;
-        const newRot = ((d.transform.rotation + 90) % 360);
-        const rotated = { ...d, transform: { ...d.transform, rotation: newRot } };
-        const { nx, ny } = clampDesignToArtboard(rotated, artboardWidth, artboardHeight);
-        return { ...rotated, transform: { ...rotated.transform, nx, ny } };
-      }));
-    } else {
-      setDesigns(prev => {
-        const rotatedMap = new Map<string, { nx: number; ny: number; rotation: number }>();
-        for (const d of prev) {
-          if (!idsToRotate.has(d.id)) continue;
-          rotatedMap.set(d.id, {
-            nx: d.transform.nx,
-            ny: d.transform.ny,
-            rotation: (d.transform.rotation + 90) % 360,
-          });
-        }
-
-        let shiftR = 0, shiftL = 0, shiftD = 0, shiftU = 0;
-        for (const d of prev) {
-          const u = rotatedMap.get(d.id);
-          if (!u) continue;
-          const rad = (u.rotation * Math.PI) / 180;
-          const cos = Math.abs(Math.cos(rad));
-          const sin = Math.abs(Math.sin(rad));
-          const halfW = (d.widthInches * d.transform.s * cos + d.heightInches * d.transform.s * sin) / 2;
-          const halfH = (d.widthInches * d.transform.s * sin + d.heightInches * d.transform.s * cos) / 2;
-          const minNx = halfW / artboardWidth;
-          const maxNx = 1 - halfW / artboardWidth;
-          const minNy = halfH / artboardHeight;
-          const maxNy = 1 - halfH / artboardHeight;
-          if (minNx <= maxNx) {
-            if (u.nx < minNx) shiftR = Math.max(shiftR, minNx - u.nx);
-            if (u.nx > maxNx) shiftL = Math.max(shiftL, u.nx - maxNx);
-          }
-          if (minNy <= maxNy) {
-            if (u.ny < minNy) shiftD = Math.max(shiftD, minNy - u.ny);
-            if (u.ny > maxNy) shiftU = Math.max(shiftU, u.ny - maxNy);
-          }
-        }
-        const groupDnx = shiftR - shiftL;
-        const groupDny = shiftD - shiftU;
-
-        return prev.map(d => {
-          const u = rotatedMap.get(d.id);
-          if (!u) return d;
-          const rad = (u.rotation * Math.PI) / 180;
-          const cos = Math.abs(Math.cos(rad));
-          const sin = Math.abs(Math.sin(rad));
-          const halfW = (d.widthInches * d.transform.s * cos + d.heightInches * d.transform.s * sin) / 2;
-          const halfH = (d.widthInches * d.transform.s * sin + d.heightInches * d.transform.s * cos) / 2;
-          const adjNx = u.nx + groupDnx;
-          const adjNy = u.ny + groupDny;
-          const clampedNx = Math.max(halfW / artboardWidth, Math.min(1 - halfW / artboardWidth, adjNx));
-          const clampedNy = Math.max(halfH / artboardHeight, Math.min(1 - halfH / artboardHeight, adjNy));
-          return { ...d, transform: { ...d.transform, rotation: u.rotation, nx: clampedNx, ny: clampedNy } };
-        });
+    // Rotate selection units as complete objects. In particular, a selected
+    // group must rotate around the group's bounding-box center instead of
+    // rotating each member around its own center.
+    setDesigns(prev => {
+      const rotated = rotateDesignSelection(
+        prev,
+        idsToRotate,
+        90,
+        artboardWidth,
+        artboardHeight,
+      );
+      if (!rotated) return prev;
+      return prev.map(d => {
+        const next = rotated.get(d.id);
+        return next ? { ...d, transform: { ...d.transform, ...next } } : d;
       });
-    }
-
-    setDesignTransform(prev => {
-      const newRot = ((prev.rotation + 90) % 360);
-      return { ...prev, rotation: newRot };
     });
+    setDesignTransform(prev => ({
+      ...prev,
+      rotation: (prev.rotation + 90) % 360,
+    }));
   }, [selectedDesignId, selectedDesignIds, saveSnapshot, artboardWidth, artboardHeight]);
 
   const handleFlipX = useCallback(() => {
