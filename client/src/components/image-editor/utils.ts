@@ -133,6 +133,34 @@ function imageToExportBuffer(image: HTMLImageElement): Promise<ArrayBuffer> {
   });
 }
 
+// Duplicate-aware source buffer dedup. When a customer duplicates the same
+// design N times (very common in gangsheets), we only encode the source once
+// and let the worker cache the decoded bitmap and rendered stamps.
+async function buildDedupedSources(
+  designs: PngExportDesign[],
+): Promise<{
+  sources: ArrayBuffer[];
+  designSourceIndex: number[];
+}> {
+  const cache = new WeakMap<HTMLImageElement, number>();
+  const sources: ArrayBuffer[] = [];
+  const designSourceIndex: number[] = new Array(designs.length);
+  for (let i = 0; i < designs.length; i++) {
+    const img = designs[i].image;
+    const existing = cache.get(img);
+    if (existing !== undefined) {
+      designSourceIndex[i] = existing;
+      continue;
+    }
+    const buffer = await imageToExportBuffer(img);
+    const idx = sources.length;
+    sources.push(buffer);
+    cache.set(img, idx);
+    designSourceIndex[i] = idx;
+  }
+  return { sources, designSourceIndex };
+}
+
 export async function exportPngWithWorker(options: {
   designs: PngExportDesign[];
   outW: number;
@@ -145,6 +173,7 @@ export async function exportPngWithWorker(options: {
     throw new Error("The memory-efficient PNG export path is unavailable in this browser.");
   }
 
+  const { sources, designSourceIndex } = await buildDedupedSources(options.designs);
   const designPayload: Array<{
     widthInches: number;
     heightInches: number;
@@ -154,28 +183,24 @@ export async function exportPngWithWorker(options: {
     rotation: number;
     flipX?: boolean;
     flipY?: boolean;
-    imageBuffer: ArrayBuffer;
+    sourceIndex: number;
     alphaThresholded?: boolean;
     printFileName?: boolean;
     name?: string;
-  }> = [];
-  for (const design of options.designs) {
-    const imageBuffer = await imageToExportBuffer(design.image);
-    designPayload.push({
-      widthInches: design.widthInches,
-      heightInches: design.heightInches,
-      nx: design.nx,
-      ny: design.ny,
-      s: design.s,
-      rotation: design.rotation,
-      flipX: design.flipX,
-      flipY: design.flipY,
-      imageBuffer,
-      alphaThresholded: design.alphaThresholded,
-      printFileName: design.printFileName,
-      name: design.name,
-    });
-  }
+  }> = options.designs.map((design, i) => ({
+    widthInches: design.widthInches,
+    heightInches: design.heightInches,
+    nx: design.nx,
+    ny: design.ny,
+    s: design.s,
+    rotation: design.rotation,
+    flipX: design.flipX,
+    flipY: design.flipY,
+    sourceIndex: designSourceIndex[i],
+    alphaThresholded: design.alphaThresholded,
+    printFileName: design.printFileName,
+    name: design.name,
+  }));
 
   const requestId = nextExportRequestId();
   const result = await new Promise<{ buffer: ArrayBuffer; byteLength: number }>((resolve, reject) => {
@@ -225,17 +250,17 @@ export async function exportPngWithWorker(options: {
     worker.addEventListener("message", onMessage);
     worker.addEventListener("error", onError);
     try {
-      const transferables = designPayload.map((design) => design.imageBuffer);
       worker.postMessage(
         {
           type: "export",
           requestId,
+          sources,
           designs: designPayload,
           outW: options.outW,
           outH: options.outH,
           exportDpi: options.exportDpi,
         },
-        transferables,
+        sources,
       );
     } catch (error) {
       settled = true;

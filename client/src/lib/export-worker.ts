@@ -7,7 +7,10 @@ interface DesignExportData {
   rotation: number;
   flipX?: boolean;
   flipY?: boolean;
-  imageBuffer: ArrayBuffer;
+  // New shape: index into `sources[]` (shared across duplicate designs).
+  // Old shape: an inline per-design PNG buffer. One of the two is set.
+  sourceIndex?: number;
+  imageBuffer?: ArrayBuffer;
   mimeType?: string;
   alphaThresholded?: boolean;
   printFileName?: boolean;
@@ -18,6 +21,9 @@ interface ExportInput {
   type: 'export';
   requestId: number;
   designs: DesignExportData[];
+  // Deduplicated source PNG buffers. If designs use `sourceIndex`, they refer
+  // into this array. Absent when the caller uses the older inline shape.
+  sources?: ArrayBuffer[];
   outW: number;
   outH: number;
   exportDpi: number;
@@ -33,6 +39,28 @@ interface DesignExportBounds {
   bottom: number;
   width: number;
   height: number;
+  stampKey: string;
+}
+
+// Per-stamp memory cap: skip caching individual stamps that would exceed this
+// (huge one-off designs). Small duplicates (the common gangsheet case) always fit.
+const STAMP_CACHE_MAX_BYTES = 64 * 1024 * 1024; // 64 MB RGBA per stamp (= ~4096x4096)
+// Total stamp cache cap: guard against many unique large stamps.
+const STAMP_CACHE_TOTAL_MAX_BYTES = 256 * 1024 * 1024; // 256 MB across all stamps
+
+function makeStampKey(d: DesignExportData, drawW: number, drawH: number): string {
+  const nameKey = d.printFileName && d.name ? `|n${d.name}` : '';
+  return [
+    designSourceKey(d),
+    drawW,
+    drawH,
+    d.rotation | 0,
+    d.flipX ? 1 : 0,
+    d.flipY ? 1 : 0,
+    d.alphaThresholded ? 1 : 0,
+    d.printFileName ? 1 : 0,
+    nameKey,
+  ].join('|');
 }
 
 // Keep temporary export canvases bounded for tall sheets. This only changes
@@ -111,49 +139,139 @@ function stripHasContent(designs: DesignExportBounds[], stripY: number, stripH: 
   return false;
 }
 
+// Decode-once cache for source buffers. Keyed by source index (or a stable
+// synthetic key when the caller sends inline buffers).
+type SourceBitmapCache = Map<string, ImageBitmap>;
+
+async function getSourceBitmap(
+  d: DesignExportData,
+  sources: ArrayBuffer[] | undefined,
+  cache: SourceBitmapCache,
+): Promise<ImageBitmap> {
+  if (typeof createImageBitmap !== 'function') {
+    throw new Error('This browser cannot decode images inside the export worker.');
+  }
+  const key = designSourceKey(d);
+  const cached = cache.get(key);
+  if (cached) return cached;
+  const buf = d.sourceIndex != null && sources ? sources[d.sourceIndex] : d.imageBuffer;
+  if (!buf) throw new Error('Export design is missing image data.');
+  const bitmap = await createImageBitmap(
+    new Blob([buf], { type: d.mimeType || 'image/png' }),
+  );
+  cache.set(key, bitmap);
+  return bitmap;
+}
+
+// Stable per-source key, used by both the decoded-bitmap cache and the stamp
+// cache. For the new (deduped) shape the source index is authoritative; for
+// the legacy inline shape we tag each design with a WeakMap-based synthetic
+// index the first time we see it so repeat strips can hit the cache.
+const inlineSourceIndex = new WeakMap<ArrayBuffer, number>();
+let inlineSourceCounter = 0;
+function designSourceKey(d: DesignExportData): string {
+  if (d.sourceIndex != null) return `s${d.sourceIndex}`;
+  const buf = d.imageBuffer;
+  if (!buf) return `nil`;
+  let idx = inlineSourceIndex.get(buf);
+  if (idx == null) {
+    idx = ++inlineSourceCounter;
+    inlineSourceIndex.set(buf, idx);
+  }
+  return `i${idx}`;
+}
+
+type StampCache = Map<string, OffscreenCanvas>;
+
+// Pre-render a design into an AABB-sized canvas. If the same source + render
+// parameters appear again in another copy (typical for duplicated stickers),
+// we skip the entire rotate/scale/drawImage/text pipeline and just blit the
+// pre-baked stamp with a single drawImage — orders of magnitude cheaper than
+// rebuilding each copy from scratch.
+async function getOrBuildStamp(
+  d: DesignExportData,
+  bounds: DesignExportBounds,
+  bitmap: ImageBitmap,
+  exportDpi: number,
+  cache: StampCache,
+  cacheState: { totalBytes: number },
+): Promise<{ stamp: OffscreenCanvas | null; aabbW: number; aabbH: number }> {
+  const aabbW = bounds.width;
+  const aabbH = bounds.height;
+  const stampBytes = aabbW * aabbH * 4;
+  const canCache = stampBytes <= STAMP_CACHE_MAX_BYTES
+    && cacheState.totalBytes + stampBytes <= STAMP_CACHE_TOTAL_MAX_BYTES;
+
+  if (canCache) {
+    const existing = cache.get(bounds.stampKey);
+    if (existing) {
+      return { stamp: existing, aabbW, aabbH };
+    }
+  }
+
+  const stamp = new OffscreenCanvas(aabbW, aabbH);
+  const sctx = stamp.getContext('2d', { alpha: true });
+  if (!sctx) return { stamp: null, aabbW, aabbH };
+
+  sctx.imageSmoothingEnabled = !d.alphaThresholded;
+  sctx.imageSmoothingQuality = 'high';
+  sctx.save();
+  // Round the internal pivot so it lands on an integer pixel, matching the
+  // pre-cache path that translated to Math.round(centerX). This guarantees
+  // byte-identical output regardless of whether we hit the stamp cache.
+  sctx.translate(Math.round(aabbW / 2), Math.round(aabbH / 2));
+  sctx.rotate((d.rotation * Math.PI) / 180);
+  sctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
+  sctx.drawImage(bitmap, -bounds.drawW / 2, -bounds.drawH / 2, bounds.drawW, bounds.drawH);
+  if (d.printFileName && d.name) {
+    sctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
+    const marginPx = 0.1 * exportDpi;
+    const fontSize = Math.max(8, Math.round(bounds.drawH * 0.045));
+    sctx.font = `bold ${fontSize}px sans-serif`;
+    const displayName = d.name.replace(/\.[^/.]+$/, '');
+    sctx.fillStyle = '#000000';
+    sctx.textAlign = 'right';
+    sctx.textBaseline = 'top';
+    sctx.fillText(displayName, bounds.drawW / 2, bounds.drawH / 2 + marginPx);
+  }
+  sctx.restore();
+
+  if (canCache) {
+    cache.set(bounds.stampKey, stamp);
+    cacheState.totalBytes += stampBytes;
+  }
+  return { stamp, aabbW, aabbH };
+}
+
 async function drawDesignsOnStrip(
   ctx: OffscreenCanvasRenderingContext2D,
   designs: DesignExportBounds[],
   stripY: number,
   stripH: number,
   exportDpi: number,
+  sources: ArrayBuffer[] | undefined,
+  bitmapCache: SourceBitmapCache,
+  stampCache: StampCache,
+  stampCacheState: { totalBytes: number },
 ) {
   const stripBottom = stripY + stripH;
-  if (typeof createImageBitmap !== 'function') {
-    throw new Error('This browser cannot decode images inside the export worker.');
-  }
   for (const p of designs) {
     if (p.bottom < stripY || p.top > stripBottom) continue;
     const d = p.design;
-    const bitmap = await createImageBitmap(
-      new Blob([d.imageBuffer], { type: d.mimeType || "image/png" }),
+    const bitmap = await getSourceBitmap(d, sources, bitmapCache);
+    const { stamp, aabbW, aabbH } = await getOrBuildStamp(
+      d, p, bitmap, exportDpi, stampCache, stampCacheState,
     );
-    try {
-      ctx.imageSmoothingEnabled = !d.alphaThresholded;
-      ctx.imageSmoothingQuality = 'high';
-      ctx.save();
-      ctx.translate(
-        Math.round(p.left + p.width / 2),
-        Math.round(p.top - stripY + p.height / 2),
-      );
-      ctx.rotate((d.rotation * Math.PI) / 180);
-      ctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
-      ctx.drawImage(bitmap, -p.drawW / 2, -p.drawH / 2, p.drawW, p.drawH);
-      if (d.printFileName && d.name) {
-        ctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
-        const marginPx = 0.1 * exportDpi;
-        const fontSize = Math.max(8, Math.round(p.drawH * 0.045));
-        ctx.font = `bold ${fontSize}px sans-serif`;
-        const displayName = d.name.replace(/\.[^/.]+$/, '');
-        ctx.fillStyle = '#000000';
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'top';
-        ctx.fillText(displayName, p.drawW / 2, p.drawH / 2 + marginPx);
-      }
-      ctx.restore();
-    } finally {
-      try { bitmap.close(); } catch {}
-    }
+    if (!stamp) continue;
+
+    // Placement chosen so the design's pivot lands on the same integer pixel
+    // as the pre-cache code path (Math.round of the design's absolute center),
+    // preserving byte-identical output.
+    const stampCenterInX = Math.round(aabbW / 2);
+    const stampCenterInY = Math.round(aabbH / 2);
+    const drawX = Math.round(p.left + p.width / 2) - stampCenterInX;
+    const drawY = Math.round(p.top - stripY + p.height / 2) - stampCenterInY;
+    ctx.drawImage(stamp, drawX, drawY);
   }
 }
 
@@ -214,19 +332,37 @@ function filterRowAdaptive(
 
 async function writeEmptyRows(
   writer: WritableStreamDefaultWriter<Uint8Array>,
-  outW: number,
+  _outW: number,
   rowCount: number,
-  emptyRow: Uint8Array,
+  _emptyRow: Uint8Array,
   filteredRowLen: number,
 ) {
+  // new Uint8Array is already zero-filled, so allocation *is* the empty batch.
+  // We skip the per-row .set() copy loop, cutting empty-strip CPU roughly in half.
   for (let startRow = 0; startRow < rowCount; startRow += BATCH_ROWS) {
     const batchCount = Math.min(BATCH_ROWS, rowCount - startRow);
     const batch = new Uint8Array(batchCount * filteredRowLen);
-    for (let r = 0; r < batchCount; r++) {
-      batch.set(emptyRow, r * filteredRowLen);
-    }
     await writer.write(batch);
   }
+}
+
+// True when the entire row is zero (fully transparent). Common inside content
+// strips for gangsheets, where designs are sparse and most rows are blank.
+function isRowAllZero(pixels: Uint8ClampedArray, offset: number, length: number): boolean {
+  const end = offset + length;
+  let i = offset;
+  // Aligned 32-bit stride for speed; Uint8ClampedArray is byte-addressable
+  // but the browser lays it out contiguously so we can safely walk it.
+  for (; i + 8 <= end; i += 8) {
+    if (
+      pixels[i] | pixels[i + 1] | pixels[i + 2] | pixels[i + 3] |
+      pixels[i + 4] | pixels[i + 5] | pixels[i + 6] | pixels[i + 7]
+    ) return false;
+  }
+  for (; i < end; i++) {
+    if (pixels[i]) return false;
+  }
+  return true;
 }
 
 async function writeStripRows(
@@ -245,28 +381,42 @@ async function writeStripRows(
     const batch = new Uint8Array(batchCount * filteredRowLen);
     for (let r = 0; r < batchCount; r++) {
       const rowIdx = startRow + r;
-      const cur = pixels.subarray(rowIdx * rowBytes, (rowIdx + 1) * rowBytes);
-      filterRowAdaptive(cur, prevRow, bpp, rowBytes, scratch, batch, r * filteredRowLen);
-      prevRow.set(cur); // this row is the "up" reference for the next
+      const rowStart = rowIdx * rowBytes;
+      const cur = pixels.subarray(rowStart, rowStart + rowBytes);
+      if (isRowAllZero(pixels, rowStart, rowBytes)) {
+        // Filter type 0 (None) + zero row: cheapest possible representation.
+        // batch is already zero, so filter byte + payload are both correct.
+        prevRow.fill(0);
+      } else {
+        filterRowAdaptive(cur, prevRow, bpp, rowBytes, scratch, batch, r * filteredRowLen);
+        prevRow.set(cur); // this row is the "up" reference for the next
+      }
     }
     await writer.write(batch);
   }
 }
 
 async function buildPngStreaming(input: ExportInput): Promise<Uint8Array> {
-  const { designs, outW, outH, exportDpi } = input;
+  const { designs, sources, outW, outH, exportDpi } = input;
   const ppm = Math.round(exportDpi / 0.0254);
-  const designBounds = designs.map((design) => ({
-    design,
-    ...(() => {
-      const bounds = designAabb(design, outW, outH, exportDpi);
-      return {
-        ...bounds,
-        width: bounds.aabbW,
-        height: bounds.aabbH,
-      };
-    })(),
-  }));
+  const designBounds: DesignExportBounds[] = designs.map((design) => {
+    const bounds = designAabb(design, outW, outH, exportDpi);
+    return {
+      design,
+      drawW: bounds.drawW,
+      drawH: bounds.drawH,
+      left: bounds.left,
+      top: bounds.top,
+      right: bounds.right,
+      bottom: bounds.bottom,
+      width: bounds.aabbW,
+      height: bounds.aabbH,
+      stampKey: makeStampKey(design, bounds.drawW, bounds.drawH),
+    };
+  });
+  const bitmapCache: SourceBitmapCache = new Map();
+  const stampCache: StampCache = new Map();
+  const stampCacheState = { totalBytes: 0 };
   self.postMessage({
     type: 'progress',
     requestId: input.requestId,
@@ -351,7 +501,10 @@ async function buildPngStreaming(input: ExportInput): Promise<Uint8Array> {
     }
     const ctx = stripCtx!;
     ctx.clearRect(0, 0, outW, stripH);
-    await drawDesignsOnStrip(ctx, designBounds, stripY, stripH, exportDpi);
+    await drawDesignsOnStrip(
+      ctx, designBounds, stripY, stripH, exportDpi,
+      sources, bitmapCache, stampCache, stampCacheState,
+    );
 
     const imageData = ctx.getImageData(0, 0, outW, stripH);
     await writeStripRows(writer, imageData.data, stripH, filteredRowLen, rowBytes, bpp, prevRow, scratch);
@@ -369,6 +522,20 @@ async function buildPngStreaming(input: ExportInput): Promise<Uint8Array> {
     stripCanvas.width = 0;
     stripCanvas.height = 0;
   }
+
+  // Release the source-bitmap and stamp caches so their pixel storage can be
+  // reclaimed before the final PNG chunks are assembled. Stamps and bitmaps
+  // can add up to hundreds of megabytes on a duplicate-heavy 370" sheet.
+  for (const bitmap of bitmapCache.values()) {
+    try { bitmap.close(); } catch {}
+  }
+  bitmapCache.clear();
+  for (const stamp of stampCache.values()) {
+    stamp.width = 0;
+    stamp.height = 0;
+  }
+  stampCache.clear();
+  stampCacheState.totalBytes = 0;
 
   self.postMessage({
     type: 'progress',
@@ -409,7 +576,7 @@ async function buildPngStreaming(input: ExportInput): Promise<Uint8Array> {
 }
 
 async function runExportLegacy(input: ExportInput): Promise<Uint8Array> {
-  const { designs, outW, outH, exportDpi } = input;
+  const { designs, sources, outW, outH, exportDpi } = input;
 
   const canvas = new OffscreenCanvas(outW, outH);
   const ctx = canvas.getContext('2d');
@@ -419,13 +586,12 @@ async function runExportLegacy(input: ExportInput): Promise<Uint8Array> {
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
 
+  const bitmapCache: SourceBitmapCache = new Map();
+  if (typeof createImageBitmap !== 'function') {
+    throw new Error('This browser cannot decode images inside the export worker.');
+  }
   for (const design of designs) {
-    if (typeof createImageBitmap !== 'function') {
-      throw new Error('This browser cannot decode images inside the export worker.');
-    }
-    const bitmap = await createImageBitmap(
-      new Blob([design.imageBuffer], { type: design.mimeType || "image/png" }),
-    );
+    const bitmap = await getSourceBitmap(design, sources, bitmapCache);
     const { drawW, drawH } = designDrawSize(design, exportDpi);
     const centerX = design.nx * outW;
     const centerY = design.ny * outH;
@@ -449,12 +615,15 @@ async function runExportLegacy(input: ExportInput): Promise<Uint8Array> {
       ctx.scale(design.flipX ? -1 : 1, design.flipY ? -1 : 1);
     }
     ctx.restore();
-    try { bitmap.close(); } catch {}
     if (design.alphaThresholded) {
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
     }
   }
+  for (const bitmap of bitmapCache.values()) {
+    try { bitmap.close(); } catch {}
+  }
+  bitmapCache.clear();
 
   const rawBlob = await canvas.convertToBlob({ type: 'image/png' });
   const rawBuf = new Uint8Array(await rawBlob.arrayBuffer());
