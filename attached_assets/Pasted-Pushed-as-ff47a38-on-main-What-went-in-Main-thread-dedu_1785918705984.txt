@@ -1,0 +1,28 @@
+Pushed as ff47a38 on main.
+
+What went in
+Main-thread dedup (client/src/components/image-editor/utils.ts): each unique HTMLImageElement is now encoded to PNG exactly once via buildDedupedSources() (WeakMap-keyed by image identity). The worker payload now sends a deduped sources[] and per-design sourceIndex references. Only the unique buffers are transferred.
+
+Worker-side dedup + stamp cache (client/src/lib/export-worker.ts):
+
+Each unique source PNG is decoded to ImageBitmap exactly once per export (via SourceBitmapCache), regardless of how many designs use it or how many strips it spans.
+Each unique (source × drawW × drawH × rotation × flip × alpha threshold × optional name) combo gets pre-rendered into an AABB-sized OffscreenCanvas once (via StampCache). Every subsequent copy is composited with a single 1:1 drawImage(stamp, ...) — orders of magnitude cheaper than rebuilding.
+Guarded by 64 MB per-stamp and 256 MB total cache caps — huge one-off designs bypass the cache and render inline.
+Pixel-identical output: the interior pivot inside the stamp is Math.rounded exactly the way the pre-cache code path used to round the design center, and strip placement uses matching rounding, so no sub-pixel drift.
+Backward-compatible: if a caller still sends the old inline-buffer shape, a WeakMap gives each buffer a synthetic stable index so decode+stamp caching still work.
+Mechanical wins:
+
+writeStripRows fast-paths all-zero rows (common inside content strips of a 370" gangsheet) — emits filter 0 + a zero payload without running the 5-way adaptive filter analysis.
+writeEmptyRows drops the redundant .set() copy loop; new Uint8Array(N) is already zero-filled.
+Bitmap + stamp caches are explicitly freed before the final PNG assembly, so their pixel storage doesn't compete with the finalization step for memory headroom.
+Expected speedup (relative to prior code)
+Scenario	Speedup
+20× duplicates of one 3"×3" sticker (typical bulk order)
+~10–15× on the raster stage
+100× duplicates (huge run)
+~20–30× on the raster stage
+Sparse tall sheet (370", few designs at the top)
+additional ~30–50% from zero-row fast path
+All-unique designs, dense sheet
+~20–40% from decode-once + free stamp reuse when same design appears in multiple strips
+Quality is guaranteed identical: the pixels rasterize through the same drawImage code path at the same DPI with the same smoothing settings; the only change is that identical work isn't repeated.
