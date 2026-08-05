@@ -112,12 +112,15 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   const artboardHeightRef = useRef(artboardHeight);
   artboardHeightRef.current = artboardHeight;
   const availableGangsheetHeights = useMemo(() => {
+    // Height lists can arrive from Shopify variants in arbitrary order
+    // (variant position / alphabetical). Every "next size up" lookup and
+    // the MAX height assume ascending numeric order, so normalize here.
     if (initialGangsheetHeights && initialGangsheetHeights.length > 0) {
-      return initialGangsheetHeights;
+      return Array.from(new Set(initialGangsheetHeights)).sort((a, b) => a - b);
     }
     const base = profile.gangsheetHeights;
-    if (!initialHeight || base.includes(initialHeight)) return base;
-    return [...base, initialHeight].sort((a, b) => a - b);
+    const merged = !initialHeight || base.includes(initialHeight) ? base : [...base, initialHeight];
+    return Array.from(new Set(merged)).sort((a, b) => a - b);
   }, [profile.gangsheetHeights, initialHeight, initialGangsheetHeights]);
   const contentFillCacheRef = useRef<Map<string, number>>(new Map());
   const handleAutoArrangeRef = useRef<(

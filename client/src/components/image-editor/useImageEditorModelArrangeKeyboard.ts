@@ -95,10 +95,17 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
   }, [selectedDesignId, selectedDesignIds, artboardWidth, artboardHeight]);
 
   const GANGSHEET_HEIGHTS = useMemo(() => {
-    if (initialGangsheetHeights && initialGangsheetHeights.length > 0) return initialGangsheetHeights;
+    // Height lists can arrive from Shopify variants in arbitrary order
+    // (variant position / alphabetical). `find(h => h > current)` and
+    // `GANGSHEET_HEIGHTS[length - 1]` (MAX) both require ascending numeric
+    // order — an unsorted list makes "add one copy" jump 12" straight to
+    // the largest size instead of the next one up.
+    if (initialGangsheetHeights && initialGangsheetHeights.length > 0) {
+      return Array.from(new Set(initialGangsheetHeights)).sort((a, b) => a - b);
+    }
     const base = profile.gangsheetHeights;
-    if (!initialHeight || base.includes(initialHeight)) return base;
-    return [...base, initialHeight].sort((a, b) => a - b);
+    const merged = !initialHeight || base.includes(initialHeight) ? base : [...base, initialHeight];
+    return Array.from(new Set(merged)).sort((a, b) => a - b);
   }, [profile.gangsheetHeights, initialHeight, initialGangsheetHeights]);
   const MAX_ARTBOARD_HEIGHT = GANGSHEET_HEIGHTS[GANGSHEET_HEIGHTS.length - 1];
 

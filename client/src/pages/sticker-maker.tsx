@@ -258,9 +258,19 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
     };
   }, [stateUrl, stateKey]);
 
+  // Dev-only: `?heights=12,24,36` on the test page simulates a storefront
+  // variant height list so height-expansion flows can be reproduced locally.
+  const devHeights = (import.meta.env.DEV && testMode)
+    ? (rawParams["heights"] ?? "")
+        .split(",")
+        .map((s) => Number(s))
+        .filter((n) => Number.isFinite(n) && n > 0)
+    : [];
   const resolvedWidth = variantConfig?.configured ? variantConfig.artboardWidth : undefined;
   const resolvedHeight = variantConfig?.configured ? variantConfig.selectedHeight : undefined;
-  const resolvedHeights = variantConfig?.configured ? variantConfig.gangsheetHeights : undefined;
+  const resolvedHeights = variantConfig?.configured
+    ? variantConfig.gangsheetHeights
+    : (devHeights.length > 0 ? devHeights : undefined);
   const resolvedVariants = variantConfig?.configured ? variantConfig.variants : undefined;
   /** Wait for `/api/builder-context` before mounting the editor so artboard size isn’t briefly wrong (first variant / default). */
   const waitingForCtx = Boolean(ctxToken) && variantConfig === null;
