@@ -335,66 +335,6 @@ function applyObstacles(initial: FreeRect[], obstacles: FixedRect[], gap: number
   return freeRects;
 }
 
-function splitFreeRects(freeRects: FreeRect[], placed: { x: number; y: number; w: number; h: number }): FreeRect[] {
-  const newFree: FreeRect[] = [];
-  for (const fr of freeRects) {
-    if (placed.x >= fr.x + fr.w - EPS || placed.x + placed.w <= fr.x + EPS ||
-        placed.y >= fr.y + fr.h - EPS || placed.y + placed.h <= fr.y + EPS) {
-      newFree.push(fr);
-      continue;
-    }
-    if (placed.x > fr.x + EPS)
-      newFree.push({ x: fr.x, y: fr.y, w: placed.x - fr.x, h: fr.h });
-    if (placed.x + placed.w < fr.x + fr.w - EPS)
-      newFree.push({ x: placed.x + placed.w, y: fr.y, w: fr.x + fr.w - placed.x - placed.w, h: fr.h });
-    if (placed.y > fr.y + EPS)
-      newFree.push({ x: placed.x, y: fr.y, w: placed.w, h: placed.y - fr.y });
-    if (placed.y + placed.h < fr.y + fr.h - EPS)
-      newFree.push({ x: placed.x, y: placed.y + placed.h, w: placed.w, h: fr.y + fr.h - placed.y - placed.h });
-  }
-  const pruned: FreeRect[] = [];
-  for (let i = 0; i < newFree.length; i++) {
-    if (newFree[i].w < 0.01 || newFree[i].h < 0.01) continue;
-    let contained = false;
-    for (let j = 0; j < newFree.length; j++) {
-      if (i === j) continue;
-      if (newFree[i].x >= newFree[j].x - EPS && newFree[i].y >= newFree[j].y - EPS &&
-          newFree[i].x + newFree[i].w <= newFree[j].x + newFree[j].w + EPS &&
-          newFree[i].y + newFree[i].h <= newFree[j].y + newFree[j].h + EPS) {
-        contained = true;
-        break;
-      }
-    }
-    if (!contained) pruned.push(newFree[i]);
-  }
-  return pruned;
-}
-
-function maxRectsFindBest(
-  freeRects: FreeRect[],
-  iw: number, ih: number,
-  heuristic: 'bssf' | 'baf',
-): { x: number; y: number; score: number; secondary: number } | null {
-  let bestScore = Infinity, bestSecondary = Infinity;
-  let bestX = 0, bestY = 0, found = false;
-  for (const fr of freeRects) {
-    if (iw > fr.w + EPS || ih > fr.h + EPS) continue;
-    let score: number, secondary: number;
-    if (heuristic === 'bssf') {
-      score = Math.min(fr.w - iw, fr.h - ih);
-      secondary = Math.max(fr.w - iw, fr.h - ih);
-    } else {
-      score = fr.w * fr.h - iw * ih;
-      secondary = Math.min(fr.w - iw, fr.h - ih);
-    }
-    if (score < bestScore - EPS || (Math.abs(score - bestScore) < EPS && secondary < bestSecondary - EPS)) {
-      bestScore = score; bestSecondary = secondary;
-      bestX = fr.x; bestY = fr.y; found = true;
-    }
-  }
-  return found ? { x: bestX, y: bestY, score: bestScore, secondary: bestSecondary } : null;
-}
-
 function maxRectsPack(
   items: PackItem[],
   usableW: number,
@@ -404,7 +344,6 @@ function maxRectsPack(
   heuristic: 'bssf' | 'baf',
   initialObstacles?: FixedRect[],
   gap?: number,
-  perItemRotation?: boolean,
 ): { result: PlacedItem[]; maxHeight: number; wastedArea: number } {
   const GAP = gap ?? 0.25;
   let freeRects: FreeRect[] = [{ x: 0, y: 0, w: usableW, h: usableH }];
@@ -417,46 +356,73 @@ function maxRectsPack(
 
   for (const item of items) {
     const g = item.gap;
+    const iw = item.w + g;
+    const ih = item.h + g;
 
-    type Orient = { w: number; h: number; rot: number };
-    const orients: Orient[] = [{ w: item.w, h: item.h, rot: item.rotation }];
-    if (perItemRotation && Math.abs(item.w - item.h) > 0.1) {
-      orients.push({ w: item.h, h: item.w, rot: item.rotation === 0 ? 90 : 0 });
-    }
+    let bestScore = Infinity;
+    let bestSecondary = Infinity;
+    let bestX = 0, bestY = 0;
+    let found = false;
 
-    let bestPos: { x: number; y: number } | null = null;
-    let bestOrient: Orient = orients[0];
-    let bestPosScore = Infinity;
-    let bestPosSec = Infinity;
-
-    for (const orient of orients) {
-      const iw = orient.w + g;
-      const ih = orient.h + g;
-      const pos = maxRectsFindBest(freeRects, iw, ih, heuristic);
-      if (!pos) continue;
-      const combined = pos.y * 10000 + pos.score;
-      const combinedBest = bestPos ? (bestPos as any)._rawY * 10000 + bestPosScore : Infinity;
-      if (!bestPos || combined < combinedBest - EPS || (Math.abs(combined - combinedBest) < EPS && pos.secondary < bestPosSec)) {
-        bestPos = pos;
-        (bestPos as any)._rawY = pos.y;
-        bestOrient = orient;
-        bestPosScore = pos.score;
-        bestPosSec = pos.secondary;
+    for (const fr of freeRects) {
+      if (iw > fr.w + EPS || ih > fr.h + EPS) continue;
+      let score: number, secondary: number;
+      if (heuristic === 'bssf') {
+        score = Math.min(fr.w - iw, fr.h - ih);
+        secondary = Math.max(fr.w - iw, fr.h - ih);
+      } else {
+        score = fr.w * fr.h - iw * ih;
+        secondary = Math.min(fr.w - iw, fr.h - ih);
+      }
+      if (score < bestScore - EPS || (Math.abs(score - bestScore) < EPS && secondary < bestSecondary - EPS)) {
+        bestScore = score;
+        bestSecondary = secondary;
+        bestX = fr.x;
+        bestY = fr.y;
+        found = true;
       }
     }
 
-    if (bestPos) {
-      const iw = bestOrient.w + g;
-      const ih = bestOrient.h + g;
-      maxHeight = Math.max(maxHeight, bestPos.y + ih);
+    if (found) {
+      maxHeight = Math.max(maxHeight, bestY + ih);
       totalItemArea += item.w * item.h;
-      const extraY = bestOrient.rot === 90 ? ROTATION_SAFETY : 0;
-      const { nx, ny } = toNxNy(bestPos.x + bestOrient.w / 2, bestPos.y + bestOrient.h / 2 + extraY, bestOrient.w, bestOrient.h, abW, abH);
-      result.push({ id: item.id, nx, ny, rotation: bestOrient.rot, overflows: false });
-      freeRects = splitFreeRects(freeRects, { x: bestPos.x, y: bestPos.y, w: iw, h: ih });
+      const extraY = item.rotation === 90 ? ROTATION_SAFETY : 0;
+      const { nx, ny } = toNxNy(bestX + item.w / 2, bestY + item.h / 2 + extraY, item.w, item.h, abW, abH);
+      result.push({ id: item.id, nx, ny, rotation: item.rotation, overflows: false });
+
+      const placed = { x: bestX, y: bestY, w: iw, h: ih };
+      const newFree: FreeRect[] = [];
+      for (const fr of freeRects) {
+        if (placed.x >= fr.x + fr.w - EPS || placed.x + placed.w <= fr.x + EPS ||
+            placed.y >= fr.y + fr.h - EPS || placed.y + placed.h <= fr.y + EPS) {
+          newFree.push(fr);
+          continue;
+        }
+        if (placed.x > fr.x + EPS)
+          newFree.push({ x: fr.x, y: fr.y, w: placed.x - fr.x, h: fr.h });
+        if (placed.x + placed.w < fr.x + fr.w - EPS)
+          newFree.push({ x: placed.x + placed.w, y: fr.y, w: fr.x + fr.w - placed.x - placed.w, h: fr.h });
+        if (placed.y > fr.y + EPS)
+          newFree.push({ x: placed.x, y: fr.y, w: placed.w, h: placed.y - fr.y });
+        if (placed.y + placed.h < fr.y + fr.h - EPS)
+          newFree.push({ x: placed.x, y: placed.y + placed.h, w: placed.w, h: fr.y + fr.h - placed.y - placed.h });
+      }
+      freeRects = [];
+      for (let i = 0; i < newFree.length; i++) {
+        if (newFree[i].w < 0.01 || newFree[i].h < 0.01) continue;
+        let contained = false;
+        for (let j = 0; j < newFree.length; j++) {
+          if (i === j) continue;
+          if (newFree[i].x >= newFree[j].x - EPS && newFree[i].y >= newFree[j].y - EPS &&
+              newFree[i].x + newFree[i].w <= newFree[j].x + newFree[j].w + EPS &&
+              newFree[i].y + newFree[i].h <= newFree[j].y + newFree[j].h + EPS) {
+            contained = true;
+            break;
+          }
+        }
+        if (!contained) freeRects.push(newFree[i]);
+      }
     } else {
-      const iw = item.w + g;
-      const ih = item.h + g;
       const extraY = item.rotation === 90 ? ROTATION_SAFETY : 0;
       const { nx, ny } = toNxNy(item.w / 2, maxHeight + ih / 2 + extraY, item.w, item.h, abW, abH);
       result.push({ id: item.id, nx, ny, rotation: item.rotation, overflows: true });
@@ -550,8 +516,6 @@ function runArrange(input: ArrangeInput) {
       const normalPi = makePackItems(order, 'normal', gapOverride);
       cands.push(evaluate(maxRectsPack(normalPi, usableW, usableH, artboardWidth, artboardHeight, 'bssf', fixedRects, g)));
       cands.push(evaluate(maxRectsPack(normalPi, usableW, usableH, artboardWidth, artboardHeight, 'baf', fixedRects, g)));
-      cands.push(evaluate(maxRectsPack(normalPi, usableW, usableH, artboardWidth, artboardHeight, 'bssf', fixedRects, g, true)));
-      cands.push(evaluate(maxRectsPack(normalPi, usableW, usableH, artboardWidth, artboardHeight, 'baf', fixedRects, g, true)));
       cands.push(evaluate(maxRectsPack(makePackItems(order, 'landscape', gapOverride), usableW, usableH, artboardWidth, artboardHeight, 'bssf', fixedRects, g)));
       cands.push(evaluate(maxRectsPack(makePackItems(order, 'portrait', gapOverride), usableW, usableH, artboardWidth, artboardHeight, 'bssf', fixedRects, g)));
     }
@@ -577,9 +541,6 @@ function runArrange(input: ArrangeInput) {
       const mr1 = evaluate(maxRectsPack(normalPi, usableW, usableH, artboardWidth, artboardHeight, 'bssf')); (mr1 as any)._algo = `maxRects_bssf_${oi}`; cands.push(mr1);
       const mr2 = evaluate(maxRectsPack(normalPi, usableW, usableH, artboardWidth, artboardHeight, 'baf')); (mr2 as any)._algo = `maxRects_baf_${oi}`; cands.push(mr2);
 
-      const mr3 = evaluate(maxRectsPack(normalPi, usableW, usableH, artboardWidth, artboardHeight, 'bssf', undefined, undefined, true)); (mr3 as any)._algo = `maxRects_bssf_rot_${oi}`; cands.push(mr3);
-      const mr4 = evaluate(maxRectsPack(normalPi, usableW, usableH, artboardWidth, artboardHeight, 'baf', undefined, undefined, true)); (mr4 as any)._algo = `maxRects_baf_rot_${oi}`; cands.push(mr4);
-
       const sh = evaluate(shelfPack(normalPi, usableW, usableH, artboardWidth, artboardHeight)); (sh as any)._algo = `shelf_${oi}`; cands.push(sh);
 
       const slL = evaluate(skylinePack(makePackItems(order, 'landscape', gapOverride), usableW, usableH, artboardWidth, artboardHeight)); (slL as any)._algo = `skyline_landscape_${oi}`; cands.push(slL);
@@ -602,38 +563,19 @@ function runArrange(input: ArrangeInput) {
           ...runCandidates(0.0625),
         ]);
 
-  // Candidate ranking — height-first.
-  //
-  // DTF gangsheets are billed by *length* (vertical inches), never width.
-  // The sheet width is a fixed roll dimension the user cannot change; the
-  // sheet height is what expands with the arrangement. So the correct
-  // primary objective is unambiguously "minimise `maxHeight`". Every
-  // horizontal-packing win is only meaningful in-so-far as it *reduces*
-  // the total vertical extent.
-  //
-  // The previous sort compared "utilisation" (area / (usableW * maxHeight))
-  // with a 2% threshold before falling through to a maxHeight compare with
-  // a 0.01" threshold. Because utilisation is 1 / maxHeight up to
-  // constants, that tier duplicated the height compare *plus* introduced
-  // a dead zone where two candidates within the 2% band would fall through
-  // and be picked on wasted-area instead of height — sometimes picking a
-  // *taller* layout because it had fewer holes. Users see this as "it
-  // saved horizontal space when I wanted to save vertical space".
-  //
-  // New tie-break tiers:
-  //   1. fewer overflows       — hard correctness
-  //   2. fits within artboard  — hard correctness
-  //   3. smaller maxHeight     — the whole point
-  //   4. less wasted area      — cosmetic tie-break for identical heights
-  //
-  // The 0.01" height tolerance is intentional: below that, differences are
-  // sub-pixel at typical print DPIs and it makes sense to prefer the
-  // tighter (less hole-y) layout for visual predictability.
+  // Candidate ranking preserves the legacy arrangement order:
+  // fewer overflows, fit within the artboard, utilization, height, then
+  // wasted area.
+  const totalItemArea = items.reduce((sum, d) => sum + d.w * d.h, 0);
+
   candidates.sort((a, b) => {
     if (a.overflows !== b.overflows) return a.overflows - b.overflows;
     const aFits = a.maxHeight <= usableH ? 0 : 1;
     const bFits = b.maxHeight <= usableH ? 0 : 1;
     if (aFits !== bFits) return aFits - bFits;
+    const aUtil = totalItemArea / (usableW * Math.max(a.maxHeight, 0.01));
+    const bUtil = totalItemArea / (usableW * Math.max(b.maxHeight, 0.01));
+    if (Math.abs(aUtil - bUtil) > 0.02) return bUtil - aUtil;
     if (Math.abs(a.maxHeight - b.maxHeight) > 0.01) return a.maxHeight - b.maxHeight;
     return a.wastedArea - b.wastedArea;
   });
