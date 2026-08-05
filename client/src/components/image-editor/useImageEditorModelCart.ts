@@ -2,9 +2,10 @@ import { useCallback } from "react";
 import { uploadProductionToR2, canUseShellRelay } from "@/lib/r2-direct-upload";
 import { EXPORT_DPI, EXPORT_TIMEOUT_MS } from "./constants";
 import {
-  getExportWorker,
+  canUseMemoryEfficientPngExport,
+  exportPngWithWorker,
+  getExportMemoryWarning,
   injectPngDpi,
-  nextExportRequestId,
 } from "./utils";
 import type { ImageEditorBagAfterExport } from "./image-editor-hook-bag.types";
 import type { InitialDesignState } from "./types";
@@ -42,6 +43,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
     shopDomain,
     toast,
     setIsProcessing,
+    setExportProgressLabel,
     setIsAddingToCart,
     setIsUpdateFlow,
     setAddToCartProgressLabel,
@@ -62,6 +64,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
     addToCartInFlightRef,
     profile,
     spotPreviewData,
+    t,
     ensureDesignImagesAvailable,
   } = bag;
 
@@ -242,55 +245,49 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         const exportDpi = EXPORT_DPI;
         const outW = Math.max(1, Math.round(artboardWidth * exportDpi));
         const outH = Math.max(1, Math.round(artboardHeight * exportDpi));
-        const worker = getExportWorker();
-        const useWorker = worker && typeof OffscreenCanvas !== 'undefined';
+        const useWorker = canUseMemoryEfficientPngExport();
+        const memoryWarning = getExportMemoryWarning();
+        if (memoryWarning) {
+          toast({
+            title: t("toast.exportMemoryWarning"),
+            description: memoryWarning,
+          });
+        }
         let pngBlob: Blob;
         let exportWorkerBuffer: ArrayBuffer | null = null;
 
         if (useWorker) {
-          const bitmaps = await Promise.all(exportDesignsSource.map((d) => createImageBitmap(d.imageInfo.image)));
-          const exportDesigns = exportDesignsSource.map((d, i) => ({
-            widthInches: d.widthInches,
-            heightInches: d.heightInches,
-            nx: d.transform.nx,
-            ny: d.transform.ny,
-            s: d.transform.s,
-            rotation: d.transform.rotation,
-            flipX: d.transform.flipX,
-            flipY: d.transform.flipY,
-            bitmap: bitmaps[i],
-            alphaThresholded: d.alphaThresholded,
-            printFileName: d.printFileName,
-            name: d.name,
-          }));
-          const requestId = nextExportRequestId();
-          const exportResult = await new Promise<{ buffer: ArrayBuffer; byteLength: number }>((resolve, reject) => {
-            const timer = window.setTimeout(() => reject(new Error('Export timed out — sheet may be too large.')), EXPORT_TIMEOUT_MS);
-            const onMessage = (e: MessageEvent) => {
-              if (e.data.requestId !== requestId) return;
-              worker.removeEventListener('message', onMessage);
-              window.clearTimeout(timer);
-              if (e.data.type === 'error') reject(new Error(e.data.error));
-              else if (e.data.buffer) {
-                const buf = e.data.buffer as ArrayBuffer;
-                const byteLength = Number(e.data.byteLength) > 0 ? Number(e.data.byteLength) : buf.byteLength;
-                resolve({ buffer: buf, byteLength });
-              }
-              else reject(new Error('Export returned no image data'));
-            };
-            worker.addEventListener('message', onMessage);
-            try {
-              worker.postMessage({ type: 'export', requestId, designs: exportDesigns, outW, outH, exportDpi }, bitmaps);
-            } catch (error) {
-              for (const bitmap of bitmaps) {
-                try { bitmap.close(); } catch {}
-              }
-              reject(error);
-            }
+          const result = await exportPngWithWorker({
+            designs: exportDesignsSource.map(d => ({
+              widthInches: d.widthInches,
+              heightInches: d.heightInches,
+              nx: d.transform.nx,
+              ny: d.transform.ny,
+              s: d.transform.s,
+              rotation: d.transform.rotation,
+              flipX: d.transform.flipX,
+              flipY: d.transform.flipY,
+              image: d.imageInfo.image,
+              alphaThresholded: d.alphaThresholded,
+              printFileName: d.printFileName,
+              name: d.name,
+            })),
+            outW,
+            outH,
+            exportDpi,
+            onProgress: ({ phase, completed, total }) => {
+              if (phase === "preparing") setExportProgressLabel("Preparing export...");
+              else if (phase === "rendering") setExportProgressLabel(`Rendering strip ${completed} of ${total}...`);
+              else setExportProgressLabel("Finalizing PNG...");
+            },
           });
-          exportWorkerBuffer = exportResult.buffer;
+          exportWorkerBuffer = result.buffer;
           pngBlob = new Blob([exportWorkerBuffer], { type: 'image/png' });
         } else {
+          toast({
+            title: t("toast.exportCompatibilityWarning"),
+            description: t("toast.exportCompatibilityWarningDesc"),
+          });
           const exportCanvas = document.createElement('canvas');
           exportCanvas.width = outW;
           exportCanvas.height = outH;
@@ -631,12 +628,13 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       setIsAddingToCart(false);
       setIsUpdateFlow(false);
       setIsProcessing(false);
+      setExportProgressLabel(undefined);
       if (addToCartStallTimeoutRef.current != null) {
         window.clearTimeout(addToCartStallTimeoutRef.current);
         addToCartStallTimeoutRef.current = null;
       }
     }
-  }, [artboardWidth, artboardHeight, quantity, shopifyVariants, initialVariantId, shopDomain, toast, refreshAddToCartStallTimeout, buildDesignStatePayload, isEditMode, initialDesignState, setIsAddingToCart, setIsUpdateFlow, setIsProcessing, setAddToCartProgressLabel, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, profile, spotPreviewData, ensureDesignImagesAvailable]);
+  }, [artboardWidth, artboardHeight, quantity, shopifyVariants, initialVariantId, shopDomain, toast, t, refreshAddToCartStallTimeout, buildDesignStatePayload, isEditMode, initialDesignState, setIsAddingToCart, setIsUpdateFlow, setIsProcessing, setExportProgressLabel, setAddToCartProgressLabel, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, profile, spotPreviewData, ensureDesignImagesAvailable]);
 
   return {
     ...bag,

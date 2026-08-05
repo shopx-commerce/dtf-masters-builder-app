@@ -46,6 +46,7 @@ interface ControlsSectionProps {
   onResizeChange: (settings: Partial<ResizeSettings>) => void;
   onDownload: (downloadType?: string, format?: string, spotColorsByDesign?: Record<string, any[]>) => void;
   isProcessing: boolean;
+  exportProgressLabel?: string;
   imageInfo: ImageInfo | null;
   artboardWidth?: number;
   artboardHeight?: number;
@@ -104,6 +105,7 @@ function autoAssignChannel(rgb: { r: number; g: number; b: number }): 'spotFluor
 export default function ControlsSection({
   onDownload,
   isProcessing,
+  exportProgressLabel,
   imageInfo,
   artboardWidth = 24.5,
   artboardHeight = 12,
@@ -873,9 +875,9 @@ export default function ControlsSection({
                 !canDownload
                   ? t("controls.uploadFirst")
                   : isAddingToCart
-                    ? t("controls.addingToCart")
+                      ? (exportProgressLabel || t("controls.addingToCart"))
                     : isProcessing
-                      ? t("editor.processing")
+                    ? (exportProgressLabel || t("editor.processing"))
                       : (addToCartLabel || t("controls.addToCart"))
               }
               className="flex-1 h-10 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white rounded-lg shadow-lg shadow-emerald-500/25 font-medium disabled:opacity-50"
@@ -888,7 +890,7 @@ export default function ControlsSection({
               ) : isProcessing ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
-                  {t("editor.processing")}
+                  {exportProgressLabel || t("editor.processing")}
                 </>
               ) : (
                 <>

@@ -62,6 +62,191 @@ export function getExportWorker(): Worker | null {
   return _exportWorker;
 }
 
+export function canUseMemoryEfficientPngExport(): boolean {
+  return typeof Worker !== "undefined"
+    && typeof OffscreenCanvas !== "undefined"
+    && typeof createImageBitmap === "function"
+    && typeof CompressionStream !== "undefined";
+}
+
+export function getExportMemoryWarning(): string | null {
+  if (typeof performance === "undefined") return null;
+  const memory = (performance as Performance & {
+    memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number };
+  }).memory;
+  if (!memory) return null;
+  const headroom = memory.jsHeapSizeLimit - memory.usedJSHeapSize;
+  return headroom < 500 * 1024 * 1024
+    ? `Browser memory headroom is approximately ${Math.max(0, Math.round(headroom / (1024 * 1024)))} MB.`
+    : null;
+}
+
+export type PngExportProgress = {
+  phase: "preparing" | "rendering" | "finalizing";
+  completed: number;
+  total: number;
+};
+
+export type PngExportDesign = {
+  widthInches: number;
+  heightInches: number;
+  nx: number;
+  ny: number;
+  s: number;
+  rotation: number;
+  flipX?: boolean;
+  flipY?: boolean;
+  image: HTMLImageElement;
+  alphaThresholded?: boolean;
+  printFileName?: boolean;
+  name?: string;
+};
+
+function imageToExportBuffer(image: HTMLImageElement): Promise<ArrayBuffer> {
+  return new Promise((resolve, reject) => {
+    const width = image.naturalWidth || image.width;
+    const height = image.naturalHeight || image.height;
+    if (!width || !height) {
+      reject(new Error("Export image has no pixels."));
+      return;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      reject(new Error("Could not prepare an export image."));
+      return;
+    }
+    ctx.drawImage(image, 0, 0, width, height);
+    canvas.toBlob((blob) => {
+      canvas.width = 0;
+      canvas.height = 0;
+      if (blob) {
+        blob.arrayBuffer().then(resolve).catch(reject);
+      }
+      else reject(new Error("Could not encode an export image."));
+    }, "image/png");
+  });
+}
+
+export async function exportPngWithWorker(options: {
+  designs: PngExportDesign[];
+  outW: number;
+  outH: number;
+  exportDpi: number;
+  onProgress?: (progress: PngExportProgress) => void;
+}): Promise<{ blob: Blob; buffer: ArrayBuffer }> {
+  const worker = getExportWorker();
+  if (!worker || !canUseMemoryEfficientPngExport()) {
+    throw new Error("The memory-efficient PNG export path is unavailable in this browser.");
+  }
+
+  const designPayload: Array<{
+    widthInches: number;
+    heightInches: number;
+    nx: number;
+    ny: number;
+    s: number;
+    rotation: number;
+    flipX?: boolean;
+    flipY?: boolean;
+    imageBuffer: ArrayBuffer;
+    alphaThresholded?: boolean;
+    printFileName?: boolean;
+    name?: string;
+  }> = [];
+  for (const design of options.designs) {
+    const imageBuffer = await imageToExportBuffer(design.image);
+    designPayload.push({
+      widthInches: design.widthInches,
+      heightInches: design.heightInches,
+      nx: design.nx,
+      ny: design.ny,
+      s: design.s,
+      rotation: design.rotation,
+      flipX: design.flipX,
+      flipY: design.flipY,
+      imageBuffer,
+      alphaThresholded: design.alphaThresholded,
+      printFileName: design.printFileName,
+      name: design.name,
+    });
+  }
+
+  const requestId = nextExportRequestId();
+  const result = await new Promise<{ buffer: ArrayBuffer; byteLength: number }>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      worker.removeEventListener("message", onMessage);
+      worker.removeEventListener("error", onError);
+      window.clearTimeout(timer);
+    };
+    const onMessage = (event: MessageEvent) => {
+      if (event.data?.requestId !== requestId) return;
+      if (event.data.type === "progress") {
+        options.onProgress?.({
+          phase: event.data.phase,
+          completed: Number(event.data.completed) || 0,
+          total: Math.max(1, Number(event.data.total) || 1),
+        });
+        return;
+      }
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (event.data.type === "error") {
+        reject(new Error(event.data.error || "Export failed"));
+      } else if (event.data.buffer) {
+        const buffer = event.data.buffer as ArrayBuffer;
+        resolve({
+          buffer,
+          byteLength: Number(event.data.byteLength) > 0 ? Number(event.data.byteLength) : buffer.byteLength,
+        });
+      } else {
+        reject(new Error("Export returned no image data"));
+      }
+    };
+    const onError = (event: ErrorEvent) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error(event.message || "Export worker crashed"));
+    };
+    const timer = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error("Export timed out — the gangsheet may be too large. Try a smaller size."));
+    }, 300_000);
+    worker.addEventListener("message", onMessage);
+    worker.addEventListener("error", onError);
+    try {
+      const transferables = designPayload.map((design) => design.imageBuffer);
+      worker.postMessage(
+        {
+          type: "export",
+          requestId,
+          designs: designPayload,
+          outW: options.outW,
+          outH: options.outH,
+          exportDpi: options.exportDpi,
+        },
+        transferables,
+      );
+    } catch (error) {
+      settled = true;
+      cleanup();
+      reject(error instanceof Error ? error : new Error("Could not start export."));
+    }
+  });
+
+  return {
+    buffer: result.buffer,
+    blob: new Blob([result.buffer], { type: "image/png" }),
+  };
+}
+
 let _arrangeWorker: Worker | null = null;
 export function getArrangeWorker(): Worker | null {
   if (!_arrangeWorker) {

@@ -7,7 +7,8 @@ interface DesignExportData {
   rotation: number;
   flipX?: boolean;
   flipY?: boolean;
-  bitmap: ImageBitmap;
+  imageBuffer: ArrayBuffer;
+  mimeType?: string;
   alphaThresholded?: boolean;
   printFileName?: boolean;
   name?: string;
@@ -22,8 +23,10 @@ interface ExportInput {
   exportDpi: number;
 }
 
-interface PrerenderedDesign {
-  bitmap: ImageBitmap;
+interface DesignExportBounds {
+  design: DesignExportData;
+  drawW: number;
+  drawH: number;
   left: number;
   top: number;
   right: number;
@@ -100,77 +103,57 @@ function designAabb(d: DesignExportData, outW: number, outH: number, exportDpi: 
   };
 }
 
-async function prerenderDesigns(
-  designs: DesignExportData[],
-  outW: number,
-  outH: number,
-  exportDpi: number,
-): Promise<PrerenderedDesign[]> {
-  return Promise.all(designs.map(async (d) => {
-    const bounds = designAabb(d, outW, outH, exportDpi);
-    const canvas = new OffscreenCanvas(bounds.aabbW, bounds.aabbH);
-    const ctx = canvas.getContext('2d', { alpha: true, willReadFrequently: false });
-    if (!ctx) throw new Error('Failed to get prerender canvas context');
-    ctx.clearRect(0, 0, bounds.aabbW, bounds.aabbH);
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    if (d.alphaThresholded) ctx.imageSmoothingEnabled = false;
-    ctx.save();
-    ctx.translate(bounds.aabbW / 2, bounds.aabbH / 2);
-    ctx.rotate((d.rotation * Math.PI) / 180);
-    ctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
-    ctx.drawImage(d.bitmap, -bounds.drawW / 2, -bounds.drawH / 2, bounds.drawW, bounds.drawH);
-    if (d.printFileName && d.name) {
-      ctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
-      const marginPx = 0.1 * exportDpi;
-      const fontSize = Math.max(8, Math.round(bounds.drawH * 0.045));
-      ctx.font = `bold ${fontSize}px sans-serif`;
-      const displayName = d.name.replace(/\.[^/.]+$/, '');
-      ctx.fillStyle = '#000000';
-      ctx.textAlign = 'right';
-      ctx.textBaseline = 'top';
-      ctx.fillText(displayName, bounds.drawW / 2, bounds.drawH / 2 + marginPx);
-      ctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
-    }
-    ctx.restore();
-    if (d.alphaThresholded) {
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
-    }
-    const bitmap = canvas.transferToImageBitmap();
-    canvas.width = 0;
-    canvas.height = 0;
-    try { d.bitmap.close(); } catch {}
-    return {
-      bitmap,
-      left: bounds.left,
-      top: bounds.top,
-      right: bounds.right,
-      bottom: bounds.bottom,
-      width: bounds.aabbW,
-      height: bounds.aabbH,
-    };
-  }));
-}
-
-function stripHasContent(prerendered: PrerenderedDesign[], stripY: number, stripH: number): boolean {
+function stripHasContent(designs: DesignExportBounds[], stripY: number, stripH: number): boolean {
   const stripBottom = stripY + stripH;
-  for (const p of prerendered) {
+  for (const p of designs) {
     if (p.bottom >= stripY && p.top <= stripBottom) return true;
   }
   return false;
 }
 
-function drawPrerenderedOnStrip(
+async function drawDesignsOnStrip(
   ctx: OffscreenCanvasRenderingContext2D,
-  prerendered: PrerenderedDesign[],
+  designs: DesignExportBounds[],
   stripY: number,
   stripH: number,
+  exportDpi: number,
 ) {
   const stripBottom = stripY + stripH;
-  for (const p of prerendered) {
+  if (typeof createImageBitmap !== 'function') {
+    throw new Error('This browser cannot decode images inside the export worker.');
+  }
+  for (const p of designs) {
     if (p.bottom < stripY || p.top > stripBottom) continue;
-    ctx.drawImage(p.bitmap, Math.round(p.left), Math.round(p.top - stripY));
+    const d = p.design;
+    const bitmap = await createImageBitmap(
+      new Blob([d.imageBuffer], { type: d.mimeType || "image/png" }),
+    );
+    try {
+      ctx.imageSmoothingEnabled = !d.alphaThresholded;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.save();
+      ctx.translate(
+        Math.round(p.left + p.width / 2),
+        Math.round(p.top - stripY + p.height / 2),
+      );
+      ctx.rotate((d.rotation * Math.PI) / 180);
+      ctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
+      ctx.drawImage(bitmap, -p.drawW / 2, -p.drawH / 2, p.drawW, p.drawH);
+      if (d.printFileName && d.name) {
+        ctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
+        const marginPx = 0.1 * exportDpi;
+        const fontSize = Math.max(8, Math.round(p.drawH * 0.045));
+        ctx.font = `bold ${fontSize}px sans-serif`;
+        const displayName = d.name.replace(/\.[^/.]+$/, '');
+        ctx.fillStyle = '#000000';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'top';
+        ctx.fillText(displayName, p.drawW / 2, p.drawH / 2 + marginPx);
+      }
+      ctx.restore();
+    } finally {
+      try { bitmap.close(); } catch {}
+    }
   }
 }
 
@@ -273,7 +256,24 @@ async function writeStripRows(
 async function buildPngStreaming(input: ExportInput): Promise<Uint8Array> {
   const { designs, outW, outH, exportDpi } = input;
   const ppm = Math.round(exportDpi / 0.0254);
-  const prerendered = await prerenderDesigns(designs, outW, outH, exportDpi);
+  const designBounds = designs.map((design) => ({
+    design,
+    ...(() => {
+      const bounds = designAabb(design, outW, outH, exportDpi);
+      return {
+        ...bounds,
+        width: bounds.aabbW,
+        height: bounds.aabbH,
+      };
+    })(),
+  }));
+  self.postMessage({
+    type: 'progress',
+    requestId: input.requestId,
+    phase: 'preparing',
+    completed: 1,
+    total: 1,
+  });
 
   const signature = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 
@@ -324,13 +324,23 @@ async function buildPngStreaming(input: ExportInput): Promise<Uint8Array> {
 
   let stripCanvas: OffscreenCanvas | null = null;
   let stripCtx: OffscreenCanvasRenderingContext2D | null = null;
+  const totalStrips = Math.max(1, Math.ceil(outH / STRIP_HEIGHT));
+  let completedStrips = 0;
 
   for (let stripY = 0; stripY < outH; stripY += STRIP_HEIGHT) {
     const stripH = Math.min(STRIP_HEIGHT, outH - stripY);
 
-    if (!stripHasContent(prerendered, stripY, stripH)) {
+    if (!stripHasContent(designBounds, stripY, stripH)) {
       await writeEmptyRows(writer, outW, stripH, emptyRow, filteredRowLen);
       prevRow.fill(0); // the rows just written are fully transparent (zero)
+      completedStrips++;
+      self.postMessage({
+        type: 'progress',
+        requestId: input.requestId,
+        phase: 'rendering',
+        completed: completedStrips,
+        total: totalStrips,
+      });
       continue;
     }
 
@@ -341,16 +351,32 @@ async function buildPngStreaming(input: ExportInput): Promise<Uint8Array> {
     }
     const ctx = stripCtx!;
     ctx.clearRect(0, 0, outW, stripH);
-    drawPrerenderedOnStrip(ctx, prerendered, stripY, stripH);
+    await drawDesignsOnStrip(ctx, designBounds, stripY, stripH, exportDpi);
 
     const imageData = ctx.getImageData(0, 0, outW, stripH);
     await writeStripRows(writer, imageData.data, stripH, filteredRowLen, rowBytes, bpp, prevRow, scratch);
+    completedStrips++;
+    self.postMessage({
+      type: 'progress',
+      requestId: input.requestId,
+      phase: 'rendering',
+      completed: completedStrips,
+      total: totalStrips,
+    });
   }
 
   if (stripCanvas) {
     stripCanvas.width = 0;
     stripCanvas.height = 0;
   }
+
+  self.postMessage({
+    type: 'progress',
+    requestId: input.requestId,
+    phase: 'finalizing',
+    completed: 0,
+    total: 1,
+  });
 
   await writer.close();
   await readPromise;
@@ -370,10 +396,6 @@ async function buildPngStreaming(input: ExportInput): Promise<Uint8Array> {
   }
 
   const iendChunk = makePngChunk('IEND', new Uint8Array(0));
-
-  for (const p of prerendered) {
-    try { p.bitmap.close(); } catch {}
-  }
 
   const parts = [signature, ihdrChunk, physChunk, ...idatChunks, iendChunk];
   const totalLen = parts.reduce((sum, part) => sum + part.length, 0);
@@ -398,6 +420,12 @@ async function runExportLegacy(input: ExportInput): Promise<Uint8Array> {
   ctx.imageSmoothingQuality = 'high';
 
   for (const design of designs) {
+    if (typeof createImageBitmap !== 'function') {
+      throw new Error('This browser cannot decode images inside the export worker.');
+    }
+    const bitmap = await createImageBitmap(
+      new Blob([design.imageBuffer], { type: design.mimeType || "image/png" }),
+    );
     const { drawW, drawH } = designDrawSize(design, exportDpi);
     const centerX = design.nx * outW;
     const centerY = design.ny * outH;
@@ -407,7 +435,7 @@ async function runExportLegacy(input: ExportInput): Promise<Uint8Array> {
     ctx.translate(centerX, centerY);
     ctx.rotate((design.rotation * Math.PI) / 180);
     ctx.scale(design.flipX ? -1 : 1, design.flipY ? -1 : 1);
-    ctx.drawImage(design.bitmap, -drawW / 2, -drawH / 2, drawW, drawH);
+    ctx.drawImage(bitmap, -drawW / 2, -drawH / 2, drawW, drawH);
     if (design.printFileName && design.name) {
       ctx.scale(design.flipX ? -1 : 1, design.flipY ? -1 : 1);
       const marginPx = 0.1 * exportDpi;
@@ -421,6 +449,7 @@ async function runExportLegacy(input: ExportInput): Promise<Uint8Array> {
       ctx.scale(design.flipX ? -1 : 1, design.flipY ? -1 : 1);
     }
     ctx.restore();
+    try { bitmap.close(); } catch {}
     if (design.alphaThresholded) {
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
@@ -456,10 +485,13 @@ async function runExportLegacy(input: ExportInput): Promise<Uint8Array> {
 
   canvas.width = 0;
   canvas.height = 0;
-  for (const d of designs) {
-    try { d.bitmap.close(); } catch {}
-  }
-
+  self.postMessage({
+    type: 'progress',
+    requestId: input.requestId,
+    phase: 'finalizing',
+    completed: 0,
+    total: 1,
+  });
   const totalLen = parts.reduce((sum, part) => sum + part.length, 0);
   const out = new Uint8Array(totalLen);
   let writePos = 0;
@@ -558,7 +590,6 @@ self.onmessage = async function(e: MessageEvent) {
         [buffer],
       );
     } catch (err: any) {
-      if (designs) for (const d of designs) { try { d.bitmap.close(); } catch {} }
       self.postMessage({ type: 'error', requestId: e.data.requestId, error: err?.message || 'Export failed' });
     }
   }

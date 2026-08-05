@@ -84,6 +84,7 @@ export type EditorActionToolbarProps = {
   isEditMode?: boolean;
   isAddingToCart?: boolean;
   isProcessing?: boolean;
+  exportProgressLabel?: string;
   handleIncreaseQuality: (scaleFactor: number) => Promise<void>;
   isUpscaling: boolean;
 };
@@ -144,6 +145,7 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
     isEditMode,
     isAddingToCart,
     isProcessing,
+    exportProgressLabel,
     handleIncreaseQuality,
     isUpscaling,
   } = props;
@@ -157,9 +159,9 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
   const cartButtonLabel = !canAddToCart
     ? t("controls.addToCart")
     : isAddingToCart
-      ? t("controls.addingToCart")
+       ? (exportProgressLabel || t("controls.addingToCart"))
       : isProcessing
-        ? t("editor.processing")
+        ? (exportProgressLabel || t("editor.processing"))
         : t("controls.addToCart");
   const cartButtonTitle = !canAddToCart ? t("controls.uploadFirst") : cartButtonLabel;
   const [showSizeHint, setShowSizeHint] = useState(false);

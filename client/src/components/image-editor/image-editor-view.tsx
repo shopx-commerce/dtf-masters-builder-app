@@ -32,7 +32,7 @@ const HalftoneIcon = ({ className }: { className?: string }) => (
 
 export default function ImageEditorView() {
   const {
-    t, lang, profile, embedFromShopify, isMobile, isLgUp, isUploading, uploadProgress, isProcessing,
+    t, lang, profile, embedFromShopify, isMobile, isLgUp, isUploading, uploadProgress, isProcessing, exportProgressLabel,
     isAddingToCart, isEditMode, isUpdateFlow, isDragOver, artboardWidth, artboardHeight,
     quantity, designGap, duplicateCount, designs, setDesigns, selectedDesignId, setSelectedDesignId,
     selectedDesignIds, setSelectedDesignIds, mobilePanel,
@@ -239,6 +239,7 @@ export default function ImageEditorView() {
             onResizeChange={handleResizeChange}
             onDownload={handleDownload}
             isProcessing={isProcessing}
+            exportProgressLabel={exportProgressLabel}
             imageInfo={activeImageInfo}
             artboardWidth={artboardWidth}
             artboardHeight={artboardHeight}

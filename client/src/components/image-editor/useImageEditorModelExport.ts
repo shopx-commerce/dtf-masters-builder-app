@@ -1,10 +1,10 @@
 import { useCallback } from "react";
 import { EXPORT_DPI, EXPORT_TIMEOUT_MS } from "./constants";
 import {
-  getExportWorker,
+  canUseMemoryEfficientPngExport,
+  exportPngWithWorker,
+  getExportMemoryWarning,
   injectPngDpi,
-  nextExportRequestId,
-  exportWorkerResultToBlob,
 } from "./utils";
 import type { ImageEditorBagAfterUploadCrop } from "./image-editor-hook-bag.types";
 import { thresholdImageInfo } from "./useImageEditorModelHalftone";
@@ -21,6 +21,7 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
     toast,
     t,
     setIsProcessing,
+    setExportProgressLabel,
     ensureDesignImagesAvailable,
   } = bag;
 
@@ -156,8 +157,14 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
       } else {
         const filename = `${firstName}.png`;
 
-        const worker = getExportWorker();
-        const useWorker = worker && typeof OffscreenCanvas !== 'undefined';
+        const useWorker = canUseMemoryEfficientPngExport();
+        const memoryWarning = getExportMemoryWarning();
+        if (memoryWarning) {
+          toast({
+            title: t("toast.exportMemoryWarning"),
+            description: memoryWarning,
+          });
+        }
 
         let exportDpi: number;
         if (useWorker) {
@@ -172,6 +179,12 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
             toast({
               title: t("toast.largeSheet"),
               description: t("toast.largeSheetDesc", { dpi: Math.floor(exportDpi) }),
+            });
+          }
+          if (!canUseMemoryEfficientPngExport()) {
+            toast({
+              title: t("toast.exportCompatibilityWarning"),
+              description: t("toast.exportCompatibilityWarningDesc"),
             });
           }
         }
@@ -202,63 +215,36 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
         );
 
         if (useWorker) {
-          const bitmaps = await Promise.all(
-            exportSrc.map(d => createImageBitmap(d.imageInfo.image))
-          );
-          const exportDesigns = exportSrc.map((d, i) => ({
-            widthInches: d.widthInches,
-            heightInches: d.heightInches,
-            nx: d.transform.nx,
-            ny: d.transform.ny,
-            s: d.transform.s,
-            rotation: d.transform.rotation,
-            flipX: d.transform.flipX,
-            flipY: d.transform.flipY,
-            bitmap: bitmaps[i],
-            alphaThresholded: d.alphaThresholded,
-            printFileName: d.printFileName,
-            name: d.name,
-          }));
-          const requestId = nextExportRequestId();
-          pngBlob = await new Promise<Blob>((resolve, reject) => {
-            let settled = false;
-            const cleanup = () => {
-              worker.removeEventListener('message', handler);
-              worker.removeEventListener('error', errorHandler);
-              clearTimeout(timer);
-            };
-            const handler = (e: MessageEvent) => {
-              if (e.data.requestId !== requestId) return;
-              settled = true;
-              cleanup();
-              if (e.data.type === 'error') reject(new Error(e.data.error));
-              else {
-                try {
-                  resolve(exportWorkerResultToBlob(e.data));
-                } catch (err) {
-                  reject(err instanceof Error ? err : new Error('Export failed'));
-                }
+          const result = await exportPngWithWorker({
+            designs: exportSrc.map(d => ({
+              widthInches: d.widthInches,
+              heightInches: d.heightInches,
+              nx: d.transform.nx,
+              ny: d.transform.ny,
+              s: d.transform.s,
+              rotation: d.transform.rotation,
+              flipX: d.transform.flipX,
+              flipY: d.transform.flipY,
+              image: d.imageInfo.image,
+              alphaThresholded: d.alphaThresholded,
+              printFileName: d.printFileName,
+              name: d.name,
+            })),
+            outW,
+            outH,
+            exportDpi,
+            onProgress: ({ phase, completed, total }) => {
+              if (phase === "preparing") {
+                setExportProgressLabel(t("editor.exportPreparing"));
+              } else if (phase === "rendering") {
+                setExportProgressLabel(t("editor.exportRendering", { completed, total }));
+              } else {
+                setExportProgressLabel(t("editor.exportFinalizing"));
               }
-            };
-            const errorHandler = (ev: ErrorEvent) => {
-              if (settled) return;
-              settled = true;
-              cleanup();
-              reject(new Error(ev.message || 'Export worker crashed'));
-            };
-            const timer = setTimeout(() => {
-              if (settled) return;
-              settled = true;
-              cleanup();
-              reject(new Error('Export timed out — the gangsheet may be too large. Try a smaller size.'));
-            }, EXPORT_TIMEOUT_MS);
-            worker.addEventListener('message', handler);
-            worker.addEventListener('error', errorHandler);
-            worker.postMessage(
-              { type: 'export', requestId, designs: exportDesigns, outW, outH, exportDpi },
-              bitmaps,
-            );
+            },
           });
+          setExportProgressLabel(t("editor.exportFinalizing"));
+          pngBlob = result.blob;
         } else {
           const exportCanvas = document.createElement('canvas');
           exportCanvas.width = outW;
@@ -316,9 +302,10 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
       console.error("Download failed:", error);
       toast({ title: t("toast.downloadFailed"), description: error instanceof Error ? error.message : t("toast.downloadFailedDesc"), variant: "destructive" });
     } finally {
+      setExportProgressLabel(undefined);
       setIsProcessing(false);
     }
-  }, [imageInfo, designs, artboardWidth, artboardHeight, toast, ensureDesignImagesAvailable]);
+  }, [imageInfo, designs, artboardWidth, artboardHeight, toast, t, setExportProgressLabel, ensureDesignImagesAvailable, setIsProcessing]);
 
   const fileToDataUrl = useCallback((file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
