@@ -20,6 +20,7 @@ import {
 } from "./utils";
 import { getContourWorkerManager } from "@/lib/contour-worker-manager";
 import { revokeThumbnailCacheEntry } from "@/lib/thumbnail-cache";
+import { saveUploadToLibrary } from "@/lib/uploads-library";
 import type { ImageInfo, ResizeSettings } from "@/lib/types";
 import type { ImageEditorBagAfterArrange } from "./image-editor-hook-bag.types";
 import { useUiActions, getUiSnapshot } from "@/state/ui-store";
@@ -379,6 +380,9 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
   const handleFileUploadUnified = useCallback(async (file: File, image: HTMLImageElement | null) => {
     const ext = file.name.toLowerCase();
     const isPdf = file.type === 'application/pdf' || ext.endsWith('.pdf');
+    // Persist supported uploads into the sidebar Uploads library
+    // (best-effort, fire-and-forget — never blocks or fails the upload).
+    if (isPdf || isSVGFile(file) || image) void saveUploadToLibrary(file);
     if (isPdf) {
       try {
         setIsUploading(true);
@@ -477,6 +481,8 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
       toast({ title: t("toast.epsUnsupported"), description: t("toast.epsUnsupportedDesc"), variant: "destructive" });
       return Promise.resolve();
     }
+    // Persist into the sidebar Uploads library (best-effort).
+    void saveUploadToLibrary(file);
     if (isSvg) {
       return (async () => {
         try {
@@ -934,6 +940,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
     handleBatchStart,
     handleFileUploadUnified,
     handleSidebarFileChange,
+    processSidebarFile,
     isDragOver,
     handleDragEnter,
     handleDragLeave,

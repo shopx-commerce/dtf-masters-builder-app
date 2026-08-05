@@ -6,6 +6,8 @@ import CropModal from "../crop-modal";
 import SizeInput from "./size-input";
 import EditorActionToolbar from "./editor-action-toolbar";
 import { LayerRow, type LayerRowHandlers } from "./layer-row";
+import { UploadsPanel } from "./uploads-panel";
+import { useToast } from "@/hooks/use-toast";
 import { formatDimensions, formatLength, useMetric, getUnitSuffix } from "@/lib/format-length";
 import {
   ArrowDownLeft, ArrowDownRight, ArrowUpLeft, ArrowUpRight, Copy, ChevronDown, ChevronUp,
@@ -58,7 +60,7 @@ export default function ImageEditorView() {
     fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer,
     copySpotSelectionsRef, GANGSHEET_HEIGHTS, MAX_ARTBOARD_HEIGHT, recommendedArtboardHeight,
     initialVariantId, shopifyVariants,
-    handleFileUploadUnified, handleBatchStart, handleSidebarFileChange, handleDragEnter,
+    handleFileUploadUnified, handleBatchStart, handleSidebarFileChange, processSidebarFile, handleDragEnter,
     handleDragLeave, handleDragOver, handleDrop, handleSelectDesign, handleMultiSelect,
     handleGroupSelected, handleUngroupSelected, selectedHasGroup,
     handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta,
@@ -76,6 +78,13 @@ export default function ImageEditorView() {
     setArtboardHeight, setQuantity, draftRecoveryAvailable, isRecoveringDraft,
     recoverEditorDraft, discardEditorDraft,
   } = useImageEditorContext();
+  const { toast } = useToast();
+  const handleAddFromUploads = useCallback(async (file: File) => {
+    await processSidebarFile(file);
+  }, [processSidebarFile]);
+  const handleUploadUnavailable = useCallback(() => {
+    toast({ title: t("editor.uploadsUnavailable"), variant: "destructive" });
+  }, [toast, t]);
   // UI-mode state comes from the Zustand `ui-store` — see
   // `state/ui-store.ts`. These toggles used to sit in the model bag and
   // any change (right-click, mobile-panel flip, spot-channel hover, etc.)
@@ -540,6 +549,13 @@ export default function ImageEditorView() {
               )}
             </div>
           )}
+
+          {/* Uploads library panel — previously uploaded files, re-addable */}
+          <UploadsPanel
+            t={t}
+            onAddFile={handleAddFromUploads}
+            onUnavailable={handleUploadUnavailable}
+          />
         </div>
       </div>
 
