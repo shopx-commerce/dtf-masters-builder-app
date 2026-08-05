@@ -121,7 +121,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const scrollDragRef = useRef<{ axis: 'x' | 'y'; startMouse: number; startScroll: number; maxScroll: number; scrollable: number } | null>(null);
     const nativeScrollRef = useRef<HTMLDivElement>(null);
     const syncingScrollRef = useRef(false);
-    zoomRef.current = zoom;
+    // A queued-but-uncommitted zoom (rAF-throttled wheel/pinch) must not be
+    // clobbered by a re-render triggered by something else (e.g. a pan
+    // commit) that still carries the previous zoom state value.
+    const pendingZoomCommitRef = useRef<number | null>(null);
+    if (pendingZoomCommitRef.current == null) zoomRef.current = zoom;
     const [selectionZoomActiveInternal, setSelectionZoomActiveInternal] = useState(false);
     const selectionZoomActive = selectionZoomActiveProp !== undefined ? selectionZoomActiveProp : selectionZoomActiveInternal;
     const setSelectionZoomActive = useCallback((valOrFn: boolean | ((prev: boolean) => boolean)) => {
@@ -331,6 +335,40 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         setPanX(next.x);
         setPanY(next.y);
       });
+    }, []);
+
+    // Zoom commits are rAF-throttled just like pan: wheel and pinch events can
+    // fire far faster than the display refresh rate, and each setZoom triggers
+    // a full React re-render of this (large) component. zoomRef is updated
+    // synchronously so all handlers see the latest value immediately.
+    const zoomCommitRafRef = useRef<number | null>(null);
+    const queueZoomCommit = useCallback((z: number) => {
+      zoomRef.current = z;
+      pendingZoomCommitRef.current = z;
+      if (zoomCommitRafRef.current != null) return;
+      zoomCommitRafRef.current = requestAnimationFrame(() => {
+        zoomCommitRafRef.current = null;
+        const next = pendingZoomCommitRef.current;
+        if (next == null) return;
+        pendingZoomCommitRef.current = null;
+        setZoom(next);
+      });
+    }, []);
+    // Immediate zoom commit for one-shot actions (fit, reset, focus, toolbar
+    // +/-): cancels any queued wheel/pinch commit so a stale rAF value can't
+    // overwrite the requested zoom, syncs zoomRef, and sets state directly.
+    const commitZoomNow = useCallback((z: number) => {
+      if (zoomCommitRafRef.current != null) {
+        cancelAnimationFrame(zoomCommitRafRef.current);
+        zoomCommitRafRef.current = null;
+      }
+      pendingZoomCommitRef.current = null;
+      zoomRef.current = z;
+      setZoom(z);
+    }, []);
+    useEffect(() => () => {
+      if (zoomCommitRafRef.current != null) cancelAnimationFrame(zoomCommitRafRef.current);
+      pendingZoomCommitRef.current = null;
     }, []);
 
     const AUTOPAN_EDGE = 60;
@@ -1961,7 +1999,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         const newPanY = dims.height / 2 - selCenterCSS_Y;
         const clamped = clampPanValue(newPanX, newPanY, newZoom);
         suppressTransitionRef.current = true;
-        setZoom(newZoom);
+        commitZoomNow(newZoom);
         queuePanStateCommit(clamped.x, clamped.y);
         requestAnimationFrame(() => { suppressTransitionRef.current = false; });
         area.style.cursor = (newZoom * previewDimsRef.current.width > area.clientWidth * 1.05 && !moveModeRef.current) ? 'grab' : 'default';
@@ -2077,7 +2115,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         const anchoredPanX = pinchStartPanRef.current.x + anchor.x * (1 / newZoom - 1 / startZoom);
         const anchoredPanY = pinchStartPanRef.current.y + anchor.y * (1 / newZoom - 1 / startZoom);
         const clamped = clampPanValue(anchoredPanX, anchoredPanY, newZoom);
-        setZoom(newZoom);
+        queueZoomCommit(newZoom);
         queuePanStateCommit(clamped.x, clamped.y);
         return;
       }
@@ -2139,7 +2177,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const shouldInitialFit = !hasInitialViewportFitRef.current;
       hasInitialViewportFitRef.current = true;
       if (forceReset || shouldInitialFit) {
-        setZoom(z);
+        commitZoomNow(z);
         queuePanStateCommit(0, 0);
       } else {
         // Selecting a design can change the surrounding controls and cause
@@ -2197,7 +2235,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const rawPx = -designCenterX;
       const rawPy = -designCenterY;
       const clamped = clampPanValue(rawPx, rawPy, newZoom);
-      setZoom(newZoom);
+      commitZoomNow(newZoom);
       queuePanStateCommit(clamped.x, clamped.y);
       setMoveMode(true);
     }, [selectedDesignId, designs, artboardWidth, artboardHeight, clampPanValue]);
@@ -2428,7 +2466,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           const clamped = clampPanValue(rawPanX, rawPanY, newZoom);
           const dims = previewDimsRef.current;
 
-          setZoom(newZoom);
+          queueZoomCommit(newZoom);
           queuePanStateCommit(clamped.x, clamped.y);
           if (!selectionZoomActiveRef.current && !isPanningRef.current) {
             el.style.cursor = (newZoom * dims.width > el.clientWidth * 1.05 && !moveModeRef.current) ? 'grab' : 'default';
@@ -2503,7 +2541,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const shouldInitialViewportFit = !hasInitialViewportFitRef.current;
       hasInitialViewportFitRef.current = true;
       if (shouldInitialViewportFit) {
-        setZoom(z);
+        commitZoomNow(z);
         queuePanStateCommit(0, 0);
       } else {
         // Selecting a design can resize the surrounding controls by a few
@@ -2511,7 +2549,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         // Preserve zoom and only clamp it/pan if the new viewport is smaller.
         const preservedZoom = Math.max(z, Math.min(zoomMaxRef.current, zoomRef.current));
         const clamped = clampPanValue(panXRef.current, panYRef.current, preservedZoom);
-        setZoom(preservedZoom);
+        commitZoomNow(preservedZoom);
         queuePanStateCommit(clamped.x, clamped.y);
       }
       const clearSuppress = () => {
@@ -2846,6 +2884,18 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     useEffect(() => {
       if (!canvasRef.current) return;
 
+      // The per-design portion of the static-composite signature only depends
+      // on values that are dependencies of this effect (designs,
+      // selectedDesignId, overlappingDesigns). Compute it once per effect run
+      // instead of re-hashing every design on every drag/render frame — with
+      // many designs the per-frame string build was itself a hot-path cost.
+      let staticSignatureBody = '';
+      for (const d of designs) {
+        if (d.id === selectedDesignId) continue;
+        const t = d.transform;
+        staticSignatureBody += `${d.id}:${d.imageInfo.image.src ?? d.imageInfo.image.width}:${t.nx.toFixed(4)},${t.ny.toFixed(4)},${t.s.toFixed(4)},${t.rotation.toFixed(2)},${t.flipX?1:0},${t.flipY?1:0}:${d.widthInches.toFixed(4)}x${d.heightInches.toFixed(4)}:${d.printFileName?1:0}:${d.alphaThresholded?1:0}:${overlappingDesigns.has(d.id)?1:0};`;
+      }
+
       const doRender = () => {
       try {
       const canvas = canvasRef.current;
@@ -2889,12 +2939,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       // below because its transform mutates via `transformRef` on every
       // drag frame). If unchanged, we blit the cached bitmap in a single
       // drawImage call.
-      let signature = `${canvasWidth}x${canvasHeight}|${previewBgColor}|${artboardWidth}x${artboardHeight}|sel:${selectedDesignId ?? '-'}|`;
-      for (const d of designs) {
-        if (d.id === selectedDesignId) continue;
-        const t = d.transform;
-        signature += `${d.id}:${d.imageInfo.image.src ?? d.imageInfo.image.width}:${t.nx.toFixed(4)},${t.ny.toFixed(4)},${t.s.toFixed(4)},${t.rotation.toFixed(2)},${t.flipX?1:0},${t.flipY?1:0}:${d.widthInches.toFixed(4)}x${d.heightInches.toFixed(4)}:${d.printFileName?1:0}:${d.alphaThresholded?1:0}:${overlappingDesigns.has(d.id)?1:0};`;
-      }
+      const signature = `${canvasWidth}x${canvasHeight}|${previewBgColor}|${artboardWidth}x${artboardHeight}|sel:${selectedDesignId ?? '-'}|${staticSignatureBody}`;
 
       const cached = staticCompositeRef.current;
       if (cached && cached.signature === signature) {
@@ -3685,7 +3730,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                       if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
                       const newZ = Math.max(zoom / ZOOM_BUTTON_FACTOR, minZoomRef.current);
                       const clamped = clampPanValue(panX, panY, newZ);
-                      setZoom(newZ);
+                      commitZoomNow(newZ);
                       queuePanStateCommit(clamped.x, clamped.y);
                       if (canvasAreaRef.current) {
                         const el = canvasAreaRef.current;
@@ -3707,7 +3752,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                       if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
                       const newZ = Math.min(zoom * ZOOM_BUTTON_FACTOR, zoomMax);
                       const clamped = clampPanValue(panX, panY, newZ);
-                      setZoom(newZ);
+                      commitZoomNow(newZ);
                       queuePanStateCommit(clamped.x, clamped.y);
                       if (canvasAreaRef.current) {
                         const el = canvasAreaRef.current;
@@ -3843,7 +3888,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                     if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
                     const newZ = Math.max(zoom / ZOOM_BUTTON_FACTOR, minZoomRef.current);
                     const clamped = clampPanValue(panX, panY, newZ);
-                    setZoom(newZ);
+                    commitZoomNow(newZ);
                     queuePanStateCommit(clamped.x, clamped.y);
                     if (canvasAreaRef.current) {
                       const el = canvasAreaRef.current;
@@ -3857,7 +3902,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                     if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
                     const newZ = Math.min(zoom * ZOOM_BUTTON_FACTOR, zoomMax);
                     const clamped = clampPanValue(panX, panY, newZ);
-                    setZoom(newZ);
+                    commitZoomNow(newZ);
                     queuePanStateCommit(clamped.x, clamped.y);
                     if (canvasAreaRef.current) {
                       const el = canvasAreaRef.current;
