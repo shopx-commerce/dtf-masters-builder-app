@@ -2836,8 +2836,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     // final draw downscales at most 2x) and draw from that instead. Export
     // and cart rendering never touch this path, so production files keep
     // full source quality.
-    const mipmapCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
-    const MIPMAP_MAX_ENTRIES = 48;
+    const mipmapCacheRef = useRef<Map<string, { canvas: HTMLCanvasElement; image: HTMLImageElement; pixels: number }>>(new Map());
+    const mipmapTotalPixelsRef = useRef(0);
+    // Aggregate budget: ~16 MP of RGBA backing store (~64 MB) across all mips
+    // so the cache can never balloon on mobile; LRU-evicted beyond that.
+    const MIPMAP_MAX_TOTAL_PIXELS = 16_000_000;
     const getPreviewDrawSource = useCallback((image: HTMLImageElement, targetW: number, targetH: number): CanvasImageSource => {
       const sw = image.naturalWidth || image.width;
       const sh = image.naturalHeight || image.height;
@@ -2849,15 +2852,23 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const key = `${image.src}|${bucket}`;
       const cache = mipmapCacheRef.current;
       const hit = cache.get(key);
-      if (hit) {
+      // A hit is only valid if it was built from this exact image element —
+      // if the design's image was replaced (even under the same URL), the
+      // identity check forces a rebuild so we never serve stale pixels.
+      if (hit && hit.image === image) {
         // LRU bump
         cache.delete(key);
         cache.set(key, hit);
-        return hit;
+        return hit.canvas;
+      }
+      if (hit) {
+        cache.delete(key);
+        mipmapTotalPixelsRef.current -= hit.pixels;
       }
       const mw = Math.max(1, Math.round(sw * bucket));
       const mh = Math.max(1, Math.round(sh * bucket));
-      if (mw * mh > 4_000_000) return image;
+      const pixels = mw * mh;
+      if (pixels > 4_000_000) return image;
       const c = document.createElement('canvas');
       c.width = mw;
       c.height = mh;
@@ -2866,11 +2877,14 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       cx.imageSmoothingEnabled = true;
       cx.imageSmoothingQuality = 'high';
       cx.drawImage(image, 0, 0, mw, mh);
-      cache.set(key, c);
-      while (cache.size > MIPMAP_MAX_ENTRIES) {
-        const oldest = cache.keys().next().value;
-        if (oldest == null) break;
-        cache.delete(oldest);
+      cache.set(key, { canvas: c, image, pixels });
+      mipmapTotalPixelsRef.current += pixels;
+      while (mipmapTotalPixelsRef.current > MIPMAP_MAX_TOTAL_PIXELS && cache.size > 1) {
+        const oldestKey = cache.keys().next().value;
+        if (oldestKey == null) break;
+        const oldest = cache.get(oldestKey);
+        cache.delete(oldestKey);
+        if (oldest) mipmapTotalPixelsRef.current -= oldest.pixels;
       }
       return c;
     }, []);
