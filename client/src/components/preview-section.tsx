@@ -3049,31 +3049,37 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
       const cached = staticCompositeRef.current;
       if (cached && cached.signature === signature) {
-        ctx.drawImage(cached.canvas, 0, 0);
+        // The cached composite may have been built at reduced resolution
+        // (mid-drag) — always blit stretched to the full canvas.
+        ctx.drawImage(cached.canvas, 0, 0, canvasWidth, canvasHeight);
       } else {
         // Rebuild the composite off-screen so the on-screen canvas never
         // shows a half-drawn state (avoids the flicker that would result
         // from clearing then drawing 30+ images on the visible ctx).
         //
-        // The composite is always rendered at 'high' quality regardless of
-        // the current interaction state — once cached, we blit it 1:1 back
-        // to the main canvas where the smoothing setting is a no-op. The
-        // adaptive 'low'/'high' quality is only applied to the *selected*
-        // design's draw pass (below), which is the only element that
-        // repaints per drag frame.
+        // While a drag is active the composite is built at half resolution:
+        // the rebuild only happens at drag start (mv flips in the signature),
+        // and on very full sheets a full-res rebuild there is the visible
+        // hitch when picking a design up. The half-res version is blitted
+        // upscaled for the drag's duration; releasing the pointer flips mv
+        // back, invalidating the signature and triggering one full-quality
+        // rebuild. Preview-only — exports untouched.
+        const buildScale = isMoving ? 0.5 : 1;
+        const compW = Math.max(1, Math.round(canvasWidth * buildScale));
+        const compH = Math.max(1, Math.round(canvasHeight * buildScale));
         const composite = cached?.canvas ?? document.createElement('canvas');
-        if (composite.width !== canvasWidth) composite.width = canvasWidth;
-        if (composite.height !== canvasHeight) composite.height = canvasHeight;
+        if (composite.width !== compW) composite.width = compW;
+        if (composite.height !== compH) composite.height = compH;
         const cctx = composite.getContext('2d');
         if (!cctx) {
           drawStaticSceneInto(ctx, canvasWidth, canvasHeight);
         } else {
-          cctx.clearRect(0, 0, canvasWidth, canvasHeight);
+          cctx.clearRect(0, 0, compW, compH);
           cctx.imageSmoothingEnabled = true;
           cctx.imageSmoothingQuality = 'high';
-          drawStaticSceneInto(cctx, canvasWidth, canvasHeight);
+          drawStaticSceneInto(cctx, compW, compH);
           staticCompositeRef.current = { canvas: composite, signature };
-          ctx.drawImage(composite, 0, 0);
+          ctx.drawImage(composite, 0, 0, canvasWidth, canvasHeight);
         }
       }
 
