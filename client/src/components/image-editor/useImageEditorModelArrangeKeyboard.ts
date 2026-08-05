@@ -322,7 +322,33 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       if (hasOverflow && artboardHeightRef.current < MAX_ARTBOARD_HEIGHT) {
         const nextHeight = GANGSHEET_HEIGHTS.find(h => h > artboardHeightRef.current) ?? MAX_ARTBOARD_HEIGHT;
         handleArtboardResizeRef.current(artboardWidthRef.current, nextHeight);
-        setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true }), 0);
+        // Forward the caller's `arrangeAll` flag on the expansion recursion.
+        //
+        // Without this, the caller's `arrangeAll: true` (set by
+        // `handleSetGroupCount` when copies are added via the layer "+N"
+        // control, and by `handleEffectiveSizeChange` when a resize
+        // grows the sheet) is silently dropped on the recursive call.
+        // Because `selectedDesignIds.size >= 2` after +N copies —
+        // `handleSetGroupCount` puts every row member into the
+        // selection — the recursive `handleAutoArrange` re-enters in
+        // `arrangeSelection` mode: it treats the *non*-selected
+        // designs as fixed obstacles and only re-packs the selected
+        // copies around them. Those obstacles were placed on the old
+        // (smaller) sheet, so on the newly-expanded sheet they leave
+        // weird gaps that the selected copies rarely fit into — hasOverflow
+        // stays true, the sheet grows to the next height, the same
+        // logic recurses, and the sheet walks all the way up
+        // `GANGSHEET_HEIGHTS` to `MAX_ARTBOARD_HEIGHT`, exactly what
+        // users report as "adding one copy exploded the gangsheet to
+        // 340""." Forwarding `arrangeAll` keeps the re-pack in
+        // whole-sheet mode when the caller asked for it, so the
+        // expansion loop converges as soon as everything fits (or hits
+        // MAX with a real, non-phantom overflow).
+        setTimeout(() => handleAutoArrangeRef.current({
+          skipSnapshot: true,
+          preserveSelection: true,
+          arrangeAll: opts?.arrangeAll,
+        }), 0);
         return;
       }
       if (hasOverflow) {
