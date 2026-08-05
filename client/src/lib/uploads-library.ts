@@ -21,7 +21,10 @@
  */
 
 const DATABASE_NAME = "sticker-editor-uploads";
-const DATABASE_VERSION = 1;
+// v2: split single "uploads" store into meta/blobs. Browsers that opened an
+// intermediate build may hold a v1 database without the new stores, which
+// made every transaction throw. The upgrade handler drops the legacy store.
+const DATABASE_VERSION = 2;
 const META_STORE = "meta";
 const BLOB_STORE = "blobs";
 const MAX_LIBRARY_ENTRIES = 30;
@@ -82,6 +85,9 @@ function openDatabase(): Promise<IDBDatabase> {
     };
     request.onupgradeneeded = () => {
       const db = request.result;
+      if (db.objectStoreNames.contains("uploads")) {
+        db.deleteObjectStore("uploads");
+      }
       if (!db.objectStoreNames.contains(META_STORE)) {
         db.createObjectStore(META_STORE, { keyPath: "key" });
       }
