@@ -1,9 +1,19 @@
 /**
  * Persistent "Uploads" library — independent of the crash-recovery draft
- * storage. Every file the user uploads is saved here (keyed by its content
- * signature) so the sidebar Uploads panel can offer previously uploaded
- * files for re-adding, even after designs are deleted or a new sheet is
- * started. Capped at MAX_LIBRARY_ENTRIES; oldest entries are evicted.
+ * storage. Every file the user uploads is saved here so the sidebar Uploads
+ * panel can offer previously uploaded files for re-adding, even after
+ * designs are deleted or a new sheet is started.
+ *
+ * Storage layout: two stores sharing the same key —
+ *   - `meta`:  small records (name, dims, thumbnail data URL) used for
+ *              listing/pruning without ever touching the original blobs.
+ *   - `blobs`: the original file blob, read only on "Add Here".
+ * Save + cap-eviction run inside one readwrite transaction over both stores,
+ * so concurrent saves cannot prune against a stale snapshot.
+ *
+ * Entries are keyed by a file signature (name:size:lastModified:type) —
+ * re-uploading the *same file object* refreshes its slot; identical pixels
+ * under a different filename intentionally get their own entry.
  *
  * This is preview/library-only storage: adding a file back to the canvas
  * routes through the exact same upload pipeline as a fresh upload, so
@@ -12,27 +22,29 @@
 
 const DATABASE_NAME = "sticker-editor-uploads";
 const DATABASE_VERSION = 1;
-const UPLOAD_STORE = "uploads";
+const META_STORE = "meta";
+const BLOB_STORE = "blobs";
 const MAX_LIBRARY_ENTRIES = 30;
 const THUMBNAIL_MAX_EDGE = 128;
 
 export const UPLOADS_LIBRARY_CHANGED_EVENT = "dtf:uploads-library-changed";
 
-export interface UploadLibraryRecord {
+export interface UploadLibraryEntry {
   key: string;
-  blob: Blob;
   name: string;
   type: string;
   lastModified: number;
   addedAt: number;
-  /** Small JPEG/PNG data URL for the panel; absent when rasterization failed (e.g. PDFs). */
+  /** Small PNG data URL for the panel; absent when rasterization failed (e.g. PDFs). */
   thumbnail?: string;
   width?: number;
   height?: number;
 }
 
-/** Listing entry without the (potentially large) original blob. */
-export type UploadLibraryEntry = Omit<UploadLibraryRecord, "blob">;
+interface UploadBlobRecord {
+  key: string;
+  blob: Blob;
+}
 
 function canUseIndexedDb(): boolean {
   return typeof window !== "undefined" && typeof window.indexedDB !== "undefined";
@@ -70,8 +82,11 @@ function openDatabase(): Promise<IDBDatabase> {
     };
     request.onupgradeneeded = () => {
       const db = request.result;
-      if (!db.objectStoreNames.contains(UPLOAD_STORE)) {
-        db.createObjectStore(UPLOAD_STORE, { keyPath: "key" });
+      if (!db.objectStoreNames.contains(META_STORE)) {
+        db.createObjectStore(META_STORE, { keyPath: "key" });
+      }
+      if (!db.objectStoreNames.contains(BLOB_STORE)) {
+        db.createObjectStore(BLOB_STORE, { keyPath: "key" });
       }
     };
   });
@@ -132,17 +147,20 @@ async function makeThumbnail(file: File): Promise<{ dataUrl: string; width: numb
 }
 
 /**
- * Save an uploaded file into the library (fire-and-forget safe). Re-uploading
- * the same file refreshes its `addedAt` so it moves to the front instead of
- * duplicating. Evicts the oldest entries beyond MAX_LIBRARY_ENTRIES.
+ * Save an uploaded file into the library (fire-and-forget safe).
+ * Re-uploading the same file refreshes its `addedAt` so it moves to the
+ * front instead of duplicating. The put and the cap-eviction happen in a
+ * single readwrite transaction over both stores: `getAll` on the meta store
+ * inside the transaction sees the just-written record, so concurrent saves
+ * each prune against their own consistent snapshot and the freshly saved
+ * entry (newest `addedAt`) is never the eviction victim.
  */
 export async function saveUploadToLibrary(file: File): Promise<void> {
   try {
     const key = fileSignature(file);
     const thumb = await makeThumbnail(file);
-    const record: UploadLibraryRecord = {
+    const meta: UploadLibraryEntry = {
       key,
-      blob: file,
       name: file.name,
       type: file.type || "application/octet-stream",
       lastModified: file.lastModified,
@@ -151,14 +169,31 @@ export async function saveUploadToLibrary(file: File): Promise<void> {
       width: thumb?.width,
       height: thumb?.height,
     };
+    const blobRecord: UploadBlobRecord = { key, blob: file };
     const db = await openDatabase();
     await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(UPLOAD_STORE, "readwrite");
+      const tx = db.transaction([META_STORE, BLOB_STORE], "readwrite");
       tx.onerror = () => reject(tx.error ?? new Error("Could not save upload"));
       tx.oncomplete = () => resolve();
-      tx.objectStore(UPLOAD_STORE).put(record);
+      const metaStore = tx.objectStore(META_STORE);
+      const blobStore = tx.objectStore(BLOB_STORE);
+      metaStore.put(meta);
+      blobStore.put(blobRecord);
+      // Evict oldest entries beyond the cap, atomically with the put.
+      const listRequest = metaStore.getAll() as IDBRequest<UploadLibraryEntry[]>;
+      listRequest.onsuccess = () => {
+        const all = listRequest.result;
+        if (all.length <= MAX_LIBRARY_ENTRIES) return;
+        const excess = all
+          .sort((a, b) => a.addedAt - b.addedAt)
+          .slice(0, all.length - MAX_LIBRARY_ENTRIES);
+        for (const record of excess) {
+          if (record.key === key) continue; // never evict the entry just saved
+          metaStore.delete(record.key);
+          blobStore.delete(record.key);
+        }
+      };
     });
-    await pruneLibrary(db);
     notifyChanged();
   } catch (error) {
     // Library persistence is best-effort; never let it break an upload.
@@ -166,33 +201,14 @@ export async function saveUploadToLibrary(file: File): Promise<void> {
   }
 }
 
-async function pruneLibrary(db: IDBDatabase): Promise<void> {
-  const all = await requestResult<UploadLibraryRecord[]>(
-    db.transaction(UPLOAD_STORE, "readonly").objectStore(UPLOAD_STORE).getAll(),
-  );
-  if (all.length <= MAX_LIBRARY_ENTRIES) return;
-  const excess = all
-    .sort((a, b) => a.addedAt - b.addedAt)
-    .slice(0, all.length - MAX_LIBRARY_ENTRIES);
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(UPLOAD_STORE, "readwrite");
-    tx.onerror = () => reject(tx.error ?? new Error("Could not prune uploads"));
-    tx.oncomplete = () => resolve();
-    const store = tx.objectStore(UPLOAD_STORE);
-    for (const record of excess) store.delete(record.key);
-  });
-}
-
-/** Newest-first metadata listing (no blobs) for the panel. */
+/** Newest-first listing. Reads only the small meta store — no blobs. */
 export async function listLibraryUploads(): Promise<UploadLibraryEntry[]> {
   try {
     const db = await openDatabase();
-    const all = await requestResult<UploadLibraryRecord[]>(
-      db.transaction(UPLOAD_STORE, "readonly").objectStore(UPLOAD_STORE).getAll(),
+    const all = await requestResult<UploadLibraryEntry[]>(
+      db.transaction(META_STORE, "readonly").objectStore(META_STORE).getAll(),
     );
-    return all
-      .sort((a, b) => b.addedAt - a.addedAt)
-      .map(({ blob: _blob, ...entry }) => entry);
+    return all.sort((a, b) => b.addedAt - a.addedAt);
   } catch (error) {
     console.warn("[uploads-library] list failed", error);
     return [];
@@ -203,13 +219,15 @@ export async function listLibraryUploads(): Promise<UploadLibraryEntry[]> {
 export async function getLibraryUploadFile(key: string): Promise<File | null> {
   try {
     const db = await openDatabase();
-    const record = await requestResult<UploadLibraryRecord | undefined>(
-      db.transaction(UPLOAD_STORE, "readonly").objectStore(UPLOAD_STORE).get(key),
-    );
-    if (!record || !record.blob || record.blob.size === 0) return null;
-    return new File([record.blob], record.name, {
-      type: record.type,
-      lastModified: record.lastModified,
+    const tx = db.transaction([META_STORE, BLOB_STORE], "readonly");
+    const [meta, blobRecord] = await Promise.all([
+      requestResult<UploadLibraryEntry | undefined>(tx.objectStore(META_STORE).get(key)),
+      requestResult<UploadBlobRecord | undefined>(tx.objectStore(BLOB_STORE).get(key)),
+    ]);
+    if (!meta || !blobRecord?.blob || blobRecord.blob.size === 0) return null;
+    return new File([blobRecord.blob], meta.name, {
+      type: meta.type,
+      lastModified: meta.lastModified,
     });
   } catch (error) {
     console.warn("[uploads-library] read failed", error);
@@ -221,10 +239,11 @@ export async function removeLibraryUpload(key: string): Promise<void> {
   try {
     const db = await openDatabase();
     await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(UPLOAD_STORE, "readwrite");
+      const tx = db.transaction([META_STORE, BLOB_STORE], "readwrite");
       tx.onerror = () => reject(tx.error ?? new Error("Could not remove upload"));
       tx.oncomplete = () => resolve();
-      tx.objectStore(UPLOAD_STORE).delete(key);
+      tx.objectStore(META_STORE).delete(key);
+      tx.objectStore(BLOB_STORE).delete(key);
     });
     notifyChanged();
   } catch (error) {

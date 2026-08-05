@@ -303,11 +303,21 @@ export default function ImageEditorView() {
               </div>
             </div>
           ) : (
-            <UploadSection 
-              onImageUpload={handleFileUploadUnified}
-              onBatchStart={handleBatchStart}
-              imageInfo={null}
-            />
+            <>
+              <UploadSection 
+                onImageUpload={handleFileUploadUnified}
+                onBatchStart={handleBatchStart}
+                imageInfo={null}
+              />
+              {/* Uploads library — re-add previously uploaded files to a fresh sheet */}
+              <div className="mt-4 w-full max-w-xl mx-auto">
+                <UploadsPanel
+                  t={t}
+                  onAddFile={handleAddFromUploads}
+                  onUnavailable={handleUploadUnavailable}
+                />
+              </div>
+            </>
           )}
         </div>
       </div>
