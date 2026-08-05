@@ -40,7 +40,7 @@ export const en: Record<string, string> = {
   "editor.addDesigns": "Add Designs",
   "editor.closeBuilder": "Close builder",
   "editor.addDesignTitle": "Add another image",
-  "editor.uploads": "Uploads",
+  "editor.uploads": "Old Uploads",
   "editor.uploadsAddHere": "Add Here",
   "editor.uploadsEmpty": "Previously uploaded files will appear here.",
   "editor.uploadsRemove": "Remove from uploads",

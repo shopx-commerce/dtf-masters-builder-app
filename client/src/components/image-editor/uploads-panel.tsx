@@ -54,29 +54,33 @@ export function UploadsPanel({ t, onAddFile, onUnavailable }: UploadsPanelProps)
   if (entries.length === 0) return null;
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden" data-testid="uploads-panel">
-      <button
-        onClick={() => setExpanded(prev => !prev)}
-        className="flex w-full items-center gap-3 px-3 py-2.5 min-w-0 text-left"
-        data-testid="uploads-panel-toggle"
-      >
-        <Upload className="h-6 w-6 flex-shrink-0 text-cyan-500" strokeWidth={2.25} />
-        <span className="flex-1 truncate text-base font-semibold text-gray-800">{t("editor.uploads")}</span>
-        <span className="flex-shrink-0 rounded-full bg-cyan-100 px-2.5 py-1 text-sm font-bold tabular-nums text-cyan-700">{entries.length}</span>
-      </button>
-      {expanded && (
+    // Deliberately styled differently from the Layers panel (gray, dashed
+    // border, compact rows) with a divider above, so clients don't mistake
+    // old uploads for active layers on the sheet.
+    <div className="mt-3 border-t-2 border-gray-300 pt-3" data-testid="uploads-panel-wrapper">
+      <div className="bg-gray-50 rounded-lg border border-dashed border-gray-300 overflow-hidden" data-testid="uploads-panel">
+        <button
+          onClick={() => setExpanded(prev => !prev)}
+          className="flex w-full items-center gap-2 px-3 py-1.5 min-w-0 text-left"
+          data-testid="uploads-panel-toggle"
+        >
+          <Upload className="h-4 w-4 flex-shrink-0 text-gray-400" strokeWidth={2.25} />
+          <span className="flex-1 truncate text-sm font-semibold text-gray-500">{t("editor.uploads")}</span>
+          <span className="flex-shrink-0 rounded-full bg-gray-200 px-2 py-0.5 text-xs font-bold tabular-nums text-gray-600">{entries.length}</span>
+        </button>
+        {expanded && (
         <div
-          className="layers-scroll border-t border-gray-200 max-h-[280px] overflow-y-auto"
+          className="layers-scroll border-t border-dashed border-gray-300 max-h-[200px] overflow-y-auto"
           style={{ scrollbarWidth: "thin", scrollbarColor: "#9ca3af transparent" }}
         >
           {entries.map(entry => (
             <div
               key={entry.key}
-              className="group flex items-center gap-3 border-b border-gray-100 px-3 py-2 last:border-b-0"
+              className="group flex items-center gap-2 border-b border-gray-200 px-3 py-1.5 last:border-b-0"
               data-testid={`uploads-entry-${entry.key}`}
             >
               <div
-                className="h-12 w-12 flex-shrink-0 overflow-hidden rounded border border-gray-200"
+                className="h-8 w-8 flex-shrink-0 overflow-hidden rounded border border-gray-200"
                 style={{
                   backgroundImage:
                     "linear-gradient(45deg,#e5e7eb 25%,transparent 25%,transparent 75%,#e5e7eb 75%),linear-gradient(45deg,#e5e7eb 25%,transparent 25%,transparent 75%,#e5e7eb 75%)",
@@ -94,20 +98,20 @@ export function UploadsPanel({ t, onAddFile, onUnavailable }: UploadsPanelProps)
                   />
                 ) : (
                   <div className="flex h-full w-full items-center justify-center bg-white">
-                    <FileText className="h-6 w-6 text-gray-400" />
+                    <FileText className="h-4 w-4 text-gray-400" />
                   </div>
                 )}
               </div>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium text-gray-800" title={entry.name}>{entry.name}</div>
+                <div className="truncate text-xs font-medium text-gray-700" title={entry.name}>{entry.name}</div>
                 {entry.width && entry.height ? (
-                  <div className="text-xs text-gray-500 tabular-nums">{entry.width}×{entry.height}px</div>
+                  <div className="text-[10px] text-gray-400 tabular-nums">{entry.width}×{entry.height}px</div>
                 ) : null}
               </div>
               <button
                 onClick={() => void handleAdd(entry)}
                 disabled={addingKey !== null}
-                className="flex flex-shrink-0 items-center gap-1 rounded-md border border-cyan-500 bg-white px-2.5 py-1.5 text-xs font-bold text-cyan-600 transition-colors hover:bg-cyan-50 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
+                className="flex flex-shrink-0 items-center gap-1 rounded-md border border-cyan-500 bg-white px-2 py-1 text-xs font-bold text-cyan-600 transition-colors hover:bg-cyan-50 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
                 data-testid={`uploads-add-${entry.key}`}
               >
                 {addingKey === entry.key
@@ -126,7 +130,8 @@ export function UploadsPanel({ t, onAddFile, onUnavailable }: UploadsPanelProps)
             </div>
           ))}
         </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

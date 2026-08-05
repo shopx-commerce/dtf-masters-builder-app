@@ -2889,6 +2889,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       // selectedDesignId, overlappingDesigns). Compute it once per effect run
       // instead of re-hashing every design on every drag/render frame — with
       // many designs the per-frame string build was itself a hot-path cost.
+      const multiSelectionKey = Array.from(selectedDesignIds).sort().join(',');
       let staticSignatureBody = '';
       for (const d of designs) {
         if (d.id === selectedDesignId) continue;
@@ -2928,8 +2929,9 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       // difference between 'low' and 'high' is imperceptible at 60 fps, so
       // drop to 'low' while interacting and restore 'high' on the next
       // idle frame (mouseUp triggers a fresh render pass).
-      const isInteracting = isDraggingRef.current || isResizingRef.current || isRotatingRef.current
-        || isMultiDragRef.current || isMultiResizeRef.current || isMultiRotateRef.current
+      const isMoving = isDraggingRef.current || isMultiDragRef.current;
+      const isInteracting = isMoving || isResizingRef.current || isRotatingRef.current
+        || isMultiResizeRef.current || isMultiRotateRef.current
         || isPanningRef.current;
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = isInteracting ? 'low' : 'high';
@@ -2939,7 +2941,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       // below because its transform mutates via `transformRef` on every
       // drag frame). If unchanged, we blit the cached bitmap in a single
       // drawImage call.
-      const signature = `${canvasWidth}x${canvasHeight}|${previewBgColor}|${artboardWidth}x${artboardHeight}|sel:${selectedDesignId ?? '-'}|${staticSignatureBody}`;
+      // `mv` + multi-selection key participate in the signature because the
+      // ghost-alpha treatment below changes how multi-selected designs are
+      // drawn into the composite; drag start/stop must invalidate it.
+      const signature = `${canvasWidth}x${canvasHeight}|${previewBgColor}|${artboardWidth}x${artboardHeight}|sel:${selectedDesignId ?? '-'}|mv:${isMoving ? 1 : 0}|msel:${multiSelectionKey}|${staticSignatureBody}`;
 
       const cached = staticCompositeRef.current;
       if (cached && cached.signature === signature) {
@@ -2984,7 +2989,13 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         }
         for (const design of designs) {
           if (design.id === selectedDesignId) continue;
+          // Ghost effect: while dragging, multi-selected companions render
+          // semi-transparent so the user can see where they're landing.
+          // Preview-only — exports are untouched.
+          const ghost = isMoving && selectedDesignIds.has(design.id);
+          if (ghost) dctx.globalAlpha = 0.77;
           drawSingleDesign(dctx, design, cw, ch);
+          if (ghost) dctx.globalAlpha = 1;
           if (overlappingDesigns.has(design.id)) {
             const rect = computeLayerRect(
               design.imageInfo.image.width, design.imageInfo.image.height,
@@ -3022,7 +3033,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
       if (!imageInfo || !selectedDesignId) return;
 
+      // Ghost the primary dragged design so the underlying sheet shows
+      // through; full opacity returns the moment the pointer is released.
+      if (isMoving) ctx.globalAlpha = 0.72;
       drawImageWithResizePreview(ctx, canvas.width, canvas.height);
+      if (isMoving) ctx.globalAlpha = 1;
 
       // Draw smart alignment guides
       if (snapGuidesRef.current.length > 0) {
