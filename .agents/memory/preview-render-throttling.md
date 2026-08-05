@@ -9,4 +9,6 @@ The static-composite cache signature over all non-selected designs is precompute
 
 **Why:** with many designs, per-event setZoom re-rendered the ~4k-line preview component faster than refresh rate, and per-frame signature hashing scaled with design count.
 
+Multi-drag commits `designs` per pointer move, so any moving design's transform must stay out of the composite signature: while dragging, multi-selected companions are excluded from the composite and drawn per-frame on top (ghost alpha). Baking them in forces a full composite rebuild every frame.
+
 **How to apply:** any new zoom/pan mutation site must pick queued (continuous gestures) vs immediate (one-shot) commit; any new input to the static scene draw must be added both to the signature body and the render-effect deps. Preview-only — never touch export/cart rendering.
