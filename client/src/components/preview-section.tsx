@@ -2890,9 +2890,19 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       // instead of re-hashing every design on every drag/render frame — with
       // many designs the per-frame string build was itself a hot-path cost.
       const multiSelectionKey = Array.from(selectedDesignIds).sort().join(',');
+      // While a drag is active, multi-selected companions are excluded from
+      // the static composite and drawn per-frame on top (with ghost alpha).
+      // Multi-drag commits `designs` on every pointer move, so leaving their
+      // transforms in the signature would invalidate — and fully rebuild —
+      // the composite on every frame. Excluding them keeps the composite
+      // cacheable for the whole drag (rebuilds only at drag start/stop).
+      const movingExcluded = (isDraggingRef.current || isMultiDragRef.current) && selectedDesignIds.size > 1
+        ? selectedDesignIds
+        : null;
       let staticSignatureBody = '';
       for (const d of designs) {
         if (d.id === selectedDesignId) continue;
+        if (movingExcluded?.has(d.id)) continue;
         const t = d.transform;
         staticSignatureBody += `${d.id}:${d.imageInfo.image.src ?? d.imageInfo.image.width}:${t.nx.toFixed(4)},${t.ny.toFixed(4)},${t.s.toFixed(4)},${t.rotation.toFixed(2)},${t.flipX?1:0},${t.flipY?1:0}:${d.widthInches.toFixed(4)}x${d.heightInches.toFixed(4)}:${d.printFileName?1:0}:${d.alphaThresholded?1:0}:${overlappingDesigns.has(d.id)?1:0};`;
       }
@@ -2976,6 +2986,19 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         }
       }
 
+      // Ghost effect: while dragging, multi-selected companions render
+      // per-frame on top of the cached composite, semi-transparent so the
+      // user can see where they're landing. Preview-only — exports untouched.
+      if (movingExcluded) {
+        ctx.globalAlpha = 0.77;
+        for (const design of designs) {
+          if (design.id === selectedDesignId) continue;
+          if (!movingExcluded.has(design.id)) continue;
+          drawSingleDesign(ctx, design, canvasWidth, canvasHeight);
+        }
+        ctx.globalAlpha = 1;
+      }
+
       function drawStaticSceneInto(dctx: CanvasRenderingContext2D, cw: number, ch: number) {
         if (previewBgColor === 'transparent') {
           const pattern = getCheckerboardPattern(dctx, cw, ch);
@@ -2989,13 +3012,9 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         }
         for (const design of designs) {
           if (design.id === selectedDesignId) continue;
-          // Ghost effect: while dragging, multi-selected companions render
-          // semi-transparent so the user can see where they're landing.
-          // Preview-only — exports are untouched.
-          const ghost = isMoving && selectedDesignIds.has(design.id);
-          if (ghost) dctx.globalAlpha = 0.77;
-          drawSingleDesign(dctx, design, cw, ch);
-          if (ghost) dctx.globalAlpha = 1;
+          // Moving companions are drawn per-frame on top of the composite
+          // (see below), not baked into it.
+          if (movingExcluded?.has(design.id)) continue;
           if (overlappingDesigns.has(design.id)) {
             const rect = computeLayerRect(
               design.imageInfo.image.width, design.imageInfo.image.height,
