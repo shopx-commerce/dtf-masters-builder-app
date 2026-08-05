@@ -2935,10 +2935,25 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     // them, so their clean alpha edges are preserved by the main canvas.
     // Using nearest-neighbor scaling for full-color stickers made them look
     // blocky when selected at zoom >= 3.
+    // The overlay is only lossless when the full halftone raster fits within
+    // its size caps. Large 300-DPI halftones would otherwise be nearest-
+    // neighbor DOWNSCALED into the overlay canvas, shredding the dot pattern
+    // (looks washed out / speckled while selected) — and combined with the
+    // inset(6px) clip the design also looked cropped. For oversized rasters,
+    // skip the overlay entirely: the main-canvas path renders the halftone
+    // exactly like the deselected composite does.
+    const detailSourceWidth = selectedDetailImage?.naturalWidth || selectedDetailImage?.width || 0;
+    const detailSourceHeight = selectedDetailImage?.naturalHeight || selectedDetailImage?.height || 0;
+    const detailOverlayLossless =
+      detailSourceWidth > 0 &&
+      detailSourceHeight > 0 &&
+      detailSourceWidth * detailSourceHeight <= HIGH_QUALITY_DETAIL_MAX_AREA &&
+      Math.max(detailSourceWidth, detailSourceHeight) <= HIGH_QUALITY_DETAIL_MAX_EDGE;
     const showHighQualityDetail =
       highQualityDetailZoomActive &&
       Boolean(selectedDetailDesign?.halftoned) &&
-      Boolean(selectedDetailImage?.complete && (selectedDetailImage.naturalWidth || selectedDetailImage.width));
+      Boolean(selectedDetailImage?.complete) &&
+      detailOverlayLossless;
 
     // Render only the selected binary-raster design at source resolution (within
     // a bounded area). The whole-sheet canvas remains capped and fast; this
@@ -3324,15 +3339,13 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       ctx.translate(cx, cy);
       ctx.rotate((t.rotation * Math.PI) / 180);
       ctx.scale(t.flipX ? -1 : 1, t.flipY ? -1 : 1);
-      // When the HD detail overlay canvas is active for this design, it draws
-      // the selected image on top with `imageRendering: pixelated` and a small
-      // `inset(6px)` clip that keeps the handles visible. Drawing the image on
-      // the main canvas here as well caused a visible "doubled" ghost bleeding
-      // through that 6px clip because the two canvases use different scaling
-      // filters. Skip the main draw of the image while the detail overlay is
-      // active — the overlay covers the interior, main canvas still draws the
-      // selection handles / spot overlay / filename text below.
-      if (!showHighQualityDetail) {
+      // The HD detail overlay canvas (when active) draws the selected image on
+      // top with `imageRendering: pixelated` and an `inset(6px)` clip that
+      // keeps the handles visible. The main canvas must STILL draw the image
+      // underneath — otherwise that 6px clip ring shows nothing and the
+      // selected design looks cropped. The slight filter mismatch in the ring
+      // is far less noticeable than a missing border of artwork.
+      {
         const drawSrc = selDesign?.alphaThresholded
           ? imageInfo.image
           : getPreviewDrawSource(imageInfo.image, rect.width, rect.height);
