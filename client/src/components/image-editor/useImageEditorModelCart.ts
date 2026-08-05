@@ -12,6 +12,7 @@ import type { InitialDesignState } from "./types";
 import type { SpotPreviewData } from "../controls-section";
 import { thresholdImageInfo } from "./useImageEditorModelHalftone";
 import { isRecoverableImageInfo } from "@/lib/editor-draft-storage";
+import { getUiSnapshot } from "@/state/ui-store";
 
 function postMessageToParent(message: unknown, transfer?: Transferable[]): void {
   try {
@@ -63,7 +64,6 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
     fileToDataUrl,
     addToCartInFlightRef,
     profile,
-    spotPreviewData,
     t,
     ensureDesignImagesAvailable,
   } = bag;
@@ -215,6 +215,11 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       toast({ title: "No designs", description: "Add at least one design before adding to cart.", variant: "destructive" });
       return;
     }
+    // Snapshot the spot-preview state at click time so the callback
+    // identity doesn't depend on it. `spotPreviewData` only changes when
+    // the user toggles fluorescent colors, which is far less frequent
+    // than the callback churn we save by dropping it from the deps.
+    const spotPreviewData = getUiSnapshot().spotPreviewData;
     addToCartInFlightRef.current = true;
     setIsAddingToCart(true);
     setIsUpdateFlow(isEditMode);
@@ -256,6 +261,33 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         let pngBlob: Blob;
         let exportWorkerBuffer: ArrayBuffer | null = null;
 
+        // Decode the full-resolution export source for each non-halftoned design
+        // from its retained PNG blob. This keeps the on-screen `image` small
+        // (MAX_STORED_IMAGE_DIMENSION) while producing the print-DPI raster at
+        // its original resolution. Fallback: reuse the preview image when no
+        // exportBlob is available (halftoned designs, or drafts before this
+        // change was live).
+        const decodeBlobToImage = (blob: Blob): Promise<HTMLImageElement> =>
+          new Promise((resolve, reject) => {
+            const url = URL.createObjectURL(blob);
+            const img = new Image();
+            img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+            img.onerror = (err) => { URL.revokeObjectURL(url); reject(err); };
+            img.src = url;
+          });
+        const exportImages = new Map<string, HTMLImageElement>();
+        for (const d of exportDesignsSource) {
+          // Halftoned designs: `image` IS the halftone raster, exportBlob is stale.
+          if (d.halftoned) continue;
+          const blob = d.imageInfo.exportBlob;
+          if (!blob) continue;
+          try {
+            exportImages.set(d.id, await decodeBlobToImage(blob));
+          } catch (err) {
+            console.warn("[export] full-res decode failed; using preview image", { id: d.id, err });
+          }
+        }
+
         if (useWorker) {
           const result = await exportPngWithWorker({
             designs: exportDesignsSource.map(d => ({
@@ -267,7 +299,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
               rotation: d.transform.rotation,
               flipX: d.transform.flipX,
               flipY: d.transform.flipY,
-              image: d.imageInfo.image,
+              image: exportImages.get(d.id) ?? d.imageInfo.image,
               alphaThresholded: d.alphaThresholded,
               printFileName: d.printFileName,
               name: d.name,
@@ -297,7 +329,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
           ctx.imageSmoothingEnabled = true;
           ctx.imageSmoothingQuality = 'high';
           for (const design of exportDesignsSource) {
-            const img = design.imageInfo.image;
+            const img = exportImages.get(design.id) ?? design.imageInfo.image;
             const drawW = Math.max(1, Math.round(design.widthInches * design.transform.s * exportDpi));
             const drawH = Math.max(1, Math.round(design.heightInches * design.transform.s * exportDpi));
             const centerX = design.transform.nx * outW;
@@ -344,7 +376,29 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         const exportDesignsSource = currentDesigns.map(d =>
           cleaned.has(d.id) ? { ...d, imageInfo: cleaned.get(d.id)! } : d,
         );
+        // Same rationale as the PNG path: decode HD source from exportBlob
+        // just-in-time so preview downsampling doesn't limit print DPI.
+        const decodeBlobToImage = (blob: Blob): Promise<HTMLImageElement> =>
+          new Promise((resolve, reject) => {
+            const url = URL.createObjectURL(blob);
+            const img = new Image();
+            img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+            img.onerror = (err) => { URL.revokeObjectURL(url); reject(err); };
+            img.src = url;
+          });
+        const pdfExportImages = new Map<string, HTMLImageElement>();
+        for (const d of exportDesignsSource) {
+          if (d.halftoned) continue;
+          const blob = d.imageInfo.exportBlob;
+          if (!blob) continue;
+          try {
+            pdfExportImages.set(d.id, await decodeBlobToImage(blob));
+          } catch (err) {
+            console.warn("[pdf-export] full-res decode failed; using preview image", { id: d.id, err });
+          }
+        }
         for (const design of exportDesignsSource) {
+          const hdImg = pdfExportImages.get(design.id) ?? design.imageInfo.image;
           const drawW = Math.max(1, Math.round(design.widthInches * design.transform.s * exportDpi));
           const drawH = Math.max(1, Math.round(design.heightInches * design.transform.s * exportDpi));
           const canvas = document.createElement("canvas");
@@ -357,7 +411,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
           ctx.save();
           ctx.translate(design.transform.flipX ? drawW : 0, design.transform.flipY ? drawH : 0);
           ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
-          ctx.drawImage(design.imageInfo.image, 0, 0, drawW, drawH);
+          ctx.drawImage(hdImg, 0, 0, drawW, drawH);
           ctx.restore();
 
           const dataUrl = canvas.toDataURL("image/png");
@@ -403,7 +457,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
             await addSpotColorVectorsToPDF(
               pdfDoc,
               page,
-              design.imageInfo.image,
+              hdImg,
               colors.map((color) => ({
                 hex: color.hex,
                 rgb: color.rgb,
@@ -643,7 +697,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         addToCartStallTimeoutRef.current = null;
       }
     }
-  }, [artboardWidth, artboardHeight, quantity, shopifyVariants, initialVariantId, shopDomain, toast, t, refreshAddToCartStallTimeout, buildDesignStatePayload, isEditMode, initialDesignState, setIsAddingToCart, setIsUpdateFlow, setIsProcessing, setExportProgressLabel, setAddToCartProgressLabel, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, profile, spotPreviewData, ensureDesignImagesAvailable]);
+  }, [artboardWidth, artboardHeight, quantity, shopifyVariants, initialVariantId, shopDomain, toast, t, refreshAddToCartStallTimeout, buildDesignStatePayload, isEditMode, initialDesignState, setIsAddingToCart, setIsUpdateFlow, setIsProcessing, setExportProgressLabel, setAddToCartProgressLabel, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, profile, ensureDesignImagesAvailable]);
 
   return {
     ...bag,

@@ -35,8 +35,13 @@ export const RASTER_DPI_FALLBACK = 300;
 export const EXPORT_DPI = 300;
 /** Warn when effective layer DPI falls below export DPI minus this margin. */
 export const LOW_RES_EFFECTIVE_DPI_THRESHOLD = EXPORT_DPI - 22;
-/** Max pixel width/height when storing uploaded raster assets client-side. */
-export const MAX_STORED_IMAGE_DIMENSION = 4000;
+/** Max pixel width/height for the *preview* copy of an uploaded raster kept
+ *  in RAM. Export re-decodes from `imageInfo.exportBlob` so lowering this
+ *  does not sacrifice print quality; it only bounds the interactive editing
+ *  buffer. Previously 4000 → ~64 MB decoded per design. 2000 → ~16 MB decoded
+ *  per design. This is above the detail-canvas cap (4 MP / 4096 edge) so HD
+ *  zoom of the selected design is unchanged. */
+export const MAX_STORED_IMAGE_DIMENSION = 2000;
 /** Layer thumbnail size in the layers panel (px). */
 export const LAYER_THUMBNAIL_SIZE = 48;
 export const ADD_TO_CART_LABEL_MAX_LEN = 34;

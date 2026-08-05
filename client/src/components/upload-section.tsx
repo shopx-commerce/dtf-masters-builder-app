@@ -3,10 +3,12 @@ import { Upload } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/lib/i18n";
 import { useMetric } from "@/lib/format-length";
+import { runWithConcurrency, resolveUploadConcurrency } from "@/lib/upload-queue";
+import { checkPixelBudget, formatMegapixels, MAX_UPLOAD_MEGAPIXELS } from "@/lib/image-budget";
 import type { ImageInfo, ResizeSettings } from "./image-editor";
 
-const ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'application/pdf'];
-const ACCEPTED_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.pdf'];
+const ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'application/pdf', 'image/svg+xml', 'application/postscript', 'application/eps', 'application/x-eps'];
+const ACCEPTED_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.pdf', '.svg', '.eps'];
 const GRADIENT_COLORS = [
   { bg: 'rgb(34, 197, 94)', glow: 'rgba(34, 197, 94, 0.5)' },
   { bg: 'rgb(234, 179, 8)', glow: 'rgba(234, 179, 8, 0.5)' },
@@ -15,11 +17,15 @@ const GRADIENT_COLORS = [
 ];
 
 interface UploadSectionProps {
-  onImageUpload: (file: File, image: HTMLImageElement | null) => void;
+  /** Returns a promise so the outer concurrency queue can wait for each
+   *  file's processing to complete before starting the next. Callers may
+   *  return `void` for legacy behaviour; the queue will treat that as
+   *  "done immediately". */
+  onImageUpload: (file: File, image: HTMLImageElement | null) => void | Promise<void>;
   onBatchStart?: (fileCount: number) => void;
   imageInfo?: ImageInfo | null;
   resizeSettings?: ResizeSettings | null;
-  /** Shopify embed: always use compact toolbar button, never the full “Make a Gangsheet” hero */
+  /** Shopify embed: always use compact toolbar button, never the full "Make a Gangsheet" hero */
   embedCompact?: boolean;
 }
 
@@ -32,79 +38,133 @@ export default function UploadSection({ onImageUpload, onBatchStart, imageInfo, 
   const handleFileUpload = useCallback(async (file: File) => {
     const ext = file.name.toLowerCase();
     const isPdf = file.type === 'application/pdf' || ext.endsWith('.pdf');
+    const isSvg = file.type === 'image/svg+xml' || ext.endsWith('.svg');
+    const isEps = ext.endsWith('.eps') || file.type === 'application/postscript' || file.type === 'application/eps' || file.type === 'application/x-eps';
     const isImage = ACCEPTED_TYPES.includes(file.type) || ACCEPTED_EXTENSIONS.some(e => ext.endsWith(e));
 
-    if (!isImage && !isPdf) {
+    if (!isImage && !isPdf && !isSvg && !isEps) {
       toast({ title: t("toast.unsupportedFormat"), description: t("toast.unsupportedFormatDesc"), variant: "destructive" });
       return;
     }
 
-    if (isPdf) {
-      onImageUpload(file, null as unknown as HTMLImageElement);
+    if (isPdf || isSvg || isEps) {
+      // Vector formats bypass the per-file rasterisation done here.
+      // `handleFileUploadUnified` in the model owns the pdf.js /
+      // sanitised-SVG / EPS-reject pipeline. Awaited so the batch queue
+      // does not release this slot until the vector parse finishes —
+      // otherwise 20 dropped PDFs would spin up 20 pdf.js workers in
+      // parallel, blowing past the tab memory limit.
+      await onImageUpload(file, null as unknown as HTMLImageElement);
       return;
     }
 
-    const img = new Image();
-    const originalUrl = URL.createObjectURL(file);
-    img.onload = () => {
-      URL.revokeObjectURL(originalUrl);
+    // Decode the raster metadata up front so we can enforce a megapixel
+    // budget *before* creating full-resolution canvases. iOS Safari caps
+    // a single canvas at 4096 × 4096 — above that `drawImage` silently
+    // no-ops and the user sees a black upload. A 200 MP scan can also
+    // crash the tab outright on any mobile browser.
+    await new Promise<void>((resolve) => {
+      const img = new Image();
+      img.decoding = "async";
+      const originalUrl = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(originalUrl);
 
-      const c = document.createElement('canvas');
-      c.width = Math.min(img.width, 512);
-      c.height = Math.min(img.height, 512);
-      const ctx = c.getContext('2d', { willReadFrequently: true });
-      if (ctx) {
-        ctx.drawImage(img, 0, 0, c.width, c.height);
-        const { data } = ctx.getImageData(0, 0, c.width, c.height);
-        let hasTransparency = false;
-        for (let i = 3; i < data.length; i += 16) {
-          if (data[i] < 250) { hasTransparency = true; break; }
-        }
-        if (!hasTransparency) {
+        const budget = checkPixelBudget(img.naturalWidth || img.width, img.naturalHeight || img.height);
+        if (!budget.ok) {
           toast({
-            title: t("toast.solidBg"),
-            description: t("toast.solidBgDesc"),
-            variant: "warning",
+            title: t("toast.imageTooLarge"),
+            description: t("toast.imageTooLargeDesc", {
+              size: formatMegapixels(budget.megapixels),
+              max: `${MAX_UPLOAD_MEGAPIXELS} MP`,
+            }),
+            variant: "destructive",
           });
+          resolve();
+          return;
         }
-      }
 
-      const isPng = file.type === 'image/png' || ext.endsWith('.png');
-      if (!isPng) {
-        const cvs = document.createElement('canvas');
-        cvs.width = img.width;
-        cvs.height = img.height;
-        const cctx = cvs.getContext('2d');
-        if (!cctx) { onImageUpload(file, img); return; }
-        cctx.drawImage(img, 0, 0);
-        cvs.toBlob((blob) => {
-          if (!blob) { onImageUpload(file, img); return; }
-          const pngFile = new File([blob], file.name.replace(/\.\w+$/, '.png'), { type: 'image/png' });
-          const pngImg = new Image();
-          const u = URL.createObjectURL(blob);
-          pngImg.onload = () => { URL.revokeObjectURL(u); onImageUpload(pngFile, pngImg); };
-          pngImg.onerror = () => { URL.revokeObjectURL(u); onImageUpload(file, img); };
-          pngImg.src = u;
-        }, 'image/png');
-      } else {
-        onImageUpload(file, img);
-      }
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(originalUrl);
-      toast({ title: t("toast.failedLoad"), description: t("toast.failedLoadDesc"), variant: "destructive" });
-    };
-    img.src = originalUrl;
+        // Cheap transparency probe on a 512 px thumbnail. Bounded so this
+        // never allocates more than ~1 MB even when the source is huge.
+        const c = document.createElement('canvas');
+        c.width = Math.min(img.width, 512);
+        c.height = Math.min(img.height, 512);
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, c.width, c.height);
+          const { data } = ctx.getImageData(0, 0, c.width, c.height);
+          let hasTransparency = false;
+          for (let i = 3; i < data.length; i += 16) {
+            if (data[i] < 250) { hasTransparency = true; break; }
+          }
+          if (!hasTransparency) {
+            toast({
+              title: t("toast.solidBg"),
+              description: t("toast.solidBgDesc"),
+              variant: "warning",
+            });
+          }
+        }
+        // Explicit zero-size to free the thumbnail canvas before the
+        // (potentially much larger) full-res conversion below.
+        c.width = 0; c.height = 0;
+
+        const isPng = file.type === 'image/png' || ext.endsWith('.png');
+        if (!isPng) {
+          const cvs = document.createElement('canvas');
+          cvs.width = img.width;
+          cvs.height = img.height;
+          const cctx = cvs.getContext('2d');
+          if (!cctx) { void Promise.resolve(onImageUpload(file, img)).finally(resolve); return; }
+          cctx.drawImage(img, 0, 0);
+          cvs.toBlob((blob) => {
+            cvs.width = 0; cvs.height = 0;
+            if (!blob) { void Promise.resolve(onImageUpload(file, img)).finally(resolve); return; }
+            const pngFile = new File([blob], file.name.replace(/\.\w+$/, '.png'), { type: 'image/png' });
+            const pngImg = new Image();
+            pngImg.decoding = "async";
+            const u = URL.createObjectURL(blob);
+            pngImg.onload = () => {
+              URL.revokeObjectURL(u);
+              void Promise.resolve(onImageUpload(pngFile, pngImg)).finally(resolve);
+            };
+            pngImg.onerror = () => {
+              URL.revokeObjectURL(u);
+              void Promise.resolve(onImageUpload(file, img)).finally(resolve);
+            };
+            pngImg.src = u;
+          }, 'image/png');
+        } else {
+          void Promise.resolve(onImageUpload(file, img)).finally(resolve);
+        }
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(originalUrl);
+        toast({ title: t("toast.failedLoad"), description: t("toast.failedLoadDesc"), variant: "destructive" });
+        resolve();
+      };
+      img.src = originalUrl;
+    });
   }, [onImageUpload, toast, t]);
+
+  const processBatch = useCallback(async (files: File[]) => {
+    if (files.length > 1) onBatchStart?.(files.length);
+    // Bounded concurrency: 1 file at a time on mobile, 2 on desktop.
+    // The pre-existing parallel `for (const f of files) handleFileUpload(f)`
+    // was the direct cause of iOS Safari OOM crashes when a user dropped
+    // more than a handful of PNGs. See lib/upload-queue.ts for defaults.
+    await runWithConcurrency(files, (file) => handleFileUpload(file), {
+      concurrency: resolveUploadConcurrency(),
+      onError: (error, file) => {
+        console.error(`Upload failed for ${file.name}:`, error);
+      },
+    });
+  }, [handleFileUpload, onBatchStart]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
-    const files = Array.from(e.dataTransfer.files);
-    if (files.length > 1) onBatchStart?.(files.length);
-    for (const file of files) {
-      handleFileUpload(file);
-    }
-  }, [handleFileUpload, onBatchStart]);
+    void processBatch(Array.from(e.dataTransfer.files));
+  }, [processBatch]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -112,14 +172,10 @@ export default function UploadSection({ onImageUpload, onBatchStart, imageInfo, 
 
   const handleFileInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      const files = Array.from(e.target.files);
-      if (files.length > 1) onBatchStart?.(files.length);
-      for (const file of files) {
-        handleFileUpload(file);
-      }
+      void processBatch(Array.from(e.target.files));
     }
     e.target.value = '';
-  }, [handleFileUpload, onBatchStart]);
+  }, [processBatch]);
 
   const showHero = !imageInfo && !embedCompact;
 
@@ -181,7 +237,7 @@ export default function UploadSection({ onImageUpload, onBatchStart, imageInfo, 
           type="file" 
           ref={fileInputRef}
           className="hidden" 
-          accept=".png,.jpg,.jpeg,.webp,.pdf,image/png,image/jpeg,image/webp,application/pdf" 
+          accept=".png,.jpg,.jpeg,.webp,.pdf,.svg,image/png,image/jpeg,image/webp,image/svg+xml,application/pdf"
           multiple
           onChange={handleFileInputChange}
         />

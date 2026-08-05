@@ -1,6 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { cropImageToContent, cropImageToContentAsync, isOpaqueRasterUpload } from "@/lib/image-crop";
 import { parsePDF, type ParsedPDFData } from "@/lib/pdf-parser";
+import { parseSVG, isSVGFile, isEPSFile, type ParsedSVGData } from "@/lib/svg-parser";
+import { runWithConcurrency, resolveUploadConcurrency } from "@/lib/upload-queue";
+import { checkPixelBudget, formatMegapixels, MAX_UPLOAD_MEGAPIXELS } from "@/lib/image-budget";
 import {
   LOW_RES_EFFECTIVE_DPI_THRESHOLD,
   MAX_STORED_IMAGE_DIMENSION,
@@ -19,6 +22,7 @@ import { getContourWorkerManager } from "@/lib/contour-worker-manager";
 import { revokeThumbnailCacheEntry } from "@/lib/thumbnail-cache";
 import type { ImageInfo, ResizeSettings } from "@/lib/types";
 import type { ImageEditorBagAfterArrange } from "./image-editor-hook-bag.types";
+import { useUiActions, getUiSnapshot } from "@/state/ui-store";
 
 export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
   // Only the bag fields these handlers actually use are destructured here;
@@ -40,11 +44,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
     setDesigns,
     selectedDesignId,
     selectedDesignIds,
-    setMobilePanel,
     headerUploadInputRef,
-    contextMenu,
-    setContextMenu,
-    setCropModalDesignId,
     saveSnapshot,
     selectedDesign,
     GANGSHEET_HEIGHTS,
@@ -56,6 +56,9 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
     assetDataUrlCacheRef,
     restoredLayerAssetRef,
   } = bag;
+  // Actions from the Zustand UI store — replacements for the model's
+  // previous `setMobilePanel` / `setContextMenu` / `setCropModalDesignId`.
+  const { setMobilePanel, setContextMenu, setCropModalDesignId } = useUiActions();
   const [isUpscaling, setIsUpscaling] = useState(false);
 
   const resolveUploadDpi = useCallback(async (
@@ -147,13 +150,20 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
 
   const handleImageUpload = useCallback(async (file: File, image: HTMLImageElement) => {
     try {
-      if (image.width * image.height > 1000000000) {
-        toast({ title: t("toast.imageTooLarge"), description: t("toast.imageTooLargeDesc"), variant: "destructive" });
-        return;
-      }
-      
-      if (image.width <= 0 || image.height <= 0) {
-        toast({ title: t("toast.invalidImage"), description: t("toast.invalidImageDesc"), variant: "destructive" });
+      const budget = checkPixelBudget(image.width, image.height);
+      if (!budget.ok) {
+        if (budget.reason === "unreadable_dimensions") {
+          toast({ title: t("toast.invalidImage"), description: t("toast.invalidImageDesc"), variant: "destructive" });
+        } else {
+          toast({
+            title: t("toast.imageTooLarge"),
+            description: t("toast.imageTooLargeDesc", {
+              size: formatMegapixels(budget.megapixels),
+              max: `${MAX_UPLOAD_MEGAPIXELS} MP`,
+            }),
+            variant: "destructive",
+          });
+        }
         return;
       }
       
@@ -267,7 +277,10 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
       const { widthInches, heightInches } = inchesFromPixelsPair(intrinsicW, intrinsicH, dpi);
       const bw = croppedImg.naturalWidth || croppedImg.width;
       const bh = croppedImg.naturalHeight || croppedImg.height;
-      const newImageInfo: ImageInfo = { file, image: croppedImg, originalWidth: bw, originalHeight: bh, dpi };
+      // `blob` is the cropped, pre-downsample PNG. Keeping it as `exportBlob`
+      // lets the export pipeline decode the source at its original resolution
+      // so a small preview image never caps print DPI.
+      const newImageInfo: ImageInfo = { file, image: croppedImg, originalWidth: bw, originalHeight: bh, dpi, exportBlob: blob };
       applyImageDirectly(newImageInfo, widthInches, heightInches, imageHasCleanAlpha(croppedImg));
       if (isMobile) setMobilePanel("preview");
       if (matchesArtboard) {
@@ -329,6 +342,32 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
     if (isMobile) setMobilePanel("preview");
   }, [applyImageDirectly, isMobile]);
 
+  const handleSVGUpload = useCallback((file: File, svgData: ParsedSVGData) => {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+    // Store the rasterised PNG as a real File so downstream export
+    // paths that reach into `imageInfo.file` (e.g. sending source to
+    // the server for higher-quality re-render) receive a PNG. The
+    // sanitised SVG source lives on `exportBlob` — the export layer
+    // can decide to re-rasterise from source or use the PNG.
+    const pngFile = new File(
+      [svgData.pngBlob],
+      file.name.replace(/\.svg$/i, ".png"),
+      { type: "image/png" },
+    );
+    const newImageInfo: ImageInfo = {
+      file: pngFile,
+      image: svgData.image,
+      originalWidth: svgData.widthPx,
+      originalHeight: svgData.heightPx,
+      dpi: svgData.dpi,
+      exportBlob: svgData.pngBlob,
+    };
+    applyImageDirectly(newImageInfo, svgData.widthInches, svgData.heightInches, false);
+    if (isMobile) setMobilePanel("preview");
+  }, [applyImageDirectly, isMobile]);
+
   const handleBatchStart = useCallback((fileCount: number) => {
     const targetHeight = Math.min(48, GANGSHEET_HEIGHTS[GANGSHEET_HEIGHTS.length - 1]);
     const validHeight = GANGSHEET_HEIGHTS.reduce((best, h) => h <= targetHeight && h > best ? h : best, GANGSHEET_HEIGHTS[0]);
@@ -345,6 +384,24 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
         setIsUploading(true);
         const pdfData = await parsePDF(file);
         handlePDFUpload(file, pdfData);
+        if (pdfData.pageCount > 1) {
+          toast({
+            title: t("toast.pdfMultiPage"),
+            description: t("toast.pdfMultiPageDesc", { pages: pdfData.pageCount }),
+            variant: "warning",
+          });
+        }
+        // Text-fidelity warning. Only fires when the PDF actually
+        // contains rendered text — plain vector logos (paths only)
+        // skip the toast so we don't cry wolf. See ParsedPDFData.hasText
+        // for the coarse-but-safe detection strategy.
+        if (pdfData.hasText) {
+          toast({
+            title: t("toast.pdfHasText"),
+            description: t("toast.pdfHasTextDesc"),
+            variant: "warning",
+          });
+        }
         if (isMobile) setMobilePanel("preview");
       } catch (err) {
         console.error('PDF parse error:', err);
@@ -354,19 +411,103 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
       }
       return;
     }
+    if (isSVGFile(file)) {
+      try {
+        setIsUploading(true);
+        const svgData = await parseSVG(file);
+        handleSVGUpload(file, svgData);
+        // Text-with-external-font warning. Only fires when *both*
+        // conditions are true — text is present *and* a font URL was
+        // detected in a `<style>` block. Text-only or url-only alone
+        // produce no toast so we minimise noise for well-authored
+        // SVGs. See analyseSvgFontRisk in svg-parser.ts.
+        if (svgData.hasText && svgData.hasExternalFonts) {
+          toast({
+            title: t("toast.svgExternalFont"),
+            description: t("toast.svgExternalFontDesc"),
+            variant: "warning",
+          });
+        }
+        // Ambiguous-size warning. Fires when we had to fall back to
+        // the viewBox because the SVG author didn't set width/height.
+        // The imported size is a "best guess" derived from 96 CSS-px
+        // per inch — often several times smaller than the author
+        // intended. Telling the user surfaces the resizer proactively.
+        if (svgData.dimensionSource === "viewbox" || svgData.dimensionSource === "fallback") {
+          toast({
+            title: t("toast.svgAmbiguousSize"),
+            description: t("toast.svgAmbiguousSizeDesc"),
+            variant: "warning",
+          });
+        }
+        if (isMobile) setMobilePanel("preview");
+      } catch (err) {
+        console.error('SVG parse error:', err);
+        toast({ title: t("toast.svgFailed"), description: t("toast.svgFailedDesc"), variant: "destructive" });
+      } finally {
+        setIsUploading(false);
+      }
+      return;
+    }
+    if (isEPSFile(file)) {
+      toast({
+        title: t("toast.epsUnsupported"),
+        description: t("toast.epsUnsupportedDesc"),
+        variant: "destructive",
+      });
+      return;
+    }
     if (image) {
       await handleImageUpload(file, image);
       if (isMobile) setMobilePanel("preview");
     }
-  }, [handleImageUpload, handlePDFUpload, isMobile, toast]);
+  }, [handleImageUpload, handlePDFUpload, handleSVGUpload, isMobile, toast, t]);
 
   const processSidebarFile = useCallback((file: File): Promise<void> => {
     const ext = file.name.toLowerCase();
     const isPdf = file.type === 'application/pdf' || ext.endsWith('.pdf');
+    const isSvg = isSVGFile(file);
+    const isEps = isEPSFile(file);
     const isImage = ['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || ['.png', '.jpg', '.jpeg', '.webp'].some(x => ext.endsWith(x));
-    if (!isImage && !isPdf) {
+    if (!isImage && !isPdf && !isSvg && !isEps) {
       toast({ title: t("toast.unsupportedFormat"), description: t("toast.formatOnly"), variant: "destructive" });
       return Promise.resolve();
+    }
+    if (isEps) {
+      toast({ title: t("toast.epsUnsupported"), description: t("toast.epsUnsupportedDesc"), variant: "destructive" });
+      return Promise.resolve();
+    }
+    if (isSvg) {
+      return (async () => {
+        try {
+          setIsUploading(true);
+          const svgData = await parseSVG(file);
+          handleSVGUpload(file, svgData);
+          // Mirror the warnings surfaced by `handleFileUploadUnified`
+          // so drag-and-drop into the sidebar behaves identically to
+          // clicking the file picker. See that function's comments
+          // for why each warning fires.
+          if (svgData.hasText && svgData.hasExternalFonts) {
+            toast({
+              title: t("toast.svgExternalFont"),
+              description: t("toast.svgExternalFontDesc"),
+              variant: "warning",
+            });
+          }
+          if (svgData.dimensionSource === "viewbox" || svgData.dimensionSource === "fallback") {
+            toast({
+              title: t("toast.svgAmbiguousSize"),
+              description: t("toast.svgAmbiguousSizeDesc"),
+              variant: "warning",
+            });
+          }
+        } catch (err) {
+          console.error('SVG parse error:', err);
+          toast({ title: t("toast.svgFailed"), description: t("toast.svgFailedDesc"), variant: "destructive" });
+        } finally {
+          setIsUploading(false);
+        }
+      })();
     }
     if (isPdf) {
       return (async () => {
@@ -374,6 +515,20 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
           setIsUploading(true);
           const pdfData = await parsePDF(file);
           handlePDFUpload(file, pdfData);
+          if (pdfData.pageCount > 1) {
+            toast({
+              title: t("toast.pdfMultiPage"),
+              description: t("toast.pdfMultiPageDesc", { pages: pdfData.pageCount }),
+              variant: "warning",
+            });
+          }
+          if (pdfData.hasText) {
+            toast({
+              title: t("toast.pdfHasText"),
+              description: t("toast.pdfHasTextDesc"),
+              variant: "warning",
+            });
+          }
         } catch (err) {
           console.error('PDF parse error:', err);
           toast({ title: t("toast.pdfFailed"), description: t("toast.pdfFailedShort"), variant: "destructive" });
@@ -425,9 +580,12 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
         setArtboardHeight(validHeight);
       }
     }
-    for (const file of files) {
-      await processSidebarFile(file);
-    }
+    // Yield-between-items keeps the main thread free to paint upload
+    // progress bars while long-running decodes are in flight.
+    await runWithConcurrency(files, (file) => processSidebarFile(file), {
+      concurrency: resolveUploadConcurrency(),
+      onError: (error, file) => console.error(`Upload failed for ${file.name}:`, error),
+    });
   }, [processSidebarFile, GANGSHEET_HEIGHTS]);
 
   useEffect(() => {
@@ -481,9 +639,10 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
         setArtboardHeight(validHeight);
       }
     }
-    for (const file of files) {
-      await processSidebarFile(file);
-    }
+    await runWithConcurrency(files, (file) => processSidebarFile(file), {
+      concurrency: resolveUploadConcurrency(),
+      onError: (error, file) => console.error(`Upload failed for ${file.name}:`, error),
+    });
   }, [processSidebarFile, GANGSHEET_HEIGHTS]);
 
   const handleResizeChange = useCallback((newSettings: Partial<ResizeSettings>) => {
@@ -732,12 +891,16 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
   }, [designs, selectedDesignId, saveSnapshot, toast, thresholdAlphaForDesign]);
 
   const handleCropDesign = useCallback(() => {
-    const id = contextMenu?.designId ?? selectedDesignId;
+    // Read the current right-click target imperatively — the callback
+    // identity should be stable across contextMenu open/close so
+    // downstream memoization doesn't churn on every right-click.
+    const menu = getUiSnapshot().contextMenu;
+    const id = menu?.designId ?? selectedDesignId;
     if (id) {
       setCropModalDesignId(id);
       setContextMenu(null);
     }
-  }, [contextMenu, selectedDesignId]);
+  }, [selectedDesignId, setCropModalDesignId, setContextMenu]);
 
   const handleCropApply = useCallback((designId: string, newImageInfo: ImageInfo) => {
     saveSnapshot();

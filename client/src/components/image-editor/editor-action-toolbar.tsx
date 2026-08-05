@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, memo } from "react";
 import UploadSection from "../upload-section";
 import SizeInput from "./size-input";
 import {
@@ -89,7 +89,7 @@ export type EditorActionToolbarProps = {
   isUpscaling: boolean;
 };
 
-export default function EditorActionToolbar(props: EditorActionToolbarProps) {
+function EditorActionToolbar(props: EditorActionToolbarProps) {
   const {
     t,
     lang,
@@ -591,12 +591,6 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
             </button>
             {selectedDesignId && (
               <div className="flex items-center gap-1.5 rounded-xl border-2 border-black bg-white px-1.5 py-1 shadow-sm">
-                <button onClick={() => handleAlignAxis("vertical")} className="flex h-9 w-9 items-center justify-center rounded-lg border border-black bg-black text-white hover:bg-white hover:text-black" title="Center vertically">
-                  <AlignCenterVertical className="h-5 w-5" />
-                </button>
-                <button onClick={() => handleAlignAxis("horizontal")} className="flex h-9 w-9 items-center justify-center rounded-lg border border-black bg-black text-white hover:bg-white hover:text-black" title="Center horizontally">
-                  <AlignCenterHorizontal className="h-5 w-5" />
-                </button>
                 <span className="min-w-[48px] rounded-lg border-2 border-black bg-white px-1.5 py-1 text-center text-[16px] font-bold tabular-nums text-black">{Math.round(activeDesignTransform.rotation || 0)}°</span>
                 {[0, 90, 180, 270].map(deg => (
                   <button key={deg} onClick={() => handleSetRotation(deg)} className="flex h-9 min-w-10 items-center justify-center rounded-lg border border-black bg-white px-1.5 text-[13px] font-bold tabular-nums text-black hover:bg-black hover:text-white">
@@ -605,38 +599,79 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
                 ))}
               </div>
             )}
-            <div className="grid grid-cols-4 gap-0.5 lg:contents">
+            {/*
+              Align cluster.
+
+              Six buttons in a single visually-grouped block. Previously the
+              two axis-align buttons lived *inside* the rotation container,
+              which mixed unrelated operations and confused users; the four
+              corner buttons were also on a separate grid with different
+              visibility rules. Now all six share the same enable/disable
+              behavior (`selectedDesignId`), the same disabled affordance,
+              and a single container so their function reads as one group.
+
+              The two axis buttons get a tiny "X" / "Y" letter overlay in
+              the top-right of each icon. That gives non-designers a hint
+              of what "center on axis" actually does without abandoning
+              the industry-standard Lucide icons pros already recognise.
+            */}
+            <div className="flex items-center gap-0.5 rounded-lg border-2 border-black bg-white px-1 py-0.5 shadow-sm">
+              <button
+                onClick={() => handleAlignAxis("vertical")}
+                disabled={!selectedDesignId}
+                className="relative p-2 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] flex items-center justify-center"
+                title={t("editor.alignCenterX")}
+                aria-label={t("editor.alignCenterX")}
+              >
+                <AlignCenterVertical className="w-4 h-4" />
+                <span className="pointer-events-none absolute top-0.5 right-1 text-[9px] font-bold leading-none">X</span>
+              </button>
+              <button
+                onClick={() => handleAlignAxis("horizontal")}
+                disabled={!selectedDesignId}
+                className="relative p-2 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] flex items-center justify-center"
+                title={t("editor.alignCenterY")}
+                aria-label={t("editor.alignCenterY")}
+              >
+                <AlignCenterHorizontal className="w-4 h-4" />
+                <span className="pointer-events-none absolute top-0.5 right-1 text-[9px] font-bold leading-none">Y</span>
+              </button>
+              <div className="w-px h-6 bg-gray-300 mx-0.5" />
               <button
                 onClick={() => handleAlignCorner('tl')}
                 disabled={!selectedDesignId}
-                className="p-2 lg:p-2 rounded-lg border border-black bg-white hover:bg-black hover:text-white text-black transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] lg:min-w-[42px] lg:min-h-[42px] flex items-center justify-center"
+                className="p-2 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] flex items-center justify-center"
                 title={t("editor.alignTL")}
+                aria-label={t("editor.alignTL")}
               >
-                <ArrowUpLeft className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+                <ArrowUpLeft className="w-4 h-4" />
               </button>
               <button
                 onClick={() => handleAlignCorner('tr')}
                 disabled={!selectedDesignId}
-                className="p-2 lg:p-2 rounded-lg border border-black bg-white hover:bg-black hover:text-white text-black transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] lg:min-w-[42px] lg:min-h-[42px] flex items-center justify-center"
+                className="p-2 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] flex items-center justify-center"
                 title={t("editor.alignTR")}
+                aria-label={t("editor.alignTR")}
               >
-                <ArrowUpRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+                <ArrowUpRight className="w-4 h-4" />
               </button>
               <button
                 onClick={() => handleAlignCorner('bl')}
                 disabled={!selectedDesignId}
-                className="p-2 lg:p-2 rounded-lg border border-black bg-white hover:bg-black hover:text-white text-black transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] lg:min-w-[42px] lg:min-h-[42px] flex items-center justify-center"
+                className="p-2 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] flex items-center justify-center"
                 title={t("editor.alignBL")}
+                aria-label={t("editor.alignBL")}
               >
-                <ArrowDownLeft className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+                <ArrowDownLeft className="w-4 h-4" />
               </button>
               <button
                 onClick={() => handleAlignCorner('br')}
                 disabled={!selectedDesignId}
-                className="p-2 lg:p-2 rounded-lg border border-black bg-white hover:bg-black hover:text-white text-black transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] lg:min-w-[42px] lg:min-h-[42px] flex items-center justify-center"
+                className="p-2 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] flex items-center justify-center"
                 title={t("editor.alignBR")}
+                aria-label={t("editor.alignBR")}
               >
-                <ArrowDownRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+                <ArrowDownRight className="w-4 h-4" />
               </button>
             </div>
           </>
@@ -648,3 +683,11 @@ export default function EditorActionToolbar(props: EditorActionToolbarProps) {
     </>
   );
 }
+
+// Wrap in `React.memo` so unrelated view state changes (halftone menu
+// open/close, spot-channel hover, mobile-panel flip) skip re-rendering
+// this ~650-line toolbar. Every callback prop is `useCallback`-wrapped
+// in the provider (including the three previously plain handlers:
+// `handleSetRotation`, `handleAlignAxis`, `handleSetGroupCount`) so
+// memo's shallow-compare has a real chance to short-circuit.
+export default memo(EditorActionToolbar);

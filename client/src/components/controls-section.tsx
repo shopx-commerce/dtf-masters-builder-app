@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -9,6 +9,7 @@ import { formatLength } from "@/lib/format-length";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { formatVariantPriceForDisplay, getSelectedVariantPrice } from "@/lib/variant-price";
+import { useWandTolerance, useToolActions } from "@/state/tool-store";
 
 export interface SpotPreviewData {
   enabled: boolean;
@@ -78,8 +79,11 @@ interface ControlsSectionProps {
   onRemoveWhiteBackground?: () => void;
   wandDeleteActive?: boolean;
   onWandDeleteToggle?: () => void;
-  wandTolerance?: number;
-  onWandToleranceChange?: (value: number) => void;
+  // NOTE: `wandTolerance` / `onWandToleranceChange` used to live here
+  // and were re-threaded from the model on every 60Hz slider tick,
+  // regenerating the entire context bag. They now live in the Zustand
+  // `tool-store` and the slider subscribes directly — see
+  // `state/tool-store.ts`.
 }
 
 const DEFAULT_HEIGHTS: number[] = [];
@@ -102,7 +106,7 @@ function autoAssignChannel(rgb: { r: number; g: number; b: number }): 'spotFluor
   return null;
 }
 
-export default function ControlsSection({
+function ControlsSection({
   onDownload,
   isProcessing,
   exportProgressLabel,
@@ -137,10 +141,12 @@ export default function ControlsSection({
   onRemoveWhiteBackground,
   wandDeleteActive = false,
   onWandDeleteToggle,
-  wandTolerance = 30,
-  onWandToleranceChange,
 }: ControlsSectionProps) {
   const { t, lang } = useLanguage();
+  // Wand-tolerance slider state comes from the Zustand tool store so
+  // 60Hz slider ticks don't cascade back into the editor bag.
+  const wandTolerance = useWandTolerance();
+  const { setWandTolerance } = useToolActions();
   const isMobile = useIsMobile();
   const isLgUp = useMediaQuery("(min-width: 1024px)");
   const canDownload = !!imageInfo || designCount > 0;
@@ -633,7 +639,7 @@ export default function ControlsSection({
                 min="1"
                 max="100"
                 value={wandTolerance}
-                onChange={(e) => onWandToleranceChange?.(Number(e.target.value))}
+                onChange={(e) => setWandTolerance(Number(e.target.value))}
                 className="min-w-0 flex-1 accent-fuchsia-600"
               />
               <span className="w-6 text-right tabular-nums">{wandTolerance}</span>
@@ -925,3 +931,10 @@ export default function ControlsSection({
     </div>
   );
 }
+
+// Wrap in `React.memo` so unrelated view state changes (halftone menu
+// open/close, mobile-panel toggle, spot-channel hover, etc.) skip
+// re-rendering this ~900-line panel when all of its props are
+// shallow-equal. Callback props at the call site are `useCallback`-
+// wrapped so memo's shallow-compare has a real chance to short-circuit.
+export default memo(ControlsSection);

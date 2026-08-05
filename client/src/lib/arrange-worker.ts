@@ -527,8 +527,6 @@ function runArrange(input: ArrangeInput) {
       return { id: d.id, w, h, rotation: rot, gap: g };
     });
 
-  const totalItemArea = items.reduce((sum, d) => sum + d.w * d.h, 0);
-
   const byWidth = [...items].sort((a, b) => b.w - a.w || b.h - a.h);
   const byHeight = [...items].sort((a, b) => Math.max(b.h, b.w) - Math.max(a.h, a.w) || (b.w * b.h) - (a.w * a.h));
   const byArea = [...items].sort((a, b) => (b.w * b.h) - (a.w * a.h));
@@ -604,14 +602,38 @@ function runArrange(input: ArrangeInput) {
           ...runCandidates(0.0625),
         ]);
 
+  // Candidate ranking — height-first.
+  //
+  // DTF gangsheets are billed by *length* (vertical inches), never width.
+  // The sheet width is a fixed roll dimension the user cannot change; the
+  // sheet height is what expands with the arrangement. So the correct
+  // primary objective is unambiguously "minimise `maxHeight`". Every
+  // horizontal-packing win is only meaningful in-so-far as it *reduces*
+  // the total vertical extent.
+  //
+  // The previous sort compared "utilisation" (area / (usableW * maxHeight))
+  // with a 2% threshold before falling through to a maxHeight compare with
+  // a 0.01" threshold. Because utilisation is 1 / maxHeight up to
+  // constants, that tier duplicated the height compare *plus* introduced
+  // a dead zone where two candidates within the 2% band would fall through
+  // and be picked on wasted-area instead of height — sometimes picking a
+  // *taller* layout because it had fewer holes. Users see this as "it
+  // saved horizontal space when I wanted to save vertical space".
+  //
+  // New tie-break tiers:
+  //   1. fewer overflows       — hard correctness
+  //   2. fits within artboard  — hard correctness
+  //   3. smaller maxHeight     — the whole point
+  //   4. less wasted area      — cosmetic tie-break for identical heights
+  //
+  // The 0.01" height tolerance is intentional: below that, differences are
+  // sub-pixel at typical print DPIs and it makes sense to prefer the
+  // tighter (less hole-y) layout for visual predictability.
   candidates.sort((a, b) => {
     if (a.overflows !== b.overflows) return a.overflows - b.overflows;
     const aFits = a.maxHeight <= usableH ? 0 : 1;
     const bFits = b.maxHeight <= usableH ? 0 : 1;
     if (aFits !== bFits) return aFits - bFits;
-    const aUtil = totalItemArea / (usableW * Math.max(a.maxHeight, 0.01));
-    const bUtil = totalItemArea / (usableW * Math.max(b.maxHeight, 0.01));
-    if (Math.abs(aUtil - bUtil) > 0.02) return bUtil - aUtil;
     if (Math.abs(a.maxHeight - b.maxHeight) > 0.01) return a.maxHeight - b.maxHeight;
     return a.wastedArea - b.wastedArea;
   });

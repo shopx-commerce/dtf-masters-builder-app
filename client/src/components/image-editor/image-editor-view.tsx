@@ -1,17 +1,31 @@
 import UploadSection from "../upload-section";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useEffect, useCallback } from "react";
 import PreviewSection from "../preview-section";
 import ControlsSection from "../controls-section";
 import CropModal from "../crop-modal";
 import SizeInput from "./size-input";
 import EditorActionToolbar from "./editor-action-toolbar";
+import { LayerRow, type LayerRowHandlers } from "./layer-row";
 import { formatDimensions, formatLength, useMetric, getUnitSuffix } from "@/lib/format-length";
 import {
   ArrowDownLeft, ArrowDownRight, ArrowUpLeft, ArrowUpRight, Copy, ChevronDown, ChevronUp,
-  Droplets, FlipHorizontal2, FlipVertical2, Layers, LayoutGrid, Link, Loader2, Minus, Plus, RotateCw,
-  Trash2, Undo2, Redo2, Unlink, XCircle,
+  Droplets, FlipHorizontal2, FlipVertical2, Group, Layers, LayoutGrid, Link, Loader2, Minus, Plus, RotateCw,
+  Trash2, Undo2, Redo2, Ungroup, Unlink, XCircle,
 } from "lucide-react";
 import { useImageEditorContext } from "./image-editor-context";
+import {
+  useContextMenu,
+  useMobilePanel,
+  useShowDesignInfo,
+  useSelectionZoomActive,
+  usePanModeActive,
+  useWandDeleteModeActive,
+  useActiveSpotChannel,
+  useSpotPreviewData,
+  useCropModalDesignId,
+  useUiActions,
+  useUiStore,
+} from "@/state/ui-store";
 
 /** Halftone icon — a grid of circles shrinking diagonally. */
 const HalftoneIcon = ({ className }: { className?: string }) => (
@@ -35,11 +49,10 @@ export default function ImageEditorView() {
     t, lang, profile, embedFromShopify, isMobile, isLgUp, isUploading, uploadProgress, isProcessing, exportProgressLabel,
     isAddingToCart, isEditMode, isUpdateFlow, isDragOver, artboardWidth, artboardHeight,
     quantity, designGap, duplicateCount, designs, setDesigns, selectedDesignId, setSelectedDesignId,
-    selectedDesignIds, setSelectedDesignIds, mobilePanel,
-    setMobilePanel, showDesignInfo, setShowDesignInfo, selectionZoomActive, setSelectionZoomActive,
-    editingLayerName, setEditingLayerName, editingNameValue, setEditingNameValue, proportionalLock,
-    setProportionalLock, spotPreviewData, setSpotPreviewData, contextMenu, setContextMenu,
-    cropModalDesignId, setCropModalDesignId, activeImageInfo, activeDesignTransform,
+    selectedDesignIds, setSelectedDesignIds,
+    proportionalLock,
+    setProportionalLock,
+    activeImageInfo, activeDesignTransform,
     activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, canvasRef, designInfoRef,
     sidebarFileRef, headerUploadInputRef, downloadContainer, setDownloadContainer,
     fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer,
@@ -47,6 +60,7 @@ export default function ImageEditorView() {
     initialVariantId, shopifyVariants,
     handleFileUploadUnified, handleBatchStart, handleSidebarFileChange, handleDragEnter,
     handleDragLeave, handleDragOver, handleDrop, handleSelectDesign, handleMultiSelect,
+    handleGroupSelected, handleUngroupSelected, selectedHasGroup,
     handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta,
     handleEffectiveSizeChange, handleResizeChange, handleDuplicateDesign,
     handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleSetGroupCount,
@@ -55,21 +69,158 @@ export default function ImageEditorView() {
     handleThresholdAlphaAll, handleCropDesign, handleCropApply, handleDownload, handleAddToCart,
     handleApplyHalftone, handleOpenHalftoneMenu, halftoneStrength, setHalftoneStrength,
     halftoneMenuOpen, setHalftoneMenuOpen, halftoneTopColors,
-    handleRemoveWhiteBackground, handleWandDelete, wandDeleteModeActive, setWandDeleteModeActive,
-    wandTolerance, setWandTolerance,
+    handleRemoveWhiteBackground, handleWandDelete,
     handleCanvasContextMenu, handleInteractionEnd, handleUndo, handleRedo, canUndo, canRedo,
     handleAutoArrangeRef, actionToolbarProps, getLayerThumbnail, setDesignGap, setDuplicateCount,
     parseDuplicateCount, handleDuplicateCountKeyDown, clampDuplicateCount, setArtboardWidth,
     setArtboardHeight, setQuantity, draftRecoveryAvailable, isRecoveringDraft,
     recoverEditorDraft, discardEditorDraft,
   } = useImageEditorContext();
-  const [activeSpotChannel, setActiveSpotChannel] = useState<string | null>(null);
-  const [editingCountKey, setEditingCountKey] = useState<string | null>(null);
-  const [editingCountValue, setEditingCountValue] = useState("");
-  const [panModeActive, setPanModeActive] = useState(false);
+  // UI-mode state comes from the Zustand `ui-store` — see
+  // `state/ui-store.ts`. These toggles used to sit in the model bag and
+  // any change (right-click, mobile-panel flip, spot-channel hover, etc.)
+  // regenerated the whole bag, which invalidated every model callback.
+  // Now the model is untouched and only this view (plus the specific
+  // consumers below) re-renders when they change.
+  const contextMenu = useContextMenu();
+  const mobilePanel = useMobilePanel();
+  const showDesignInfo = useShowDesignInfo();
+  const selectionZoomActive = useSelectionZoomActive();
+  const panModeActive = usePanModeActive();
+  const wandDeleteModeActive = useWandDeleteModeActive();
+  const activeSpotChannel = useActiveSpotChannel();
+  const spotPreviewData = useSpotPreviewData();
+  const cropModalDesignId = useCropModalDesignId();
+  const {
+    setContextMenu,
+    setMobilePanel,
+    setShowDesignInfo,
+    setSelectionZoomActive,
+    setPanModeActive,
+    setWandDeleteModeActive,
+    setActiveSpotChannel,
+    setSpotPreviewData,
+    setCropModalDesignId,
+  } = useUiActions();
+
+  // Auto-close the right-click context menu on outside click, scroll, or
+  // Escape. Moved out of the model hook so opening / closing the menu no
+  // longer re-runs the model — only this view (which already subscribes
+  // to `contextMenu`) reacts to the change.
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    window.addEventListener("click", close);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [contextMenu, setContextMenu]);
+
+  // NOTE: `editingCountKey` / `editingCountValue` (and their name-input
+  // counterparts) previously lived here + in the model bag and were
+  // threaded to every `<LayerRow>` as props. They now live in the Zustand
+  // `editing-store` and each row subscribes to *only* its own slice, so
+  // typing in one row's inputs no longer forces every other row to
+  // re-render.
   const wandAssignRef = useRef<((nx: number, ny: number) => void) | null>(null);
   const clearActiveChannelRef = useRef<(() => void) | null>(null);
   const halftoneEnabled = profile?.id === "hot-peel" || profile?.id === "fluorescent";
+
+  // Stable-identity callbacks for the two `<PreviewSection>` call sites
+  // (mobile + desktop). Both were inline arrow functions until now, which
+  // meant every parent re-render created new prop references and defeated
+  // `memo(PreviewSection)`'s shallow compare. Wrapping them once here
+  // gives the memo compare a real chance to short-circuit when nothing
+  // relevant has changed.
+  //
+  // Deps are the two Zustand action refs (stable for the store's
+  // lifetime, so this effectively pins the callback identity forever).
+  const handleWandTap = useCallback(
+    (nx: number, _ny: number, _id: string | null) => {
+      wandAssignRef.current?.(nx, _ny);
+    },
+    [],
+  );
+  const handleSelectionZoomChange = useCallback(
+    (active: boolean) => {
+      setSelectionZoomActive(active);
+      if (active) {
+        clearActiveChannelRef.current?.();
+        setPanModeActive(false);
+        setWandDeleteModeActive(false);
+      }
+    },
+    [setSelectionZoomActive, setPanModeActive, setWandDeleteModeActive],
+  );
+  const handleWandDeactivate = useCallback(() => {
+    setWandDeleteModeActive(false);
+  }, [setWandDeleteModeActive]);
+
+  // `ControlsSection` prop stabilization. Two inline arrows previously
+  // defeated `memo(ControlsSection)`:
+  //   `onArtboardHeightChange` closed over `artboardWidth` (changes on
+  //     resize only — rare, safe to include in deps).
+  //   `onWandDeleteToggle` closed over `wandDeleteModeActive` (a hot
+  //     boolean that would invalidate the callback on every toggle). We
+  //     read it imperatively via `useUiStore.getState()` at click time so
+  //     the callback identity stays permanently stable.
+  const handleArtboardHeightChange = useCallback(
+    (h: number) => handleArtboardResize(artboardWidth, h),
+    [handleArtboardResize, artboardWidth],
+  );
+  const handleWandDeleteToggle = useCallback(() => {
+    const prev = useUiStore.getState().wandDeleteModeActive;
+    const nextActive = !prev;
+    setWandDeleteModeActive(nextActive);
+    if (nextActive) {
+      clearActiveChannelRef.current?.();
+      setPanModeActive(false);
+      setSelectionZoomActive(false);
+      setMobilePanel("preview");
+    }
+  }, [
+    setWandDeleteModeActive,
+    setPanModeActive,
+    setSelectionZoomActive,
+    setMobilePanel,
+  ]);
+
+  // Stable-identity handler bundle for `LayerRow`. The context returns
+  // some handlers with new identity per render (notably `handleSetGroupCount`,
+  // which closes over the ever-changing model `bag`), so we redirect
+  // through a ref. `layerHandlers` never changes identity — that's what
+  // lets `memo(LayerRow)` skip re-renders when unrelated state churns.
+  const layerHandlersLiveRef = useRef({
+    handleSelectDesign,
+    handleSetGroupCount,
+    handleDeleteGroup,
+    setDesigns,
+    getLayerThumbnail,
+  });
+  layerHandlersLiveRef.current = {
+    handleSelectDesign,
+    handleSetGroupCount,
+    handleDeleteGroup,
+    setDesigns,
+    getLayerThumbnail,
+  };
+  const layerHandlers = useMemo<LayerRowHandlers>(
+    () => ({
+      handleSelectDesign: (id) => layerHandlersLiveRef.current.handleSelectDesign(id),
+      handleSetGroupCount: (row, count) =>
+        layerHandlersLiveRef.current.handleSetGroupCount(row, count),
+      handleDeleteGroup: (ids) => layerHandlersLiveRef.current.handleDeleteGroup(ids),
+      handleAutoArrangeRef,
+      setDesigns: (updater) => layerHandlersLiveRef.current.setDesigns(updater),
+      getLayerThumbnail: (design) => layerHandlersLiveRef.current.getLayerThumbnail(design),
+    }),
+    [handleAutoArrangeRef],
+  );
 
   if (!activeImageInfo && !embedFromShopify) {
     return (
@@ -243,7 +394,7 @@ export default function ImageEditorView() {
             imageInfo={activeImageInfo}
             artboardWidth={artboardWidth}
             artboardHeight={artboardHeight}
-            onArtboardHeightChange={(h) => handleArtboardResize(artboardWidth, h)}
+            onArtboardHeightChange={handleArtboardHeightChange}
             downloadContainer={downloadContainer}
             designCount={designs.length}
             gangsheetHeights={GANGSHEET_HEIGHTS}
@@ -270,18 +421,7 @@ export default function ImageEditorView() {
             lockGangsheetSize={isEditMode}
             onRemoveWhiteBackground={handleRemoveWhiteBackground}
             wandDeleteActive={wandDeleteModeActive}
-            onWandDeleteToggle={() => {
-              const nextActive = !wandDeleteModeActive;
-              setWandDeleteModeActive(nextActive);
-              if (nextActive) {
-                clearActiveChannelRef.current?.();
-                setPanModeActive(false);
-                setSelectionZoomActive(false);
-                setMobilePanel("preview");
-              }
-            }}
-            wandTolerance={wandTolerance}
-            onWandToleranceChange={setWandTolerance}
+            onWandDeleteToggle={handleWandDeleteToggle}
           />
 
            {!isMobile && halftoneEnabled && (
@@ -386,182 +526,16 @@ export default function ImageEditorView() {
                     .layers-scroll::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
                   `}</style>
                   {layerRows.map((row) => {
-                    const first = row.designs[0];
-                    const count = row.designs.length;
-                    const isSelected = row.designs.some(d => d.id === selectedDesignId || selectedDesignIds.has(d.id));
+                    const rowKey = `${row.baseName}::${row.sizeKey}`;
                     return (
-                    <div
-                      key={`${row.baseName}::${row.sizeKey}`}
-                      className={`relative grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1 px-2.5 py-2.5 cursor-pointer transition-colors ${isSelected ? 'bg-cyan-50 border-l-2 border-cyan-400' : 'hover:bg-gray-100/70 border-l-2 border-transparent'}`}
-                      onClick={(e) => {
-                        if (e.ctrlKey || e.metaKey) {
-                          setSelectedDesignIds(prev => {
-                            const next = new Set(prev);
-                            const allSelected = row.designs.every(d => next.has(d.id));
-                            if (allSelected) {
-                              for (const d of row.designs) next.delete(d.id);
-                              setSelectedDesignId(next.size > 0 ? Array.from(next)[next.size - 1] : null);
-                            } else {
-                              for (const d of row.designs) next.add(d.id);
-                              setSelectedDesignId(first.id);
-                            }
-                            return next;
-                          });
-                        } else {
-                          handleSelectDesign(first.id);
-                        }
-                      }}
-                    >
-                      <div className="row-span-2 h-9 w-9 rounded bg-gray-100 border border-gray-300 flex-shrink-0 overflow-hidden flex items-center justify-center">
-                        <img
-                          src={getLayerThumbnail(first)}
-                          alt=""
-                          className="max-w-full max-h-full object-contain"
-                          loading="lazy"
-                          style={{ transform: `${first.transform.flipX ? 'scaleX(-1)' : ''} ${first.transform.flipY ? 'scaleY(-1)' : ''}` }}
-                        />
-                      </div>
-                      <div className="min-w-0 overflow-hidden pr-7">
-                        {editingLayerName === `${row.baseName}::${row.sizeKey}` ? (
-                          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                            <input
-                              autoFocus
-                              className="text-[11px] text-gray-900 bg-white border border-cyan-400 rounded px-1 py-0 w-full outline-none"
-                              value={editingNameValue}
-                              onChange={(e) => setEditingNameValue(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  const trimmed = editingNameValue.trim();
-                                  if (trimmed) {
-                                    setDesigns(prev => prev.map(d =>
-                                      row.designs.some(rd => rd.id === d.id) ? { ...d, name: trimmed } : d
-                                    ));
-                                  }
-                                  setEditingLayerName(null);
-                                } else if (e.key === 'Escape') {
-                                  setEditingLayerName(null);
-                                }
-                              }}
-                              onBlur={() => {
-                                const trimmed = editingNameValue.trim();
-                                if (trimmed) {
-                                  setDesigns(prev => prev.map(d =>
-                                    row.designs.some(rd => rd.id === d.id) ? { ...d, name: trimmed } : d
-                                  ));
-                                }
-                                setEditingLayerName(null);
-                              }}
-                            />
-                          </div>
-                        ) : (
-                          <p
-                            className="text-[11px] text-gray-900 truncate cursor-text hover:text-cyan-600 transition-colors"
-                            title={t("editor.renameDesign")}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditingLayerName(`${row.baseName}::${row.sizeKey}`);
-                              setEditingNameValue(first.name);
-                            }}
-                          >
-                            {row.baseName}
-                            {row.isResized && <span className="ml-1 text-[9px] text-amber-400/80 font-medium">{t("editor.resized")}</span>}
-                          </p>
-                        )}
-                        <p className={`text-gray-600 truncate tabular-nums ${lang !== 'en' ? 'text-[9px]' : 'text-[10px]'}`} title={formatDimensions(first.widthInches * first.transform.s, first.heightInches * first.transform.s, lang)}>
-                          {formatDimensions(first.widthInches * first.transform.s, first.heightInches * first.transform.s, lang)}
-                        </p>
-                      </div>
-                      <div className="col-start-2 flex min-w-0 items-center gap-1.5">
-                        <div className="flex items-center gap-px shrink-0" onClick={(e) => e.stopPropagation()}>
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            min={1}
-                            max={200}
-                            readOnly={editingCountKey !== `${row.baseName}::${row.sizeKey}`}
-                            autoFocus={editingCountKey === `${row.baseName}::${row.sizeKey}`}
-                            className={`h-6 w-14 rounded border-2 bg-white text-center text-[11px] font-semibold tabular-nums text-gray-800 outline-none shadow-sm transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${editingCountKey === `${row.baseName}::${row.sizeKey}` ? "border-cyan-500" : "cursor-pointer border-gray-300 hover:border-cyan-400 hover:bg-cyan-50"}`}
-                            value={editingCountKey === `${row.baseName}::${row.sizeKey}` ? editingCountValue : String(count)}
-                            onChange={(e) => setEditingCountValue(e.target.value.replace(/\D/g, "").slice(0, 3))}
-                            onFocus={() => {
-                              if (editingCountKey !== `${row.baseName}::${row.sizeKey}`) {
-                                setEditingCountKey(`${row.baseName}::${row.sizeKey}`);
-                                setEditingCountValue(String(count));
-                              }
-                            }}
-                            onBlur={() => {
-                              handleSetGroupCount(row, parseInt(editingCountValue || String(count), 10));
-                              setEditingCountKey(null);
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                handleSetGroupCount(row, parseInt(editingCountValue || String(count), 10));
-                                setEditingCountKey(null);
-                              } else if (e.key === "Escape") {
-                                setEditingCountKey(null);
-                              }
-                              e.stopPropagation();
-                            }}
-                            title="Click to set exact copy count"
-                          />
-                          <div className="flex flex-col gap-[3px]">
-                            <button
-                              type="button"
-                              tabIndex={-1}
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={() => handleSetGroupCount(row, count + 1)}
-                              disabled={count >= 200}
-                              aria-label="Increase copies"
-                              className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors hover:bg-cyan-100 hover:text-cyan-600 active:bg-cyan-200 disabled:opacity-30"
-                              title="Increase copies"
-                            >
-                              <ChevronUp className="h-3 w-3" strokeWidth={3} />
-                            </button>
-                            <button
-                              type="button"
-                              tabIndex={-1}
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={() => handleSetGroupCount(row, count - 1)}
-                              disabled={count <= 1}
-                              aria-label="Decrease copies"
-                              className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors hover:bg-cyan-100 hover:text-cyan-600 active:bg-cyan-200 disabled:opacity-30"
-                              title="Decrease copies"
-                            >
-                              <ChevronDown className="h-3 w-3" strokeWidth={3} />
-                            </button>
-                          </div>
-                        </div>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const targetCount = editingCountKey === `${row.baseName}::${row.sizeKey}`
-                              ? parseInt(editingCountValue, 10)
-                              : count;
-                            const groupIds = new Set(row.designs.map(d => d.id));
-                            setSelectedDesignIds(groupIds);
-                            setSelectedDesignId(first.id);
-                            if (targetCount !== count) {
-                              handleSetGroupCount(row, targetCount);
-                            } else if (Number.isInteger(targetCount)) {
-                              setTimeout(() => handleAutoArrangeRef.current({ preserveSelection: true }), 0);
-                            }
-                            setEditingCountKey(null);
-                          }}
-                          className="inline-flex h-7 min-w-0 flex-1 items-center justify-center gap-1 rounded-md border border-fuchsia-400 bg-fuchsia-100 px-1.5 text-[9px] font-bold text-fuchsia-800 shadow-sm shadow-fuchsia-500/20 transition-colors hover:bg-fuchsia-200"
-                          title="Duplicate & Arrange"
-                        >
-                          <Copy className="h-3 w-3" />
-                          <span className="whitespace-nowrap">Duplicate &amp; Arrange</span>
-                        </button>
-                      </div>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleDeleteGroup(row.designs.map(d => d.id)); }}
-                        className="absolute right-2.5 top-2.5 p-0.5 rounded hover:bg-gray-200 text-red-500 hover:text-red-600 transition-colors flex-shrink-0"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ); })}
+                      <LayerRow
+                        key={rowKey}
+                        rowKey={rowKey}
+                        row={row}
+                        handlers={layerHandlers}
+                      />
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -607,22 +581,15 @@ export default function ImageEditorView() {
                   onDesignContextMenu={handleCanvasContextMenu}
                   spotPreviewData={profile.enableFluorescent ? spotPreviewData : undefined}
                   activeSpotChannel={profile.enableFluorescent ? activeSpotChannel : null}
-                  onWandTap={profile.enableFluorescent ? (nx, ny, id) => wandAssignRef.current?.(nx, ny) : undefined}
+                  onWandTap={profile.enableFluorescent ? handleWandTap : undefined}
                   panModeActive={profile.enableFluorescent ? panModeActive : false}
                   onPanModeChange={profile.enableFluorescent ? setPanModeActive : undefined}
                   selectionZoomActive={selectionZoomActive}
-                  onSelectionZoomChange={(active) => {
-                    setSelectionZoomActive(active);
-                    if (active) {
-                      clearActiveChannelRef.current?.();
-                      setPanModeActive(false);
-                      setWandDeleteModeActive(false);
-                    }
-                  }}
+                  onSelectionZoomChange={handleSelectionZoomChange}
                   bottomToolbarContainer={mobileToolbarContainer}
                    wandDeleteActive={wandDeleteModeActive}
                    onWandDeleteTap={handleWandDelete}
-                   onWandDeactivate={() => setWandDeleteModeActive(false)}
+                   onWandDeactivate={handleWandDeactivate}
                 />
               </div>
             </div>
@@ -825,21 +792,14 @@ export default function ImageEditorView() {
               onDesignContextMenu={handleCanvasContextMenu}
               spotPreviewData={profile.enableFluorescent ? spotPreviewData : undefined}
               activeSpotChannel={profile.enableFluorescent ? activeSpotChannel : null}
-              onWandTap={profile.enableFluorescent ? (nx, ny, id) => wandAssignRef.current?.(nx, ny) : undefined}
+              onWandTap={profile.enableFluorescent ? handleWandTap : undefined}
               panModeActive={profile.enableFluorescent ? panModeActive : false}
               onPanModeChange={profile.enableFluorescent ? setPanModeActive : undefined}
               selectionZoomActive={selectionZoomActive}
-              onSelectionZoomChange={(active) => {
-                setSelectionZoomActive(active);
-                if (active) {
-                  clearActiveChannelRef.current?.();
-                  setPanModeActive(false);
-                  setWandDeleteModeActive(false);
-                }
-              }}
+              onSelectionZoomChange={handleSelectionZoomChange}
               wandDeleteActive={wandDeleteModeActive}
               onWandDeleteTap={handleWandDelete}
-              onWandDeactivate={() => setWandDeleteModeActive(false)}
+              onWandDeactivate={handleWandDeactivate}
             />
           </div>
         )}
@@ -867,6 +827,24 @@ export default function ImageEditorView() {
             null,
             { icon: Droplets, label: t("editor.cleanAlpha"), shortcut: '', action: () => { handleThresholdAlpha(); setContextMenu(null); }, disabled: false },
             null,
+            // Group / Ungroup — surfaced conditionally so the menu stays
+            // compact for the common single-design case. `Group` shows
+            // only when 2+ ungrouped designs are selected; `Ungroup`
+            // shows only when the selection contains at least one
+            // grouped design. The Ctrl+G / Ctrl+Shift+G shortcuts follow
+            // Illustrator/Figma conventions users already know.
+            ...(selectedDesignIds.size >= 2 && !selectedHasGroup
+              ? [
+                  { icon: Group, label: t("editor.groupSelected"), shortcut: 'Ctrl+G', action: () => { handleGroupSelected(); setContextMenu(null); }, disabled: false },
+                  null,
+                ]
+              : []),
+            ...(selectedHasGroup
+              ? [
+                  { icon: Ungroup, label: t("editor.ungroupSelected"), shortcut: 'Ctrl+Shift+G', action: () => { handleUngroupSelected(); setContextMenu(null); }, disabled: false },
+                  null,
+                ]
+              : []),
             { icon: LayoutGrid, label: t("editor.selectAll"), shortcut: 'Ctrl+A', action: () => { handleMultiSelect(designs.map(d => d.id)); setContextMenu(null); }, disabled: designs.length === 0 },
             { icon: XCircle, label: t("editor.deselect"), shortcut: 'Esc', action: () => { handleSelectDesign(null); setContextMenu(null); }, disabled: false },
           ] as Array<{ icon: React.ComponentType<any>; label: string; shortcut: string; action: () => void; disabled: boolean } | null>).map((item, i) =>

@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import type { ImageEditorProps } from "./types";
 import { ImageEditorContext } from "./image-editor-context";
 import { useImageEditorModelStateDesign } from "./useImageEditorModelStateDesign";
@@ -86,30 +87,61 @@ function useImageEditorModel(props: ImageEditorProps) {
   const p5 = useImageEditorModelCart({ ...p0, ...p1, ...p2, ...p3, ...p4 });
   const bag = { ...p0, ...p1, ...p2, ...p3, ...p4, ...p5 };
 
-  const handleSetGroupCount = (row: { designs: typeof bag.designs }, targetCount: number) => {
+  // These three handlers used to be plain function declarations recreated
+  // on every provider render — which meant every child that received them
+  // (notably `<EditorActionToolbar>`) got new prop refs on every model
+  // state change, defeating `React.memo` before it could even run its
+  // shallow compare. Wrapping them in `useCallback` with explicit deps
+  // keeps their identity stable when the specific bag fields they
+  // actually read haven't changed.
+  const {
+    saveSnapshot: bagSaveSnapshot,
+    setDesigns: bagSetDesigns,
+    setSelectedDesignIds: bagSetSelectedDesignIds,
+    setSelectedDesignId: bagSetSelectedDesignId,
+    selectedDesignId: bagSelectedDesignId,
+    selectedDesignIds: bagSelectedDesignIds,
+    handleAutoArrangeRef: bagHandleAutoArrangeRef,
+    artboardWidth: bagArtboardWidth,
+    artboardHeight: bagArtboardHeight,
+    designs: bagDesigns,
+  } = bag;
+
+  const handleSetGroupCount = useCallback((row: { designs: typeof bagDesigns }, targetCount: number) => {
     if (!Number.isInteger(targetCount) || targetCount < 1 || targetCount > 200) return;
     const delta = targetCount - row.designs.length;
     if (delta === 0) return;
-    bag.saveSnapshot();
+    bagSaveSnapshot();
     if (delta > 0) {
       const base = row.designs[0];
       const baseName = base.name.replace(/ copy( \d+)?$/, "");
+      // Strip `groupId` from row-count copies. If the source belongs to
+      // a user-defined group, inheriting that `groupId` would collapse
+      // every copy into the same super-item during auto-arrange — and
+      // because all copies start at the base's exact transform, the
+      // super-item bbox is one item's size, so arrange happily places
+      // the group in a tiny slot with N copies stacked on top of each
+      // other. Stripping matches `handleDuplicateDesign`'s behavior for
+      // single-source copies: layer-row "+" is semantically "add N more
+      // of this item to the sheet", not "expand the group", so the new
+      // copies should be free to be placed independently by arrange.
+      const { groupId: _dropGid, ...baseNoGroup } = base;
       const copies = Array.from({ length: delta }, () => ({
-        ...base,
+        ...baseNoGroup,
         id: crypto.randomUUID(),
         name: baseName,
         transform: { ...base.transform },
         printFileName: false,
       }));
-      bag.setDesigns(prev => [...prev, ...copies]);
-      bag.setSelectedDesignIds(new Set([...row.designs.map(d => d.id), ...copies.map(d => d.id)]));
-      bag.setSelectedDesignId(copies[copies.length - 1].id);
+      bagSetDesigns(prev => [...prev, ...copies]);
+      bagSetSelectedDesignIds(new Set([...row.designs.map(d => d.id), ...copies.map(d => d.id)]));
+      bagSetSelectedDesignId(copies[copies.length - 1].id);
     } else {
       const idsToRemove = new Set(row.designs.slice(targetCount).map(d => d.id));
-      bag.setDesigns(prev => prev.filter(d => !idsToRemove.has(d.id)));
-      bag.setSelectedDesignIds(prev => new Set([...prev].filter(id => !idsToRemove.has(id))));
-      if (bag.selectedDesignId && idsToRemove.has(bag.selectedDesignId)) {
-        bag.setSelectedDesignId(row.designs.find(d => !idsToRemove.has(d.id))?.id ?? null);
+      bagSetDesigns(prev => prev.filter(d => !idsToRemove.has(d.id)));
+      bagSetSelectedDesignIds(prev => new Set([...prev].filter(id => !idsToRemove.has(id))));
+      if (bagSelectedDesignId && idsToRemove.has(bagSelectedDesignId)) {
+        bagSetSelectedDesignId(row.designs.find(d => !idsToRemove.has(d.id))?.id ?? null);
       }
     }
     // Wait for the copy list and selection state to commit before arranging.
@@ -120,27 +152,27 @@ function useImageEditorModel(props: ImageEditorProps) {
         // Copy-count changes must repack the whole sheet. The newly created
         // copies are selected for layer feedback, but selected-only arranging
         // would keep every other design fixed and stack copies in one column.
-        bag.handleAutoArrangeRef.current({
+        bagHandleAutoArrangeRef.current({
           skipSnapshot: true,
           preserveSelection: true,
           arrangeAll: true,
         });
       });
     });
-  };
+  }, [bagSaveSnapshot, bagSetDesigns, bagSetSelectedDesignIds, bagSetSelectedDesignId, bagSelectedDesignId, bagHandleAutoArrangeRef]);
 
-  const handleSetRotation = (degrees: number) => {
-    const ids = bag.selectedDesignIds.size > 0
-      ? bag.selectedDesignIds
-      : (bag.selectedDesignId ? new Set([bag.selectedDesignId]) : new Set<string>());
+  const handleSetRotation = useCallback((degrees: number) => {
+    const ids = bagSelectedDesignIds.size > 0
+      ? bagSelectedDesignIds
+      : (bagSelectedDesignId ? new Set([bagSelectedDesignId]) : new Set<string>());
     if (ids.size === 0 || !Number.isFinite(degrees)) return;
     const rotation = ((Math.round(degrees) % 360) + 360) % 360;
-    bag.saveSnapshot();
-    bag.setDesigns(prev => {
+    bagSaveSnapshot();
+    bagSetDesigns(prev => {
       if (ids.size > 1) {
-        const active = prev.find(d => d.id === bag.selectedDesignId);
+        const active = prev.find(d => d.id === bagSelectedDesignId);
         const delta = active ? rotation - active.transform.rotation : 0;
-        const rotated = rotateDesignGroup(prev, ids, delta, bag.artboardWidth, bag.artboardHeight);
+        const rotated = rotateDesignGroup(prev, ids, delta, bagArtboardWidth, bagArtboardHeight);
         if (!rotated) return prev;
         return prev.map(d => {
           const next = rotated.get(d.id);
@@ -150,30 +182,73 @@ function useImageEditorModel(props: ImageEditorProps) {
       return prev.map(d => {
         if (!ids.has(d.id)) return d;
         const next = { ...d, transform: { ...d.transform, rotation } };
-        const { nx, ny } = clampDesignToArtboard(next, bag.artboardWidth, bag.artboardHeight);
+        const { nx, ny } = clampDesignToArtboard(next, bagArtboardWidth, bagArtboardHeight);
         return { ...next, transform: { ...next.transform, nx, ny } };
       });
     });
-  };
+  }, [bagSelectedDesignIds, bagSelectedDesignId, bagSaveSnapshot, bagSetDesigns, bagArtboardWidth, bagArtboardHeight]);
 
-  const handleAlignAxis = (axis: "horizontal" | "vertical") => {
-    const ids = bag.selectedDesignIds.size > 0
-      ? bag.selectedDesignIds
-      : (bag.selectedDesignId ? new Set([bag.selectedDesignId]) : new Set<string>());
-    const targets = bag.designs.filter(d => ids.has(d.id));
+  // Center-align the current selection along one axis.
+  //
+  // Axis naming follows the Lucide / Illustrator / Figma convention that
+  // matches the icons the user sees:
+  //   `axis === "vertical"`   → items share a *vertical* center axis
+  //                              → all get the same X coordinate (`nx`).
+  //                              Icon: `AlignCenterVertical` (dots on a
+  //                              vertical center line).
+  //   `axis === "horizontal"` → items share a *horizontal* center axis
+  //                              → all get the same Y coordinate (`ny`).
+  //                              Icon: `AlignCenterHorizontal`.
+  //
+  // Previous implementation wrote the *other* axis (see git history);
+  // that is why "align vertically" collapsed everything onto one Y line
+  // (looked like a merge) and "align horizontally" barely moved anything
+  // on a tall gangsheet.
+  //
+  // Targeting rules — chosen for predictability in a consumer editor:
+  //   - Zero designs selected → no-op (defensive; the button is disabled
+  //     in that state anyway).
+  //   - One design selected   → snap to the artboard's center line
+  //     (0.5). "Center on sheet" is the intuitive one-item behavior;
+  //     averaging a single value would silently produce a no-op.
+  //   - Two+ designs selected → snap all to the *bounding-box* center
+  //     of the selection along the target axis. Bounding-box center
+  //     `(min + max) / 2` is more predictable than the mean, which
+  //     weights toward clusters and can drift far from the visual
+  //     midpoint of a lopsided selection.
+  const handleAlignAxis = useCallback((axis: "horizontal" | "vertical") => {
+    const ids = bagSelectedDesignIds.size > 0
+      ? bagSelectedDesignIds
+      : (bagSelectedDesignId ? new Set([bagSelectedDesignId]) : new Set<string>());
+    if (ids.size === 0) return;
+    const targets = bagDesigns.filter(d => ids.has(d.id));
     if (targets.length === 0) return;
-    bag.saveSnapshot();
-    const center = targets.reduce(
-      (sum, d) => sum + (axis === "horizontal" ? d.transform.nx : d.transform.ny),
-      0,
-    ) / targets.length;
-    bag.setDesigns(prev => prev.map(d => {
+    bagSaveSnapshot();
+
+    // Field the operation writes: vertical axis → nx; horizontal axis → ny.
+    const field: "nx" | "ny" = axis === "vertical" ? "nx" : "ny";
+
+    let target: number;
+    if (targets.length === 1) {
+      target = 0.5;
+    } else {
+      let min = Infinity;
+      let max = -Infinity;
+      for (const d of targets) {
+        const v = d.transform[field];
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+      target = (min + max) / 2;
+    }
+
+    bagSetDesigns(prev => prev.map(d => {
       if (!ids.has(d.id)) return d;
-      const next = { ...d, transform: { ...d.transform, [axis === "horizontal" ? "nx" : "ny"]: center } };
-      const { nx, ny } = clampDesignToArtboard(next, bag.artboardWidth, bag.artboardHeight);
+      const next = { ...d, transform: { ...d.transform, [field]: target } };
+      const { nx, ny } = clampDesignToArtboard(next, bagArtboardWidth, bagArtboardHeight);
       return { ...next, transform: { ...next.transform, nx, ny } };
     }));
-  };
+  }, [bagSelectedDesignIds, bagSelectedDesignId, bagDesigns, bagSaveSnapshot, bagSetDesigns, bagArtboardWidth, bagArtboardHeight]);
 
   const actionToolbarProps: EditorActionToolbarProps = {
     t: bag.t,

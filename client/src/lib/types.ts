@@ -6,6 +6,11 @@ export interface ImageInfo {
   dpi: number;
   isPDF?: boolean;
   originalPdfData?: ArrayBuffer;
+  /** Full-resolution PNG (post-crop, pre-downsample) preserved for HD export.
+   *  `image` above is capped at MAX_STORED_IMAGE_DIMENSION for preview memory;
+   *  the export path decodes this blob just-in-time to keep 300 DPI at print
+   *  sizes larger than the preview cap. */
+  exportBlob?: Blob;
 }
 
 export interface ResizeSettings {
@@ -49,6 +54,21 @@ export interface DesignItem {
   /** Original pixels kept in memory so resizing never halftones the halftone. */
   halftoneSourceImage?: HTMLImageElement;
   printFileName?: boolean;
+  /**
+   * User-defined group membership. Designs sharing the same `groupId` are
+   * treated as a single unit by:
+   *   - selection (clicking any member selects the whole group)
+   *   - auto-arrange (the group is packed as one super-item whose bounding
+   *     box is preserved so intra-group layout stays intact)
+   *
+   * `undefined` means "not grouped". Empty string is not valid — always
+   * omit the field instead. This design uses a shared id (rather than a
+   * separate `groups: Map<id, Set<id>>` structure) because it round-trips
+   * through the existing snapshot + draft-persistence pipelines without a
+   * migration, and because there is no case in the app where a design
+   * belongs to more than one group at once.
+   */
+  groupId?: string;
 }
 
 export function computeLayerRect(

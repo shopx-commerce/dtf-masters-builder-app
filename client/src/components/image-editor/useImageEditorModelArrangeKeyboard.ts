@@ -11,6 +11,7 @@ import {
 import { DEFAULT_LAYER_CENTER_NX, DEFAULT_LAYER_CENTER_NY } from "./constants";
 import type { ImageInfo, DesignItem } from "@/lib/types";
 import type { ImageEditorBagAfterDesign } from "./image-editor-hook-bag.types";
+import { useSelectionActions } from "@/state/selection-store";
 
 export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesign) {
   // Only the bag fields this hook's arrange/keyboard/artboard logic actually uses are
@@ -42,8 +43,6 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     setSelectedDesignId,
     selectedDesignIds,
     setSelectedDesignIds,
-    showDesignInfo,
-    setShowDesignInfo,
     mountedRef,
     designsRef,
     ensureDesignImagesAvailable,
@@ -59,7 +58,17 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     handleDeleteDesign,
     handleDeleteMulti,
     handleRotate90,
+    handleGroupSelected,
+    handleUngroupSelected,
   } = bag;
+  // Atomic single-select action from the Zustand store. We reach into
+  // the store directly (rather than routing through
+  // `useImageEditorModelStateDesign`'s `handleSelectDesign`) because
+  // `handleSelectDesign` auto-expands to group members — the wrong
+  // behaviour for `applyImageDirectly`, which needs to select *only*
+  // the newly-created design and stomp any stale ids from a prior
+  // group selection.
+  const { selectOne } = useSelectionActions();
   const handleArtboardResizeRef = useRef<(newWidth: number, newHeight: number) => void>(() => {});
 
   const getAlignNxNy = useCallback((corner: 'tl' | 'tr' | 'bl' | 'br') => {
@@ -192,11 +201,72 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       return fill;
     };
 
-    const items = designsToArrange.map(d => {
-      const w = d.widthInches * d.transform.s;
-      const h = getEffectiveHeight(d);
-      return { id: d.id, w, h, fill: getContentFill(d) };
-    });
+    // Group-aware item construction.
+    //
+    // A `DesignItem.groupId` marks user-defined groups (see types.ts).
+    // Auto-arrange treats each group as a single "super-item" so the
+    // packer preserves the intra-group layout while still packing the
+    // group as a unit against the rest of the sheet.
+    //
+    // Super-item id convention: `group:${groupId}`. Post-processing keys
+    // off this prefix to map the returned placement back to every group
+    // member and apply the same translation delta.
+    //
+    // Design decision: super-items are passed with rotation 0 and the
+    // arrange worker is *not* prevented from rotating them (the worker
+    // API doesn't currently expose a per-item no-rotate flag). To keep
+    // group semantics predictable, we ignore rotation from the worker
+    // for super-items in `applyResult` — the group's members retain
+    // their individual rotations and only translate. This is the same
+    // guarantee the multi-drag path already gives users, so it feels
+    // consistent.
+    const GROUP_PREFIX = "group:";
+    type GroupBBox = {
+      minX: number; minY: number; maxX: number; maxY: number;
+      members: DesignItem[];
+    };
+    const groups = new Map<string, GroupBBox>();
+    const nonGrouped: DesignItem[] = [];
+    for (const d of designsToArrange) {
+      if (d.groupId) {
+        const t = d.transform;
+        const bounds = getRotatedBounds(d);
+        const cx = t.nx * usableW;
+        const cy = t.ny * usableH;
+        const minX = cx + bounds.minX, maxX = cx + bounds.maxX;
+        const minY = cy + bounds.minY, maxY = cy + bounds.maxY;
+        const g = groups.get(d.groupId);
+        if (g) {
+          if (minX < g.minX) g.minX = minX;
+          if (minY < g.minY) g.minY = minY;
+          if (maxX > g.maxX) g.maxX = maxX;
+          if (maxY > g.maxY) g.maxY = maxY;
+          g.members.push(d);
+        } else {
+          groups.set(d.groupId, { minX, minY, maxX, maxY, members: [d] });
+        }
+      } else {
+        nonGrouped.push(d);
+      }
+    }
+
+    const items = [
+      ...nonGrouped.map(d => ({
+        id: d.id,
+        w: d.widthInches * d.transform.s,
+        h: getEffectiveHeight(d),
+        fill: getContentFill(d),
+      })),
+      ...Array.from(groups.entries()).map(([gid, g]) => ({
+        id: `${GROUP_PREFIX}${gid}`,
+        w: g.maxX - g.minX,
+        h: g.maxY - g.minY,
+        // Fill=1.0 keeps groups from being treated as sparse; empty regions
+        // between group members are intentional and shouldn't invite the
+        // packer to slot other items in.
+        fill: 1.0,
+      })),
+    ];
 
     const fixedRects: Array<{ x: number; y: number; w: number; h: number }> | undefined = arrangeSelection
       ? currentDesigns.filter(d => !selectedDesignIds.has(d.id)).map(d => {
@@ -224,14 +294,64 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       }
       const abW = artboardWidthRef.current;
       const abH = artboardHeightRef.current;
+
+      // Build a per-design delta map from the worker's placements.
+      // Non-grouped: identify by exact id, adopt the worker's rotation.
+      // Grouped   : identify via the `group:` prefix, adopt only the
+      //             translation delta so intra-group layout survives.
+      type DesignDelta = {
+        nx: number;
+        ny: number;
+        rotation: number | null; // null → keep the design's current rotation
+        overflows: boolean;
+      };
+      const deltas = new Map<string, DesignDelta>();
+      for (const placed of bestResult) {
+        if (placed.id.startsWith(GROUP_PREFIX)) {
+          const gid = placed.id.slice(GROUP_PREFIX.length);
+          const g = groups.get(gid);
+          if (!g) continue;
+          // Worker returns the *center* of the super-item's bounding box
+          // in normalised coords. Compute the delta between the group's
+          // old and new bbox centers in normalised space, then shift
+          // every member by that delta.
+          const oldCx = (g.minX + g.maxX) / 2;
+          const oldCy = (g.minY + g.maxY) / 2;
+          const newCx = placed.nx * abW;
+          const newCy = placed.ny * abH;
+          const dnx = (newCx - oldCx) / abW;
+          const dny = (newCy - oldCy) / abH;
+          for (const m of g.members) {
+            deltas.set(m.id, {
+              nx: m.transform.nx + dnx,
+              ny: m.transform.ny + dny,
+              rotation: null,
+              overflows: placed.overflows,
+            });
+          }
+        } else {
+          deltas.set(placed.id, {
+            nx: placed.nx,
+            ny: placed.ny,
+            rotation: placed.rotation,
+            overflows: placed.overflows,
+          });
+        }
+      }
+
       setDesigns(prev => prev.map(d => {
-        const p = bestResult.find(r => r.id === d.id);
-        if (!p) return d;
-        const finalRotation = p.rotation % 360;
+        const delta = deltas.get(d.id);
+        if (!delta) return d;
+        const finalRotation = delta.rotation === null
+          ? d.transform.rotation
+          : delta.rotation % 360;
         const stampExtra = getStampExtra(d);
-        let adjustedNx = p.nx;
-        let adjustedNy = p.ny;
-        if (stampExtra > 0) {
+        let adjustedNx = delta.nx;
+        let adjustedNy = delta.ny;
+        if (stampExtra > 0 && delta.rotation !== null) {
+          // Stamp-extra offset only makes sense when the packer chose the
+          // rotation. For group members (rotation preserved), skip it —
+          // the design's current position already accounts for its stamp.
           const rad = (finalRotation * Math.PI) / 180;
           adjustedNx -= (stampExtra / 2) * Math.sin(rad) / abW;
           adjustedNy -= (stampExtra / 2) * Math.cos(rad) / abH;
@@ -447,7 +567,6 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         return ng.wastedArea <= rg.wastedArea ? ng : rg;
       };
       const ev = (p: { result: PlacedItem[]; maxHeight: number; wastedArea: number }) => ({ ...p, overflows: p.result.filter(r => r.overflows).length });
-      const totalItemArea = items.reduce((sum, d) => sum + d.w * d.h, 0);
       const byAreaDesc = [...items].sort((a, b) => (b.w * b.h) - (a.w * a.h));
       const altArr: typeof items = [];
       for (let lo = 0, hi = byAreaDesc.length - 1; lo <= hi;) { altArr.push(byAreaDesc[lo++]); if (lo <= hi) altArr.push(byAreaDesc[hi--]); }
@@ -480,13 +599,14 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         const gr = gridPack(g);
         if (gr) cands.push(ev(gr));
       }
+      // Height-first candidate sort — mirrors `arrange-worker.ts`.
+      // See the extended comment on the worker's sort for rationale; the
+      // fallback path had the same "utilisation threshold masks small
+      // height wins" bug and needs the same simplified priority.
       cands.sort((a, b) => {
         if (a.overflows !== b.overflows) return a.overflows - b.overflows;
         const af = a.maxHeight <= usableH ? 0 : 1, bf = b.maxHeight <= usableH ? 0 : 1;
         if (af !== bf) return af - bf;
-        const aU = totalItemArea / (usableW * Math.max(a.maxHeight, 0.01));
-        const bU = totalItemArea / (usableW * Math.max(b.maxHeight, 0.01));
-        if (Math.abs(aU - bU) > 0.02) return bU - aU;
         if (Math.abs(a.maxHeight - b.maxHeight) > 0.01) return a.maxHeight - b.maxHeight;
         return a.wastedArea - b.wastedArea;
       });
@@ -553,10 +673,12 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
   handlePasteRef.current = handlePaste;
   const handleRotate90Ref = useRef(handleRotate90);
   handleRotate90Ref.current = handleRotate90;
+  const handleGroupSelectedRef = useRef(handleGroupSelected);
+  handleGroupSelectedRef.current = handleGroupSelected;
+  const handleUngroupSelectedRef = useRef(handleUngroupSelected);
+  handleUngroupSelectedRef.current = handleUngroupSelected;
   const selectedDesignIdRef = useRef(selectedDesignId);
   selectedDesignIdRef.current = selectedDesignId;
-  const showDesignInfoRef = useRef(showDesignInfo);
-  showDesignInfoRef.current = showDesignInfo;
   const saveSnapshotRef = useRef(saveSnapshot);
   saveSnapshotRef.current = saveSnapshot;
   artboardWidthRef.current = artboardWidth;
@@ -600,6 +722,21 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
           setSelectedDesignIds(new Set(allIds));
           setSelectedDesignId(allIds[allIds.length - 1]);
         }
+        return;
+      }
+      // Group / Ungroup — Ctrl+G groups the current multi-selection,
+      // Ctrl+Shift+G ungroups the selection. Order matters: check
+      // Shift+G first so Ctrl+G alone doesn't accidentally trigger both
+      // paths. `key.toLowerCase()` handles capitals-lock without a
+      // separate branch.
+      if (ctrl && e.shiftKey && e.key.toLowerCase() === 'g') {
+        e.preventDefault();
+        handleUngroupSelectedRef.current();
+        return;
+      }
+      if (ctrl && !e.shiftKey && e.key.toLowerCase() === 'g') {
+        e.preventDefault();
+        handleGroupSelectedRef.current();
         return;
       }
       if (ctrl && e.key === 'd') {
@@ -833,7 +970,18 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       ...(alphaThresholded ? { alphaThresholded: true } : {}),
     };
     setDesigns(prev => [...prev, newDesignItem]);
-    setSelectedDesignId(newDesignId);
+    // Atomic single-select. Using `setSelectedDesignId` alone would set
+    // the primary id but leave `selectedDesignIds` untouched — if a
+    // group was selected before the upload (which is trivially easy
+    // now that group selection auto-expands the ids set), the stale
+    // ids set survives and every downstream check that reads
+    // `selectedDesignIds.size >= 2` (auto-arrange's "arrange
+    // selection" branch, the multi-resize / multi-drag handlers, the
+    // context-menu multi-delete path) sees a phantom multi-selection
+    // and mis-targets the *old* group instead of the newly uploaded
+    // design. `selectOne` writes both fields in a single store
+    // transaction so downstream reads always see a consistent pair.
+    selectOne(newDesignId);
   }, [saveSnapshot, toast]);
 
 
@@ -856,7 +1004,6 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     handlePasteRef,
     handleRotate90Ref,
     selectedDesignIdRef,
-    showDesignInfoRef,
     saveSnapshotRef,
     selectedDesignIdsRef,
     applyImageDirectly,

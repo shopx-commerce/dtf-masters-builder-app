@@ -26,6 +26,7 @@ export interface StoredDraftDesign {
   dpi: number;
   isPDF?: boolean;
   originalPdfData?: ArrayBuffer;
+  groupId?: string;
 }
 
 export interface EditorDraft {
@@ -53,15 +54,43 @@ function canUseIndexedDb(): boolean {
   return typeof window !== "undefined" && typeof window.indexedDB !== "undefined";
 }
 
+// Cached IDB connection. Opening and closing the database on every save adds
+// tens of milliseconds and blocks the next save until the previous one has
+// fully committed. Reusing a single connection avoids that, and the
+// `versionchange` handler lets another tab upgrade the schema by dropping our
+// hold so we don't block the upgrade indefinitely.
+let _cachedDb: IDBDatabase | null = null;
+let _cachedDbPromise: Promise<IDBDatabase> | null = null;
+
+function releaseCachedDatabase() {
+  if (_cachedDb) {
+    try { _cachedDb.close(); } catch { /* already closed */ }
+  }
+  _cachedDb = null;
+  _cachedDbPromise = null;
+}
+
 function openDatabase(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
+  if (_cachedDb) return Promise.resolve(_cachedDb);
+  if (_cachedDbPromise) return _cachedDbPromise;
+  _cachedDbPromise = new Promise<IDBDatabase>((resolve, reject) => {
     if (!canUseIndexedDb()) {
       reject(new Error("IndexedDB is not available"));
       return;
     }
     const request = window.indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
-    request.onerror = () => reject(request.error ?? new Error("Could not open draft storage"));
-    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => {
+      _cachedDbPromise = null;
+      reject(request.error ?? new Error("Could not open draft storage"));
+    };
+    request.onsuccess = () => {
+      const database = request.result;
+      database.onversionchange = () => releaseCachedDatabase();
+      database.onclose = () => { if (_cachedDb === database) releaseCachedDatabase(); };
+      _cachedDb = database;
+      _cachedDbPromise = null;
+      resolve(database);
+    };
     request.onupgradeneeded = () => {
       const database = request.result;
       if (!database.objectStoreNames.contains(DRAFT_STORE)) {
@@ -72,6 +101,7 @@ function openDatabase(): Promise<IDBDatabase> {
       }
     };
   });
+  return _cachedDbPromise;
 }
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
@@ -83,26 +113,18 @@ function requestResult<T>(request: IDBRequest<T>): Promise<T> {
 
 export async function getCurrentEditorDraft(): Promise<EditorDraft | null> {
   const database = await openDatabase();
-  try {
-    const transaction = database.transaction(DRAFT_STORE, "readonly");
-    return await requestResult<EditorDraft | undefined>(
-      transaction.objectStore(DRAFT_STORE).get(CURRENT_DRAFT_KEY),
-    ).then(value => value ?? null);
-  } finally {
-    database.close();
-  }
+  const transaction = database.transaction(DRAFT_STORE, "readonly");
+  return await requestResult<EditorDraft | undefined>(
+    transaction.objectStore(DRAFT_STORE).get(CURRENT_DRAFT_KEY),
+  ).then(value => value ?? null);
 }
 
 export async function getDraftFile(key: string): Promise<DraftFileRecord | null> {
   const database = await openDatabase();
-  try {
-    const transaction = database.transaction(FILE_STORE, "readonly");
-    return await requestResult<DraftFileRecord | undefined>(
-      transaction.objectStore(FILE_STORE).get(key),
-    ).then(value => value ?? null);
-  } finally {
-    database.close();
-  }
+  const transaction = database.transaction(FILE_STORE, "readonly");
+  return await requestResult<DraftFileRecord | undefined>(
+    transaction.objectStore(FILE_STORE).get(key),
+  ).then(value => value ?? null);
 }
 
 export function isRecoverableImageInfo(info: ImageInfo | null | undefined): boolean {
@@ -165,37 +187,29 @@ export async function saveCurrentEditorDraft(
   files: DraftFileRecord[],
 ): Promise<void> {
   const database = await openDatabase();
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const transaction = database.transaction([DRAFT_STORE, FILE_STORE], "readwrite");
-      transaction.onerror = () => reject(transaction.error ?? new Error("Could not save editor draft"));
-      transaction.oncomplete = () => resolve();
-      transaction.objectStore(DRAFT_STORE).put(draft, CURRENT_DRAFT_KEY);
-      const fileStore = transaction.objectStore(FILE_STORE);
-      for (const file of files) fileStore.put(file);
-    });
-  } finally {
-    database.close();
-  }
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction([DRAFT_STORE, FILE_STORE], "readwrite");
+    transaction.onerror = () => reject(transaction.error ?? new Error("Could not save editor draft"));
+    transaction.oncomplete = () => resolve();
+    transaction.objectStore(DRAFT_STORE).put(draft, CURRENT_DRAFT_KEY);
+    const fileStore = transaction.objectStore(FILE_STORE);
+    for (const file of files) fileStore.put(file);
+  });
 }
 
 export async function deleteCurrentEditorDraft(): Promise<void> {
   const database = await openDatabase();
-  try {
-    const draft = await getCurrentEditorDraftFromDatabase(database);
-    await new Promise<void>((resolve, reject) => {
-      const transaction = database.transaction([DRAFT_STORE, FILE_STORE], "readwrite");
-      transaction.onerror = () => reject(transaction.error ?? new Error("Could not delete editor draft"));
-      transaction.oncomplete = () => resolve();
-      transaction.objectStore(DRAFT_STORE).delete(CURRENT_DRAFT_KEY);
-      if (draft) {
-        const fileStore = transaction.objectStore(FILE_STORE);
-        for (const design of draft.designs) fileStore.delete(design.fileKey);
-      }
-    });
-  } finally {
-    database.close();
-  }
+  const draft = await getCurrentEditorDraftFromDatabase(database);
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction([DRAFT_STORE, FILE_STORE], "readwrite");
+    transaction.onerror = () => reject(transaction.error ?? new Error("Could not delete editor draft"));
+    transaction.oncomplete = () => resolve();
+    transaction.objectStore(DRAFT_STORE).delete(CURRENT_DRAFT_KEY);
+    if (draft) {
+      const fileStore = transaction.objectStore(FILE_STORE);
+      for (const design of draft.designs) fileStore.delete(design.fileKey);
+    }
+  });
 }
 
 async function getCurrentEditorDraftFromDatabase(database: IDBDatabase): Promise<EditorDraft | null> {
@@ -215,6 +229,65 @@ export async function requestPersistentEditorStorage(): Promise<void> {
 
 function fileSignature(file: File): string {
   return `${file.name}:${file.size}:${file.lastModified}:${file.type}`;
+}
+
+/**
+ * Cheap structural signature of the editor state that would be written to
+ * IndexedDB. Callers cache the last-emitted signature and skip the debounced
+ * save when it matches — React re-renders often produce a new `designs`
+ * Array reference without any observable field changing, and saving those
+ * to disk is pure overhead.
+ *
+ * Include every field that appears in `StoredDraftDesign` **except** binary
+ * payloads (PDF bytes, image blobs) — those are keyed by `fileSignature`, so
+ * changes to them are already captured by the surrounding metadata.
+ */
+export function computeDraftSignature(
+  profileId: string,
+  designs: DesignItem[],
+  artboardWidth: number,
+  artboardHeight: number,
+  quantity: number,
+  designGap: number,
+  selectedDesignId: string | null,
+  selectedDesignIds: Set<string>,
+): string {
+  const parts: string[] = [
+    profileId,
+    String(artboardWidth),
+    String(artboardHeight),
+    String(quantity),
+    String(designGap),
+    selectedDesignId ?? "",
+    Array.from(selectedDesignIds).sort().join(","),
+  ];
+  for (const design of designs) {
+    const info = design.imageInfo;
+    const t = design.transform;
+    parts.push([
+      design.id,
+      design.name,
+      t.nx, t.ny, t.s, t.rotation,
+      t.flipX ? 1 : 0,
+      t.flipY ? 1 : 0,
+      design.widthInches,
+      design.heightInches,
+      design.originalDPI,
+      design.alphaThresholded ? 1 : 0,
+      design.halftoned ? 1 : 0,
+      design.halftoneSettings
+        ? `${design.halftoneSettings.color.r},${design.halftoneSettings.color.g},${design.halftoneSettings.color.b},${design.halftoneSettings.strength}`
+        : "-",
+      design.printFileName ? 1 : 0,
+      design.groupId ?? "",
+      fileSignature(info.file),
+      info.originalWidth,
+      info.originalHeight,
+      info.dpi,
+      info.isPDF ? 1 : 0,
+    ].join(":"));
+  }
+  return parts.join("|");
 }
 
 export function buildEditorDraft(
@@ -250,6 +323,7 @@ export function buildEditorDraft(
       halftoned: design.halftoned,
       halftoneSettings: design.halftoneSettings,
       printFileName: design.printFileName,
+      groupId: design.groupId,
       fileKey,
       fileName: file.name,
       fileType: file.type || "application/octet-stream",
@@ -304,6 +378,7 @@ export async function restoreEditorDraft(draft: EditorDraft): Promise<{
       halftoned: stored.halftoned,
       halftoneSettings: stored.halftoneSettings,
       printFileName: stored.printFileName,
+      groupId: stored.groupId,
     });
   }
 

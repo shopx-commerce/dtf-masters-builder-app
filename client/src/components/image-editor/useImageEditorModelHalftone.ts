@@ -1,29 +1,8 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import type { ImageInfo, HalftoneSettings, HalftoneStrength } from "@/lib/types";
+import { applyHalftoneScreen } from "@/lib/halftone-core";
+import { runHalftone } from "@/lib/halftone";
 import type { ImageEditorBagAfterUploadCrop } from "./image-editor-hook-bag.types";
-
-// ── OKLab colour conversion (matches reference app srgbToOklab) ──────────────
-const SRGB_LINEAR_LUT = (() => {
-  const t = new Float32Array(256);
-  for (let i = 0; i < 256; i++) {
-    const c = i / 255;
-    t[i] = c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-  }
-  return t;
-})();
-
-function srgbToOklab(r: number, g: number, b: number): [number, number, number] {
-  const lr = SRGB_LINEAR_LUT[r], lg = SRGB_LINEAR_LUT[g], lb = SRGB_LINEAR_LUT[b];
-  const l = 0.4122214708*lr + 0.5363325363*lg + 0.0514459929*lb;
-  const m = 0.2119034982*lr + 0.6806995451*lg + 0.1073969566*lb;
-  const s = 0.0883024619*lr + 0.2817188376*lg + 0.6299787005*lb;
-  const lc = Math.cbrt(l), mc = Math.cbrt(m), sc = Math.cbrt(s);
-  return [
-    0.2104542553*lc + 0.7936177850*mc - 0.0040720468*sc,
-    1.9779984951*lc - 2.4285922050*mc + 0.4505937099*sc,
-    0.0259040371*lc + 0.7827717662*mc - 0.8086757660*sc,
-  ];
-}
 
 /** Apply 1-bit alpha threshold to an ImageInfo, returning a cleaned copy.
  *  Used by handleApplyHalftone to eliminate semi-transparent pixels that can
@@ -81,12 +60,14 @@ export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) 
    * https://buywitheze-droid.github.io/Halftone/
    *
    * Pipeline:
-   *  1. Resize to 300 DPI (prevents main-thread freeze on high-res images)
-   *  2. Compute tone[i] via luminance (black garment) or OKLab distance
-   *  3. Build rotated AM dot grid (35 LPI, 22.5° angle)
-   *  4. Composite: finalAlpha = min(baseAlpha, screenAlpha)
-   *  5. 1-bit alpha threshold (T=128) → output is always 0 or 255
-   *  6. Verify no semi-transparent pixels leaked through canvas premult round-trip
+   *  1. Resize to 300 DPI on the main thread (needs HTMLImageElement + canvas)
+   *  2. Read the resized pixels and hand the buffer off to `halftone-worker`
+   *     which computes tone/screen/composite/1-bit threshold on a background
+   *     thread. A main-thread fallback runs if the worker is unavailable so
+   *     the pipeline is identical either way.
+   *  3. `putImageData` and re-read to eliminate ±1 drift from canvas
+   *     premultiplied-alpha round-trip
+   *  4. Encode PNG blob → HTMLImageElement and swap into the design
    */
   const handleApplyHalftone = useCallback((
     designId: string,
@@ -110,27 +91,12 @@ export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) 
     // scale. Otherwise resizing with the corner handle changes the printed dot
     // pitch even though the source artwork has not changed.
     const printWidthInches = Math.max(0.01, design.widthInches * Math.abs(design.transform.s || 1));
-    const LPI   = 35;
-    const ANGLE = 22.5 * Math.PI / 180;
-    // ── Strength presets (source: INTENSITIES.negra in reference app) ──────────
-    //   light:    bc=0,  wc=80  | tol=25, feather=22
-    //   balanced: bc=27, wc=132 | tol=40, feather=30
-    //   strong:   bc=54, wc=174 | tol=55, feather=38
-    const isBlack = tr < 5 && tg < 5 && tb < 5;
-    let blackCut: number, whiteCut: number, tolUI: number, featherUI: number;
-    if (strength === 'light')        { blackCut = 0;  whiteCut = 80;  tolUI = 25; featherUI = 22; }
-    else if (strength === 'strong')  { blackCut = 54; whiteCut = 174; tolUI = 55; featherUI = 38; }
-    else                             { blackCut = 27; whiteCut = 132; tolUI = 40; featherUI = 30; }
-    const denom  = Math.max(1, whiteCut - blackCut);
-    const TOL    = tolUI    / 200; // OKLab units (UI_TO_OK = 1/200)
-    const FEATHER= featherUI / 200;
-    const UPPER  = TOL + FEATHER;
 
     // ── 1. Resize to the final printed resolution then read pixels ─────────────
     // The halftone raster must represent the size that will actually be printed.
-    // This is especially important when the design is made smaller: a source
-    // screen generated at 300 DPI would otherwise be downscaled and its dots
-    // would become too fine.
+    // Downscaling AFTER the halftone runs would blur the dot pattern; upscaling
+    // AFTER would produce ragged dots. Sizing the source here keeps the dot
+    // pitch at 35 LPI regardless of subsequent transform.
     const TARGET_DPI = 300;
     let procW: number, procH: number;
     if (printWidthInches > 0) {
@@ -141,11 +107,6 @@ export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) 
       procW = Math.max(1, Math.round(w * scale));
       procH = Math.max(1, Math.round(h * scale));
     }
-    const effectiveDpi = Math.min(procW / printWidthInches, 300);
-    const MIN_DOT = (0.20 / 25.4) * effectiveDpi; // 0.20 mm in pixels
-    const cell  = Math.max(2, effectiveDpi / LPI);
-    const maxR  = cell * 0.72;
-    const ca = Math.cos(ANGLE), sa = Math.sin(ANGLE);
 
     const cvs = document.createElement('canvas');
     cvs.width = procW; cvs.height = procH;
@@ -173,161 +134,104 @@ export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) 
       ctx.drawImage(src, 0, 0, procW, procH);
     }
 
-    const imgData = ctx.getImageData(0, 0, procW, procH);
-    const data = imgData.data;
-    const N = procW * procH;
-
-    // ── 2. Save base alpha + compute tone ─────────────────────────────────────
-    const baseAlpha = new Uint8ClampedArray(N);
-    for (let i = 0; i < N; i++) baseAlpha[i] = data[i * 4 + 3];
-
-    const tone = new Float32Array(N);
-    if (isBlack) {
-      for (let i = 0; i < N; i++) {
-        const o = i * 4;
-        const lum = 0.2126 * data[o] + 0.7152 * data[o+1] + 0.0722 * data[o+2];
-        let v = (lum - blackCut) / denom;
-        if (v < 0) v = 0; else if (v > 1) v = 1;
-        tone[i] = v;
-      }
-    } else {
-      const gLab = srgbToOklab(tr, tg, tb);
-      for (let i = 0; i < N; i++) {
-        const o = i * 4;
-        const pLab = srgbToOklab(data[o], data[o+1], data[o+2]);
-        const dL = pLab[0]-gLab[0], da = pLab[1]-gLab[1], db = pLab[2]-gLab[2];
-        const dist = Math.sqrt(dL*dL + da*da + db*db);
-        let v: number;
-        if (dist <= TOL) v = 0;
-        else if (dist >= UPPER) v = 1;
-        else v = (dist - TOL) / FEATHER;
-        tone[i] = v;
-      }
-    }
-
-    // ── 3. Build AM halftone screen ────────────────────────────────────────────
-    // ALL 2-D loops use procW/procH — NOT the original w/h — because the arrays
-    // are sized N = procW*procH.  Using original dimensions reads wrong indices.
-    const cx = procW * 0.5, cy = procH * 0.5;
-
-    let minRX = Infinity, maxRX = -Infinity, minRY = Infinity, maxRY = -Infinity;
-    for (const [xc, yc] of [[-cx,-cy],[procW-cx,-cy],[-cx,procH-cy],[procW-cx,procH-cy]] as [number,number][]) {
-      const xr =  xc*ca + yc*sa, yr = -xc*sa + yc*ca;
-      if (xr < minRX) minRX = xr; if (xr > maxRX) maxRX = xr;
-      if (yr < minRY) minRY = yr; if (yr > maxRY) maxRY = yr;
-    }
-    const nx2 = Math.ceil(-minRX / cell - 0.5);
-    const ny2 = Math.ceil(-minRY / cell - 0.5);
-    const oX = (nx2 + 0.5) * cell;
-    const oY = (ny2 + 0.5) * cell;
-    const cellsX = Math.ceil((maxRX + oX) / cell) + 2;
-    const cellsY = Math.ceil((maxRY + oY) / cell) + 2;
-    const totalCells = cellsX * cellsY;
-
-    const sums           = new Float64Array(totalCells);
-    const counts         = new Uint32Array(totalCells);
-    const hasTransparent = new Uint8Array(totalCells);
-
-    for (let y = 0; y < procH; y++) {
-      const yc = y - cy;
-      for (let x = 0; x < procW; x++) {
-        const xc = x - cx;
-        const xr =  xc*ca + yc*sa + oX, yr = -xc*sa + yc*ca + oY;
-        const ix = (xr / cell) | 0, iy = (yr / cell) | 0;
-        if (ix < 0 || iy < 0 || ix >= cellsX || iy >= cellsY) continue;
-        const idx = iy * cellsX + ix;
-        const ba = baseAlpha[y * procW + x];
-        if (ba < 1) { hasTransparent[idx] = 1; }
-        else { sums[idx] += tone[y * procW + x]; counts[idx]++; }
-      }
-    }
-
-    const radii = new Float32Array(totalCells);
-    for (let i = 0; i < totalCells; i++) {
-      if (!counts[i]) continue;
-      if (hasTransparent[i]) { radii[i] = maxR; continue; }
-      const avg = sums[i] / counts[i];
-      let r = Math.sqrt(avg) * maxR;
-      if (r < MIN_DOT) r = 0;
-      radii[i] = r;
-    }
-
-    const screenAlpha = new Uint8ClampedArray(N);
-    for (let y = 0; y < procH; y++) {
-      const yc = y - cy;
-      for (let x = 0; x < procW; x++) {
-        const o = y * procW + x;
-        const t = tone[o];
-        if (t >= 0.999) { screenAlpha[o] = 255; continue; }
-        if (t <= 0.001) { continue; }
-        const xc = x - cx;
-        const xr =  xc*ca + yc*sa + oX, yr = -xc*sa + yc*ca + oY;
-        const ix = (xr / cell) | 0, iy = (yr / cell) | 0;
-        if (ix < 0 || iy < 0 || ix >= cellsX || iy >= cellsY) continue;
-        const r = radii[iy * cellsX + ix];
-        if (r <= 0) continue;
-        const xrc = (ix + 0.5) * cell, yrc = (iy + 0.5) * cell;
-        const dx = xr - xrc, dy = yr - yrc;
-        if (Math.sqrt(dx*dx + dy*dy) <= r) screenAlpha[o] = 255;
-      }
-    }
-
-    // ── 4. Composite + 1-bit threshold ────────────────────────────────────────
-    const T = 128;
-    for (let i = 0; i < N; i++) {
-      let a = baseAlpha[i];
-      if (screenAlpha[i] < a) a = screenAlpha[i];
-      data[i * 4 + 3] = a >= T ? 255 : 0;
-    }
-
-    // ── 5. Commit + verify no semi-transparent pixels survived ────────────────
-    ctx.putImageData(imgData, 0, 0);
-    // Canvas stores pixels as premultiplied alpha; the straight→premult→straight
-    // round-trip can leave ±1 drift on boundary pixels.  One extra pass fixes it.
-    const verify = ctx.getImageData(0, 0, procW, procH);
-    let dirty = false;
-    for (let i = 3; i < verify.data.length; i += 4) {
-      const a = verify.data[i];
-      if (a !== 0 && a !== 255) { dirty = true; break; }
-    }
-    if (dirty) {
-      for (let i = 3; i < verify.data.length; i += 4) {
-        verify.data[i] = verify.data[i] >= 128 ? 255 : 0;
-      }
-      ctx.putImageData(verify, 0, 0);
-    }
-
+    // Snapshot the pre-halftone design state now so an undo issued while the
+    // worker is running still walks back through the pre-halftone state.
     if (!options?.skipSnapshot) saveSnapshot();
-    cvs.toBlob(blob => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      const img = new Image();
-      img.onload = () => {
-        URL.revokeObjectURL(url);
-        if (halftoneJobRef.current.get(designId) !== job) return;
-        const newInfo: ImageInfo = { ...design.imageInfo, image: img };
-        const halftoneSettings: HalftoneSettings = {
-          color: { r: tr, g: tg, b: tb },
+
+    const imgData = ctx.getImageData(0, 0, procW, procH);
+    // Transfer the getImageData buffer into the worker. `imgData` becomes
+    // detached after transfer, but we don't read it again — the transformed
+    // pixels come back as a new ArrayBuffer.
+    const transferBuffer = imgData.data.buffer;
+
+    const finish = async () => {
+      let outBuffer: ArrayBuffer;
+      try {
+        outBuffer = await runHalftone({
+          buffer: transferBuffer,
+          procW,
+          procH,
+          printWidthInches,
+          tr, tg, tb,
           strength,
-        };
-        // halftoned: true  → export pipeline pre-cleans before drawing
-        // alphaThresholded → nearest-neighbour scaling in export so bilinear
-        //   interpolation cannot reintroduce semi-transparent edge pixels
-        setDesigns(prev => prev.map(d => d.id === designId
-          ? {
-              ...d,
-              imageInfo: newInfo,
-              halftoned: true,
-              halftoneSettings,
-              halftoneSourceImage: src,
-              alphaThresholded: true,
+        });
+      } catch {
+        // Worker crashed or timed out mid-request. The canvas still holds
+        // the pre-halftone pixels, so re-read and run the identical math on
+        // the main thread. Same result, just a visible stall for this call.
+        const fallback = ctx.getImageData(0, 0, procW, procH);
+        applyHalftoneScreen({
+          data: fallback.data,
+          procW,
+          procH,
+          printWidthInches,
+          tr, tg, tb,
+          strength,
+        });
+        outBuffer = fallback.data.buffer;
+      }
+
+      if (halftoneJobRef.current.get(designId) !== job) return;
+
+      const outPixels = new Uint8ClampedArray(outBuffer);
+      const outImageData = new ImageData(outPixels, procW, procH);
+      ctx.putImageData(outImageData, 0, 0);
+
+      // Canvas stores pixels as premultiplied alpha; the straight→premult→
+      // straight round-trip can leave ±1 drift on boundary pixels. One extra
+      // pass fixes it. Both the worker and main-thread path produce 1-bit
+      // alpha before this write, so drift is the only source of non-{0,255}.
+      const verify = ctx.getImageData(0, 0, procW, procH);
+      let dirty = false;
+      for (let i = 3; i < verify.data.length; i += 4) {
+        const a = verify.data[i];
+        if (a !== 0 && a !== 255) { dirty = true; break; }
+      }
+      if (dirty) {
+        for (let i = 3; i < verify.data.length; i += 4) {
+          verify.data[i] = verify.data[i] >= 128 ? 255 : 0;
+        }
+        ctx.putImageData(verify, 0, 0);
+      }
+
+      await new Promise<void>((resolve) => {
+        cvs.toBlob(blob => {
+          if (!blob) { resolve(); return; }
+          const url = URL.createObjectURL(blob);
+          const img = new Image();
+          img.onload = () => {
+            URL.revokeObjectURL(url);
+            if (halftoneJobRef.current.get(designId) === job) {
+              const newInfo: ImageInfo = { ...design.imageInfo, image: img };
+              const halftoneSettings: HalftoneSettings = {
+                color: { r: tr, g: tg, b: tb },
+                strength,
+              };
+              // halftoned: true  → export pipeline pre-cleans before drawing
+              // alphaThresholded → nearest-neighbour scaling in export so
+              //   bilinear interpolation cannot reintroduce semi-transparent
+              //   edge pixels
+              setDesigns(prev => prev.map(d => d.id === designId
+                ? {
+                    ...d,
+                    imageInfo: newInfo,
+                    halftoned: true,
+                    halftoneSettings,
+                    halftoneSourceImage: src,
+                    alphaThresholded: true,
+                  }
+                : d));
+              if (selectedDesignId === designId) setImageInfo(newInfo);
             }
-          : d));
-        if (selectedDesignId === designId) setImageInfo(newInfo);
-      };
-      img.onerror = () => URL.revokeObjectURL(url);
-      img.src = url;
-    }, 'image/png');
+            resolve();
+          };
+          img.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+          img.src = url;
+        }, 'image/png');
+      });
+    };
+
+    void finish();
   }, [designs, selectedDesignId, saveSnapshot, setDesigns, setImageInfo]);
 
   // The editor stores physical size separately from the pixels. Rebuild the
