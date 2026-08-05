@@ -160,6 +160,9 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const selZoomRectRef = useRef(selZoomRect);
     selZoomRectRef.current = selZoomRect;
     const canvasAreaRef = useRef<HTMLDivElement>(null);
+    const topRulerRef = useRef<HTMLCanvasElement>(null);
+    const leftRulerRef = useRef<HTMLCanvasElement>(null);
+    const rulerSigRef = useRef('');
     const dpiScaleRef = useRef(BASE_DPI_SCALE);
     const lastImageRef = useRef<string | null>(null);
     /** Start at 0×0 so we never paint a wrong aspect (e.g. 360×360) before the first measure — that was the visible “snap”. */
@@ -3362,6 +3365,132 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       ctx.restore();
     };
 
+    // ---- Rulers: inch tick strips pinned to the top/left edges of the ----
+    // ---- preview area. Overlay-only: they track the sheet's on-screen ----
+    // ---- rect each frame (cheap signature check skips redraws) and    ----
+    // ---- never touch interaction, render, or export code.            ----
+    useEffect(() => {
+      const RULER = 18;
+      let raf = 0;
+
+      const pickSteps = (ppi: number): { minor: number; label: number } => {
+        const candidates = [0.125, 0.25, 0.5, 1, 2, 5, 10, 20];
+        const minor = candidates.find(s => s * ppi >= 7) ?? 20;
+        const label = candidates.find(s => s >= minor && s * ppi >= 26) ?? 20;
+        return { minor, label };
+      };
+
+      const drawStrip = (
+        canvas: HTMLCanvasElement,
+        axis: 'x' | 'y',
+        stripLen: number,          // CSS px length of the strip
+        contentStart: number,      // sheet edge position in area coords
+        contentLen: number,        // sheet length on screen
+        inches: number,            // sheet length in inches
+      ) => {
+        const dpr = window.devicePixelRatio || 1;
+        const w = axis === 'x' ? stripLen : RULER;
+        const h = axis === 'x' ? RULER : stripLen;
+        if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+          canvas.width = Math.round(w * dpr);
+          canvas.height = Math.round(h * dpr);
+        }
+        canvas.style.width = `${w}px`;
+        canvas.style.height = `${h}px`;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = 'rgba(249,250,251,0.94)';
+        ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = '#d1d5db';
+        ctx.beginPath();
+        if (axis === 'x') { ctx.moveTo(0, RULER - 0.5); ctx.lineTo(w, RULER - 0.5); }
+        else { ctx.moveTo(RULER - 0.5, 0); ctx.lineTo(RULER - 0.5, h); }
+        ctx.stroke();
+        if (contentLen <= 0 || inches <= 0) return;
+
+        const ppi = contentLen / inches;
+        const { minor, label } = pickSteps(ppi);
+        // Ruler strip starts at RULER px inside the area, so shift coords.
+        const origin = contentStart - RULER;
+        ctx.fillStyle = '#4b5563';
+        ctx.strokeStyle = '#9ca3af';
+        ctx.font = '8px system-ui, sans-serif';
+        ctx.textBaseline = 'top';
+
+        const drawTick = (inch: number, isLabel: boolean, forceLabelText?: string) => {
+          const pos = origin + inch * ppi;
+          if (pos < -20 || pos > stripLen + 20) return;
+          const len = isLabel ? 7 : inch % (minor * 2) === 0 ? 5 : 3.5;
+          ctx.beginPath();
+          if (axis === 'x') {
+            const px = Math.round(pos) + 0.5;
+            ctx.moveTo(px, RULER - 1);
+            ctx.lineTo(px, RULER - 1 - len);
+          } else {
+            const py = Math.round(pos) + 0.5;
+            ctx.moveTo(RULER - 1, py);
+            ctx.lineTo(RULER - 1 - len, py);
+          }
+          ctx.stroke();
+          if (isLabel) {
+            const text = forceLabelText ?? String(Math.round(inch * 100) / 100);
+            if (axis === 'x') {
+              ctx.textAlign = inch >= inches ? 'right' : 'left';
+              ctx.fillText(text, Math.round(pos) + (inch >= inches ? -2 : 2), 2);
+            } else {
+              ctx.textAlign = 'left';
+              const ty = Math.round(pos) + (inch >= inches ? -9 : 2);
+              ctx.fillText(text, 1, ty);
+            }
+          }
+        };
+
+        for (let inch = 0; inch < inches; inch += minor) {
+          const isLabel = Math.abs(inch / label - Math.round(inch / label)) < 1e-6
+            // Leave room for the exact far-edge label (e.g. "24.5").
+            && (inches - inch) * ppi > 22;
+          drawTick(inch, isLabel);
+        }
+        // Always mark the far edge with its exact value (e.g. 24.5).
+        drawTick(inches, true);
+      };
+
+      const tick = () => {
+        raf = requestAnimationFrame(tick);
+        const area = canvasAreaRef.current;
+        const sheet = canvasRef.current;
+        const topC = topRulerRef.current;
+        const leftC = leftRulerRef.current;
+        if (!area || !sheet || !topC || !leftC) return;
+        const areaRect = area.getBoundingClientRect();
+        const rect = sheet.getBoundingClientRect();
+        if (areaRect.width <= 0 || rect.width <= 0) return;
+        // rect includes the 3px white border on each side, scaled by zoom.
+        const dims = previewDimsRef.current;
+        const scale = dims.width > 0 ? rect.width / (dims.width + 6) : 1;
+        const contentLeft = rect.left - areaRect.left + 3 * scale;
+        const contentTop = rect.top - areaRect.top + 3 * scale;
+        const contentW = rect.width - 6 * scale;
+        const contentH = rect.height - 6 * scale;
+        const sig = [
+          areaRect.width, areaRect.height, contentLeft, contentTop, contentW, contentH,
+          artboardWidth, artboardHeight, window.devicePixelRatio || 1,
+        ].map(v => Math.round(v * 10) / 10).join('|');
+        if (sig === rulerSigRef.current) return;
+        rulerSigRef.current = sig;
+        drawStrip(topC, 'x', Math.max(1, areaRect.width - RULER), contentLeft, contentW, artboardWidth);
+        drawStrip(leftC, 'y', Math.max(1, areaRect.height - RULER), contentTop, contentH, artboardHeight);
+      };
+
+      raf = requestAnimationFrame(tick);
+      return () => {
+        cancelAnimationFrame(raf);
+        rulerSigRef.current = '';
+      };
+    }, [artboardWidth, artboardHeight]);
+
     return (
       <div className="h-full flex flex-col">
         {/* Canvas area - fills available height */}
@@ -3383,6 +3512,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         >
           {previewDims.width > 0 && previewDims.height > 0 ? (
           <>
+          {/* Inch rulers pinned to the top/left edges (overlay only) */}
+          <canvas ref={topRulerRef} className="absolute z-30 pointer-events-none" style={{ left: 18, top: 0 }} />
+          <canvas ref={leftRulerRef} className="absolute z-30 pointer-events-none" style={{ left: 0, top: 18 }} />
+          <div className="absolute z-30 pointer-events-none border-b border-r border-gray-300" style={{ left: 0, top: 0, width: 18, height: 18, background: 'rgba(249,250,251,0.94)' }} />
           <div className="relative" style={{ paddingBottom: 16, paddingRight: 24 }}>
             <div 
               ref={containerRef}
