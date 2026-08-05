@@ -1,0 +1,54 @@
+Canvas & Coordinate System
+Designs are stored in normalized coordinates — position as (nx, ny) fractions of the sheet and scale as inches. The preview canvas is drawn at a dynamic screen DPI (whatever fits the viewport) purely for display. Nothing about the real sheet geometry is tied to screen pixels.
+
+Export always uses 300 DPI hardcoded. So a 22"×30" sheet renders at 6600×9000 px.
+
+PNG Export — Streaming Strips (the key trick)
+A 22"×30" sheet at 300 DPI is ~60 megapixels. No browser can hold that on a single canvas (GPU limit is ~16k–32k px per side, and RAM usage spikes to 4 bytes/pixel = ~240 MB uncompressed).
+
+The solution is in export-worker.ts, running on an OffscreenCanvas in a Web Worker:
+
+The sheet is sliced into vertical strips of 4096 px (STRIP_HEIGHT = 4096)
+Each strip is drawn independently on its own temporary canvas using ctx.drawImage with a Y-offset
+Each strip's raw pixel data is piped through the browser's native CompressionStream (DEFLATE) and appended to a streaming PNG byte sequence
+The strips are assembled into a valid PNG file without ever holding the full image in RAM at once
+The worker posts back a Blob when done — main thread never touches the pixels
+This is why large sheets don't crash the tab on PNG export.
+
+PDF Export — Per-Design Rasterization
+PDF export works differently — it does not try to render the whole sheet at once either:
+
+Each design is individually rasterized at 300 DPI onto a temporary canvas, exported as a PNG, and embedded into the PDF via pdf-lib's pdfDoc.embedPng()
+The page is sized to the sheet dimensions in PDF points (1 pt = 1/72 in)
+Each embedded PNG is drawn at its correct position and size using page.drawImage()
+The canvas is explicitly zeroed (canvas.width = 0) after each design to release GPU memory before the next one
+So RAM usage is bounded by the largest single design, not the whole sheet.
+
+CutContour / Spot Color Layer
+After all designs are placed:
+
+spot-color-vectors.ts traces the cut path for each design as a vector (using the contour pipeline — Marching Squares → Chaikin smoothing → Y-axis flip for PDF coordinate space)
+These paths are injected into the PDF as a CutContour spot color channel (registered as a custom Separation colorspace in the PDF content stream)
+The spot color is written as raw PDF operators directly into the page content — pdf-lib doesn't natively support spot colors so the code injects the PDF syntax manually
+White Underbase Layer
+Generated separately in white-underbase.ts at 150 DPI (half resolution — intentional, halftone averaging makes full-res unnecessary):
+
+All designs are composited into a single silhouette mask at 150 DPI
+Morphological closing (dilation then erosion, radius 2px) bridges halftone dot gaps
+A Euclidean Distance Transform computes per-pixel distance from the transparent edge
+Detail-safe choke erodes the silhouette inward by a configurable amount (default 0.010") — but switches to a thinner fallback (0.002") for thin strokes that would vanish otherwise
+The result is upscaled back to 300 DPI and injected into the PDF as an RDG_WHITE spot color channel, using the same manual PDF operator injection as CutContour
+Download
+Blob → URL.createObjectURL() → hidden <a download> click → browser file save
+
+For multi-sheet jobs, all Blobs are bundled into a ZIP via jszip before the same trigger.
+
+Where Crashes Are Likely Coming From
+Given users are reporting crashes on large sheets, the most probable culprits are:
+
+Cause	Where
+PDF export holds too many embedded PNGs in memory — pdf-lib builds the whole document in RAM before serializing	exportSheetToPdf in image-editor.tsx
+White underbase on a tall sheet at 150 DPI still means ~3300×(height×150) pixels in a typed array — a 150" sheet = 22,500 px × 3300 px = 74MP	white-underbase.ts
+Spot color vector tracing on many complex designs — each contour trace is CPU-bound on the main thread	spot-color-vectors.ts
+ZIP bundling of multiple sheets — all Blobs held in memory simultaneously	jszip call in image-editor.tsx
+The PNG path (strip-based, worker, streaming) is the most crash-resistant. The PDF path is where the real risk is for large sheets with many designs.
