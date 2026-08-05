@@ -109,7 +109,30 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const zoomMaxRef = useRef(zoomMax);
     zoomMaxRef.current = zoomMax;
     const [zoom, setZoom] = useState(1);
-    const zoomDpiTier = useMemo(() => (zoom <= 2 ? 1 : zoom <= 5 ? 2 : 3), [zoom]);
+    // The DPI tier bump (crisper canvas buffer at higher zoom) is deferred
+    // until zoom settles: applying it mid-gesture resizes the canvas buffer
+    // and forces a full composite rebuild on every tier crossing, which makes
+    // wheel/pinch zoom stutter. During the gesture the existing buffer is
+    // simply scaled by CSS; ~160ms after the last zoom change we re-render
+    // one crisp frame at the final tier. Preview-only — exports untouched.
+    const [zoomDpiTier, setZoomDpiTier] = useState(1);
+    const zoomTierTimerRef = useRef<number | null>(null);
+    useEffect(() => {
+      const nextTier = zoom <= 2 ? 1 : zoom <= 5 ? 2 : 3;
+      if (nextTier === zoomDpiTier && zoomTierTimerRef.current == null) return;
+      if (zoomTierTimerRef.current != null) window.clearTimeout(zoomTierTimerRef.current);
+      zoomTierTimerRef.current = window.setTimeout(() => {
+        zoomTierTimerRef.current = null;
+        const z = zoomRef.current;
+        setZoomDpiTier(z <= 2 ? 1 : z <= 5 ? 2 : 3);
+      }, 160);
+      return () => {
+        if (zoomTierTimerRef.current != null) {
+          window.clearTimeout(zoomTierTimerRef.current);
+          zoomTierTimerRef.current = null;
+        }
+      };
+    }, [zoom, zoomDpiTier]);
     const highQualityDetailZoomActive = zoom >= HIGH_QUALITY_DETAIL_ZOOM;
     const [panX, setPanX] = useState(0);
     const [panY, setPanY] = useState(0);
@@ -2806,6 +2829,52 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
     createSpotOverlayCanvasRef.current = createSpotOverlayCanvas;
 
+    // Preview-only mipmap cache: designs are usually drawn far below source
+    // resolution, and letting drawImage downscale a multi-megapixel bitmap on
+    // every composite rebuild / drag frame is the dominant per-draw cost. We
+    // cache a half/quarter/eighth-size copy (power-of-two buckets, so any
+    // final draw downscales at most 2x) and draw from that instead. Export
+    // and cart rendering never touch this path, so production files keep
+    // full source quality.
+    const mipmapCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
+    const MIPMAP_MAX_ENTRIES = 48;
+    const getPreviewDrawSource = useCallback((image: HTMLImageElement, targetW: number, targetH: number): CanvasImageSource => {
+      const sw = image.naturalWidth || image.width;
+      const sh = image.naturalHeight || image.height;
+      if (!sw || !sh || !image.src) return image;
+      const ratio = Math.max(targetW / sw, targetH / sh);
+      // Not shrinking by at least 2x → drawing the source directly is fine.
+      if (!(ratio > 0) || ratio > 0.5) return image;
+      const bucket = Math.min(0.5, Math.max(1 / 8, Math.pow(2, Math.ceil(Math.log2(ratio)))));
+      const key = `${image.src}|${bucket}`;
+      const cache = mipmapCacheRef.current;
+      const hit = cache.get(key);
+      if (hit) {
+        // LRU bump
+        cache.delete(key);
+        cache.set(key, hit);
+        return hit;
+      }
+      const mw = Math.max(1, Math.round(sw * bucket));
+      const mh = Math.max(1, Math.round(sh * bucket));
+      if (mw * mh > 4_000_000) return image;
+      const c = document.createElement('canvas');
+      c.width = mw;
+      c.height = mh;
+      const cx = c.getContext('2d');
+      if (!cx) return image;
+      cx.imageSmoothingEnabled = true;
+      cx.imageSmoothingQuality = 'high';
+      cx.drawImage(image, 0, 0, mw, mh);
+      cache.set(key, c);
+      while (cache.size > MIPMAP_MAX_ENTRIES) {
+        const oldest = cache.keys().next().value;
+        if (oldest == null) break;
+        cache.delete(oldest);
+      }
+      return c;
+    }, []);
+
     const drawSingleDesign = useCallback((ctx: CanvasRenderingContext2D, design: DesignItem, cw: number, ch: number) => {
       const rect = computeLayerRect(
         design.imageInfo.image.width, design.imageInfo.image.height,
@@ -2820,7 +2889,12 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       ctx.translate(cx, cy);
       ctx.rotate((design.transform.rotation * Math.PI) / 180);
       ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
-      ctx.drawImage(design.imageInfo.image, -rect.width / 2, -rect.height / 2, rect.width, rect.height);
+      // Alpha-thresholded designs intentionally draw unsmoothed from source
+      // to keep crisp sticker edges — skip the mipmap for them.
+      const drawSrc = design.alphaThresholded
+        ? design.imageInfo.image
+        : getPreviewDrawSource(design.imageInfo.image, rect.width, rect.height);
+      ctx.drawImage(drawSrc, -rect.width / 2, -rect.height / 2, rect.width, rect.height);
       if (design.printFileName) {
         ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
         const pxPerInch = cw / artboardWidth;
@@ -2834,7 +2908,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         ctx.fillText(displayName, rect.width / 2, rect.height / 2 + marginPx);
       }
       ctx.restore();
-    }, [artboardWidth, artboardHeight]);
+    }, [artboardWidth, artboardHeight, getPreviewDrawSource]);
 
     const selectedDetailDesign = selectedDesignId
       ? designs.find(design => design.id === selectedDesignId) ?? null
@@ -3239,7 +3313,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       // active — the overlay covers the interior, main canvas still draws the
       // selection handles / spot overlay / filename text below.
       if (!showHighQualityDetail) {
-        ctx.drawImage(imageInfo.image, -rect.width / 2, -rect.height / 2, rect.width, rect.height);
+        const drawSrc = selDesign?.alphaThresholded
+          ? imageInfo.image
+          : getPreviewDrawSource(imageInfo.image, rect.width, rect.height);
+        ctx.drawImage(drawSrc, -rect.width / 2, -rect.height / 2, rect.width, rect.height);
       }
       const overlayCanvas = createSpotOverlayCanvasRef.current?.(imageInfo.image) ?? null;
       if (overlayCanvas) {
