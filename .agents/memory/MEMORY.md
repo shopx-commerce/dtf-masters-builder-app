@@ -17,3 +17,4 @@
 - [Spot color input boundary](spot-color-input-boundary.md) — normalize optional extracted-color flags before PDF spot-color tracing.
 - [GitHub branch audit](github-branch-audit.md) — the July feature branch is a stale monolithic snapshot; preserve the current modular pipeline and integration boundaries.
 - [Authenticated GitHub sync](authenticated-github-sync.md) — use the attached GitHub connector when local HTTPS credentials reject fetch/pull.
+- [Gangsheet height lists](gangsheet-height-lists.md) — dedupe + numerically sort Shopify variant height lists before any "next size up" or MAX lookup.
