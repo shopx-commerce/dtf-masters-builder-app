@@ -26,6 +26,25 @@ if (import.meta.env.DEV) {
       (window as any).__stressUpload?.({ count: Math.min(n, 30), dimension: 512 });
     }, 300);
   }
+  // Dev-only: `?copytest=1` uploads one design then clicks "Increase copies"
+  // so the copy-count flow can be verified from a screenshot.
+  if (new URLSearchParams(window.location.search).get("copytest")) {
+    window.setTimeout(() => {
+      (window as any).__stressUpload?.({ count: 1, dimension: 512 });
+    }, 300);
+    // Poll until the layer row exists, then click once.
+    let clicked = false;
+    const poll = window.setInterval(() => {
+      if (clicked) return;
+      const btn = document.querySelector<HTMLButtonElement>('[aria-label="Increase copies"]');
+      if (btn) {
+        clicked = true;
+        window.clearInterval(poll);
+        console.log("[copytest] clicking increase copies");
+        btn.click();
+      }
+    }, 250);
+  }
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

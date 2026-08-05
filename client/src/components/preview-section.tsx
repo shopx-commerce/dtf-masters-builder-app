@@ -3018,6 +3018,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           // Moving companions are drawn per-frame on top of the composite
           // (see below), not baked into it.
           if (movingExcluded?.has(design.id)) continue;
+          drawSingleDesign(dctx, design, cw, ch);
           if (overlappingDesigns.has(design.id)) {
             const rect = computeLayerRect(
               design.imageInfo.image.width, design.imageInfo.image.height,
