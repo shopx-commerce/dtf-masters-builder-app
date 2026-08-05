@@ -8,6 +8,7 @@
 - [Design resize sheet expansion](design-resize-sheet-expansion.md) — promote the gangsheet before applying a manual design height beyond the current bound.
 - [Replicate upscale timeouts](replicate-upscale-timeouts.md) — keep synchronous waits below Replicate’s 60-second header limit and use a separate outer timeout.
 - [Editor draft recovery](editor-draft-recovery.md) — use IndexedDB for debounced editor snapshots and uploaded file blobs so browser resets are recoverable.
+- [Preview render throttling](preview-render-throttling.md) — rAF-throttle continuous zoom/pan commits, immediate-commit one-shot zoom actions, and keep the composite signature out of the per-frame path.
 - [Preview worker boundary](preview-worker-boundary.md) — offload preview-only thumbnails/color work while leaving export and cart rendering unchanged.
 - [Editor file rehydration](editor-file-rehydration.md) — repair invalid image references from IndexedDB once before retrying arrange, export, or cart work.
 - [Local upscale provider](local-upscale-provider.md) — local ncnn-Vulkan inference is the default deployment path with a serialized queue, bounded cache, and alpha restoration.
