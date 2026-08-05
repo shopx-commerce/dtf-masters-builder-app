@@ -104,6 +104,19 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       ).map((l) => [String(l.layerId || ""), l]),
     );
 
+    // Coalesce FileReader.readAsDataURL calls across duplicates. When 20
+    // copies of the same design ship in one payload we must only re-read the
+    // File once — reading a several-MB base64 dataURL is measurably expensive.
+    const fileReadCache = new Map<File, Promise<string>>();
+    const readFileOnce = (file: File): Promise<string> => {
+      let p = fileReadCache.get(file);
+      if (!p) {
+        p = fileToDataUrl(file);
+        fileReadCache.set(file, p);
+      }
+      return p;
+    };
+
     const layerAssets = await Promise.all(
       currentDesigns.map(async (d) => {
         const f = d.imageInfo?.file;
@@ -144,7 +157,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         }
         let dataUrl: string;
         try {
-          dataUrl = await fileToDataUrl(f);
+          dataUrl = await readFileOnce(f);
         } catch (readError) {
           console.warn("[buildDesignStatePayload] file read failed; attempting draft rehydration", {
             designId: d.id,
@@ -155,7 +168,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
           if (!repairedDesign?.imageInfo?.file) {
             throw readError;
           }
-          dataUrl = await fileToDataUrl(repairedDesign.imageInfo.file);
+          dataUrl = await readFileOnce(repairedDesign.imageInfo.file);
           return {
             layerId: d.id,
             filename: repairedDesign.imageInfo.file.name,
@@ -235,12 +248,21 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       }
       const exportProductionPng = async (): Promise<{ pngBlob: Blob; exportWorkerBuffer: ArrayBuffer | null }> => {
         const currentDesigns = designsRef.current;
+        // Dedupe halftone pre-cleaning by imageInfo identity. Duplicates share
+        // the same source imageInfo reference, so 20 copies of the same
+        // halftoned design should only run thresholdImageInfo once.
+        const halftoneCleanCache = new Map<import("@/lib/types").ImageInfo, Promise<import("@/lib/types").ImageInfo | null>>();
         const cleaned = new Map<string, import("@/lib/types").ImageInfo>();
         await Promise.all(
           currentDesigns
             .filter(d => d.halftoned)
             .map(async d => {
-              const info = await thresholdImageInfo(d.imageInfo);
+              let p = halftoneCleanCache.get(d.imageInfo);
+              if (!p) {
+                p = thresholdImageInfo(d.imageInfo);
+                halftoneCleanCache.set(d.imageInfo, p);
+              }
+              const info = await p;
               if (info) cleaned.set(d.id, info);
             }),
         );
@@ -267,6 +289,13 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         // its original resolution. Fallback: reuse the preview image when no
         // exportBlob is available (halftoned designs, or drafts before this
         // change was live).
+        //
+        // Duplicates share the same exportBlob reference, so we (1) key the
+        // decode cache by Blob identity — one HTMLImageElement per unique
+        // source, shared across every duplicate — and (2) decode all unique
+        // sources in parallel. Sharing HTMLImageElement identity is what lets
+        // the export worker's WeakMap dedup collapse N copies down to 1
+        // encoded ArrayBuffer + 1 decode + 1 cached stamp on the worker side.
         const decodeBlobToImage = (blob: Blob): Promise<HTMLImageElement> =>
           new Promise((resolve, reject) => {
             const url = URL.createObjectURL(blob);
@@ -275,18 +304,33 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
             img.onerror = (err) => { URL.revokeObjectURL(url); reject(err); };
             img.src = url;
           });
-        const exportImages = new Map<string, HTMLImageElement>();
+        const exportImagesByBlob = new Map<Blob, HTMLImageElement>();
+        const uniqueBlobs: Blob[] = [];
         for (const d of exportDesignsSource) {
-          // Halftoned designs: `image` IS the halftone raster, exportBlob is stale.
           if (d.halftoned) continue;
           const blob = d.imageInfo.exportBlob;
-          if (!blob) continue;
-          try {
-            exportImages.set(d.id, await decodeBlobToImage(blob));
-          } catch (err) {
-            console.warn("[export] full-res decode failed; using preview image", { id: d.id, err });
-          }
+          if (!blob || exportImagesByBlob.has(blob)) continue;
+          exportImagesByBlob.set(blob, undefined as unknown as HTMLImageElement); // reserve slot
+          uniqueBlobs.push(blob);
         }
+        await Promise.all(
+          uniqueBlobs.map(async blob => {
+            try {
+              exportImagesByBlob.set(blob, await decodeBlobToImage(blob));
+            } catch (err) {
+              console.warn("[export] full-res decode failed; using preview image", { err });
+              exportImagesByBlob.delete(blob);
+            }
+          }),
+        );
+        const resolveExportImage = (d: typeof exportDesignsSource[number]): HTMLImageElement => {
+          const blob = d.imageInfo.exportBlob;
+          if (blob) {
+            const decoded = exportImagesByBlob.get(blob);
+            if (decoded) return decoded;
+          }
+          return d.imageInfo.image;
+        };
 
         if (useWorker) {
           const result = await exportPngWithWorker({
@@ -299,7 +343,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
               rotation: d.transform.rotation,
               flipX: d.transform.flipX,
               flipY: d.transform.flipY,
-              image: exportImages.get(d.id) ?? d.imageInfo.image,
+              image: resolveExportImage(d),
               alphaThresholded: d.alphaThresholded,
               printFileName: d.printFileName,
               name: d.name,
@@ -329,7 +373,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
           ctx.imageSmoothingEnabled = true;
           ctx.imageSmoothingQuality = 'high';
           for (const design of exportDesignsSource) {
-            const img = exportImages.get(design.id) ?? design.imageInfo.image;
+            const img = resolveExportImage(design);
             const drawW = Math.max(1, Math.round(design.widthInches * design.transform.s * exportDpi));
             const drawH = Math.max(1, Math.round(design.heightInches * design.transform.s * exportDpi));
             const centerX = design.transform.nx * outW;
@@ -364,12 +408,19 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         const exportDpi = EXPORT_DPI;
 
         const currentDesigns = designsRef.current;
+        // Dedupe halftone pre-cleaning by imageInfo identity (see PNG path).
+        const halftoneCleanCache = new Map<import("@/lib/types").ImageInfo, Promise<import("@/lib/types").ImageInfo | null>>();
         const cleaned = new Map<string, import("@/lib/types").ImageInfo>();
         await Promise.all(
           currentDesigns
             .filter(d => d.halftoned)
             .map(async d => {
-              const info = await thresholdImageInfo(d.imageInfo);
+              let p = halftoneCleanCache.get(d.imageInfo);
+              if (!p) {
+                p = thresholdImageInfo(d.imageInfo);
+                halftoneCleanCache.set(d.imageInfo, p);
+              }
+              const info = await p;
               if (info) cleaned.set(d.id, info);
             }),
         );
@@ -378,6 +429,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         );
         // Same rationale as the PNG path: decode HD source from exportBlob
         // just-in-time so preview downsampling doesn't limit print DPI.
+        // Dedupe by Blob identity + parallelize — duplicates share a source.
         const decodeBlobToImage = (blob: Blob): Promise<HTMLImageElement> =>
           new Promise((resolve, reject) => {
             const url = URL.createObjectURL(blob);
@@ -386,39 +438,74 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
             img.onerror = (err) => { URL.revokeObjectURL(url); reject(err); };
             img.src = url;
           });
-        const pdfExportImages = new Map<string, HTMLImageElement>();
+        const pdfExportImagesByBlob = new Map<Blob, HTMLImageElement>();
+        const pdfUniqueBlobs: Blob[] = [];
         for (const d of exportDesignsSource) {
           if (d.halftoned) continue;
           const blob = d.imageInfo.exportBlob;
-          if (!blob) continue;
-          try {
-            pdfExportImages.set(d.id, await decodeBlobToImage(blob));
-          } catch (err) {
-            console.warn("[pdf-export] full-res decode failed; using preview image", { id: d.id, err });
-          }
+          if (!blob || pdfExportImagesByBlob.has(blob)) continue;
+          pdfExportImagesByBlob.set(blob, undefined as unknown as HTMLImageElement);
+          pdfUniqueBlobs.push(blob);
         }
+        await Promise.all(
+          pdfUniqueBlobs.map(async blob => {
+            try {
+              pdfExportImagesByBlob.set(blob, await decodeBlobToImage(blob));
+            } catch (err) {
+              console.warn("[pdf-export] full-res decode failed; using preview image", { err });
+              pdfExportImagesByBlob.delete(blob);
+            }
+          }),
+        );
+        const resolvePdfImage = (d: typeof exportDesignsSource[number]): HTMLImageElement => {
+          const blob = d.imageInfo.exportBlob;
+          if (blob) {
+            const decoded = pdfExportImagesByBlob.get(blob);
+            if (decoded) return decoded;
+          }
+          return d.imageInfo.image;
+        };
+        // Per-copy PDF embed cache. Duplicates with the same source and
+        // matching rasterization parameters share a single embedded PNG.
+        // pdfDoc.embedPng parses the whole PNG, so this is a big win when
+        // there are many identical copies.
+        const embeddedByKey = new Map<string, Awaited<ReturnType<typeof pdfDoc.embedPng>>>();
         for (const design of exportDesignsSource) {
-          const hdImg = pdfExportImages.get(design.id) ?? design.imageInfo.image;
+          const hdImg = resolvePdfImage(design);
           const drawW = Math.max(1, Math.round(design.widthInches * design.transform.s * exportDpi));
           const drawH = Math.max(1, Math.round(design.heightInches * design.transform.s * exportDpi));
-          const canvas = document.createElement("canvas");
-          canvas.width = drawW;
-          canvas.height = drawH;
-          const ctx = canvas.getContext("2d");
-          if (!ctx) continue;
-          ctx.imageSmoothingEnabled = !design.alphaThresholded;
-          ctx.imageSmoothingQuality = "high";
-          ctx.save();
-          ctx.translate(design.transform.flipX ? drawW : 0, design.transform.flipY ? drawH : 0);
-          ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
-          ctx.drawImage(hdImg, 0, 0, drawW, drawH);
-          ctx.restore();
+          const embedKey = [
+            (hdImg as HTMLImageElement).src || (design.imageInfo.file ? `${design.imageInfo.file.name}:${design.imageInfo.file.size}` : design.id),
+            drawW,
+            drawH,
+            design.transform.flipX ? 1 : 0,
+            design.transform.flipY ? 1 : 0,
+            design.alphaThresholded ? 1 : 0,
+          ].join("|");
+          let image = embeddedByKey.get(embedKey);
+          if (!image) {
+            const canvas = document.createElement("canvas");
+            canvas.width = drawW;
+            canvas.height = drawH;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) continue;
+            ctx.imageSmoothingEnabled = !design.alphaThresholded;
+            ctx.imageSmoothingQuality = "high";
+            ctx.save();
+            ctx.translate(design.transform.flipX ? drawW : 0, design.transform.flipY ? drawH : 0);
+            ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
+            ctx.drawImage(hdImg, 0, 0, drawW, drawH);
+            ctx.restore();
 
-          const dataUrl = canvas.toDataURL("image/png");
-          const base64 = dataUrl.split(",")[1];
-          if (!base64) continue;
-          const pngBytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-          const image = await pdfDoc.embedPng(pngBytes);
+            const dataUrl = canvas.toDataURL("image/png");
+            canvas.width = 0;
+            canvas.height = 0;
+            const base64 = dataUrl.split(",")[1];
+            if (!base64) continue;
+            const pngBytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+            image = await pdfDoc.embedPng(pngBytes);
+            embeddedByKey.set(embedKey, image);
+          }
           const widthPt = design.widthInches * design.transform.s * 72;
           const heightPt = design.heightInches * design.transform.s * 72;
           const centerX = design.transform.nx * pageWidthPt;
@@ -476,8 +563,6 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
               rotation,
             );
           }
-          canvas.width = 0;
-          canvas.height = 0;
         }
 
         return new Blob([await pdfDoc.save()], { type: "application/pdf" });
