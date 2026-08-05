@@ -2966,11 +2966,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const sourceHeight = selectedDetailImage.naturalHeight || selectedDetailImage.height;
       if (!sourceWidth || !sourceHeight) return;
 
-      const areaScale = Math.sqrt(HIGH_QUALITY_DETAIL_MAX_AREA / (sourceWidth * sourceHeight));
-      const edgeScale = HIGH_QUALITY_DETAIL_MAX_EDGE / Math.max(sourceWidth, sourceHeight);
-      const rasterScale = Math.min(1, areaScale, edgeScale);
-      const rasterWidth = Math.max(1, Math.round(sourceWidth * rasterScale));
-      const rasterHeight = Math.max(1, Math.round(sourceHeight * rasterScale));
+      // `showHighQualityDetail` guarantees the source fits within the
+      // MAX_AREA / MAX_EDGE caps, so the overlay always renders 1:1 —
+      // downscaling here would shred the halftone dot pattern.
+      const rasterWidth = Math.max(1, Math.round(sourceWidth));
+      const rasterHeight = Math.max(1, Math.round(sourceHeight));
 
       canvas.width = rasterWidth;
       canvas.height = rasterHeight;
@@ -3341,15 +3341,32 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       ctx.scale(t.flipX ? -1 : 1, t.flipY ? -1 : 1);
       // The HD detail overlay canvas (when active) draws the selected image on
       // top with `imageRendering: pixelated` and an `inset(6px)` clip that
-      // keeps the handles visible. The main canvas must STILL draw the image
-      // underneath — otherwise that 6px clip ring shows nothing and the
-      // selected design looks cropped. The slight filter mismatch in the ring
-      // is far less noticeable than a missing border of artwork.
+      // keeps the handles visible. Drawing the whole image on the main canvas
+      // as well caused a doubled/ghost seam (two differently-filtered rasters
+      // stacked), but skipping it entirely left the 6px clip ring EMPTY — the
+      // selected design looked cropped. Compromise: when the overlay is
+      // active, clip the main-canvas draw to just that perimeter ring so the
+      // overlay exclusively owns the interior and the edge artwork is intact.
       {
+        ctx.save();
+        if (showHighQualityDetail) {
+          // 6 CSS px (the overlay's clip inset) converted to canvas pixels.
+          const insetPx = 6 * (canvasWidth / Math.max(1, previewDims.width));
+          ctx.beginPath();
+          ctx.rect(-rect.width / 2, -rect.height / 2, rect.width, rect.height);
+          ctx.rect(
+            -rect.width / 2 + insetPx,
+            -rect.height / 2 + insetPx,
+            Math.max(0, rect.width - insetPx * 2),
+            Math.max(0, rect.height - insetPx * 2),
+          );
+          ctx.clip('evenodd');
+        }
         const drawSrc = selDesign?.alphaThresholded
           ? imageInfo.image
           : getPreviewDrawSource(imageInfo.image, rect.width, rect.height);
         ctx.drawImage(drawSrc, -rect.width / 2, -rect.height / 2, rect.width, rect.height);
+        ctx.restore();
       }
       const overlayCanvas = createSpotOverlayCanvasRef.current?.(imageInfo.image) ?? null;
       if (overlayCanvas) {
