@@ -1,0 +1,44 @@
+Pushed as 05c879b on main.
+
+What was happening (and why the earlier fix didn't help enough)
+The last commit optimized the worker-side dedup, but Add-to-Cart had four hidden duplication penalties on the main thread that ran before the worker even started, and one of them silently defeated the worker dedup itself:
+
+1. The main-thread HD decode step keyed by design.id instead of source Blob. For 80 total designs (4 unique × 20 copies), the loop was serially calling decodeBlobToImage 80 times to produce 80 different HTMLImageElements from just 4 unique source blobs. That's the biggest killer — likely 40–80 seconds all on its own before anything else happened. And because each duplicate got its own HTMLImageElement, the worker's WeakMap<HTMLImageElement, ArrayBuffer> couldn't cluster the 80 refs back into 4 sources, so we re-encoded all 80, transferred all 80, re-decoded all 80, and blew 80 stamp cache misses. My earlier optimization was effectively neutralized on this code path.
+
+2. thresholdImageInfo (halftone pre-clean) was un-deduped — 20 halftoned duplicates ran 20 identical thresholding operations.
+
+3. fileToDataUrl in buildDesignStatePayload re-read the same File 20 times (base64 of a multi-MB PNG is slow).
+
+4. pdfDoc.embedPng (fluorescent path) re-parsed the same rasterized PNG per copy.
+
+Fixes
+All in useImageEditorModelCart.ts:
+
+exportBlob → HTMLImageElement decodes are now keyed by Blob identity and run in parallel via Promise.all — 4 unique blobs = 4 parallel decodes.
+New resolveExportImage(d) / resolvePdfImage(d) return the shared HTMLImageElement per copy, so the worker's identity-based dedup collapses N duplicates back to 1 source, 1 decode, 1 cached stamp — exactly the fast path it was built for.
+thresholdImageInfo now goes through a Map<ImageInfo, Promise> cache so parallel Promise.all callers coalesce onto one promise per unique source.
+fileToDataUrl calls in buildDesignStatePayload route through a readFileOnce(file) helper that memoizes by File identity.
+pdfDoc.embedPng results are cached by (source, drawW, drawH, flip, alphaThresholded) for the fluorescent PDF path.
+Expected impact for your reported case (4 unique × ~20 copies each)
+Phase	Before	After
+Serial HD decode loop
+~40–80s (20+ waits × per-blob)
+~2–4s (4 parallel decodes)
+Halftone pre-clean (if any halftoned dups)
+N × threshold
+unique × threshold
+Worker: encode source PNGs
+80 encodes
+4 encodes
+Worker: decode ImageBitmap
+80 decodes
+4 decodes
+Worker: stamp cache
+80 misses
+4 stamps, 80 hits
+dataURL reads in payload
+80 reads
+4 reads
+Rough estimate for a 3-minute cart export dominated by these serial penalties: expect under 30 seconds now, possibly under 15s depending on sheet size. The remaining time will be the actual worker raster + deflate pass plus the R2 upload, which are both proportional to output pixels (not to copy count).
+
+If it's still slow after this, next place to look is the R2 upload itself — that could plausibly be another 30–60s for a 20–50 MB PNG depending on the customer's upload speed, and it's separate from the export.
