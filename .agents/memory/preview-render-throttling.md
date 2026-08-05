@@ -11,4 +11,6 @@ The static-composite cache signature over all non-selected designs is precompute
 
 Multi-drag commits `designs` per pointer move, so any moving design's transform must stay out of the composite signature: while dragging, multi-selected companions are excluded from the composite and drawn per-frame on top (ghost alpha). Baking them in forces a full composite rebuild every frame.
 
+The static composite must actually draw every non-excluded design inside its scene-draw helper. A refactor that moves ghost drawing out of the composite can silently drop the base image draw — the symptom is "non-selected designs vanish" (e.g. added layer copies invisible) whenever the composite rebuilds, and it can look like a stale-closure race because whichever render pass last rebuilt the empty composite wins.
+
 **How to apply:** any new zoom/pan mutation site must pick queued (continuous gestures) vs immediate (one-shot) commit; any new input to the static scene draw must be added both to the signature body and the render-effect deps. Preview-only — never touch export/cart rendering.
