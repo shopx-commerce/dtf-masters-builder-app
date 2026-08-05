@@ -40,7 +40,7 @@ export const es: Record<string, string> = {
   "editor.addDesigns": "Agregar Diseños",
   "editor.closeBuilder": "Cerrar editor",
   "editor.addDesignTitle": "Agregar otra imagen",
-  "editor.uploads": "Subidas Anteriores",
+  "editor.uploads": "Subidas del Dispositivo",
   "editor.uploadsAddHere": "Agregar Aquí",
   "editor.uploadsEmpty": "Los archivos subidos anteriormente aparecerán aquí.",
   "editor.uploadsRemove": "Quitar de subidas",

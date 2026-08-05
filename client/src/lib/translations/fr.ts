@@ -40,7 +40,7 @@ export const fr: Record<string, string> = {
   "editor.addDesigns": "Ajouter des Designs",
   "editor.closeBuilder": "Fermer l'éditeur",
   "editor.addDesignTitle": "Ajouter une autre image",
-  "editor.uploads": "Anciens Téléversements",
+  "editor.uploads": "Téléversements de l’Appareil",
   "editor.uploadsAddHere": "Ajouter Ici",
   "editor.uploadsEmpty": "Les fichiers téléversés précédemment apparaîtront ici.",
   "editor.uploadsRemove": "Retirer des téléversements",
