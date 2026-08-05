@@ -13,3 +13,4 @@
 - [Restored layer assets](restored-layer-asset-normalization.md) — crop padded transparent sources only when alpha bounds match saved physical dimensions.
 - [Parent postMessage memory guard](postmessage-memory-guard.md) — preserve the message contract while converting structured-clone memory failures into recoverable editor errors.
 - [Spot color input boundary](spot-color-input-boundary.md) — normalize optional extracted-color flags before PDF spot-color tracing.
+- [GitHub branch audit](github-branch-audit.md) — the July feature branch is a stale monolithic snapshot; preserve the current modular pipeline and integration boundaries.
