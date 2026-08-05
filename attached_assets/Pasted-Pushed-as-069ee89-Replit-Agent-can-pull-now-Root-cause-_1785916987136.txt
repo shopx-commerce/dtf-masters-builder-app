@@ -1,0 +1,28 @@
+Pushed as 069ee89. Replit Agent can pull now.
+
+Root cause of the runaway expansion
+applyResult in useImageEditorModelArrangeKeyboard.ts was dropping the arrangeAll flag on the height-expansion recursion:
+
+
+useImageEditorModelArrangeKeyboard.ts
+Lines 322-326
+if (hasOverflow && artboardHeightRef.current < MAX_ARTBOARD_HEIGHT) {
+  const nextHeight = GANGSHEET_HEIGHTS.find(h => h > artboardHeightRef.current) ?? MAX_ARTBOARD_HEIGHT;
+  handleArtboardResizeRef.current(artboardWidthRef.current, nextHeight);
+  setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true }), 0);  // ← no arrangeAll
+What was happening step by step when you clicked "+" on a layer:
+
+handleSetGroupCount correctly created the copies, put every row member into selectedDesignIds, and called auto-arrange with arrangeAll: true. First pass ran in whole-sheet mode, packed everything, saw overflow → expanded 12″ → next height → recursed.
+The recursive call rebuilt its opts object as { skipSnapshot: true, preserveSelection: true } and forgot arrangeAll.
+With selectedDesignIds.size >= 2 (the whole row is still selected after the +N action), the guard arrangeSelection = !opts.arrangeAll && size >= 2 flipped to true on the recursion.
+Now the arranger only re-packed the row's copies, treating every non-selected design as a fixed obstacle. Those obstacles were placed for the pre-expansion 12″ sheet — on a 24″ sheet they left useless gaps the copies rarely slotted into. Overflow again → next height → same wrong flag → repeat.
+Because GANGSHEET_HEIGHTS.find(h => h > current) walks the sorted height list one step at a time, and every step still overflowed, the sheet climbed all the way to MAX_ARTBOARD_HEIGHT before the loop terminated. Exactly the 370″ result in your screenshot.
+Your earlier fix (8d005d7) that sorted GANGSHEET_HEIGHTS numerically was necessary — without it the loop jumped straight from 12″ to 340″ in one step. But sorting alone made the runaway incremental instead of instant; it didn't stop it.
+
+Fix: forward opts?.arrangeAll on the recursion so the expansion loop stays in whole-sheet mode when the caller asked for it, and converges as soon as everything fits. Both callers that pass arrangeAll: true benefit — handleSetGroupCount (+N copies) and handleEffectiveSizeChange (manual resize expansion).
+
+Cleanup bonus: the commit also drops a 0-byte file whose filename is a pasted code snippet (const handleDuplicateSelected = useCallback...). Windows can't materialize that name — it broke git checkout on the first clone and again on this pull. Removing it unblocks future clones.
+
+Other observations while reading the code (not fixed, ask if you want them):
+
+The same runaway pattern can still happen on the "explicit arrange selection" path (user selects 2+ items and clicks Auto-Arrange), because opts.arrangeAll is undefined by design there, so the recursion legitimately stays in arrangeSelection mode. Fixing that means either capping recursion depth or surfacing a "no space" toast in that scope instead of expanding. Low priority — nobody has reported hitting it — but the mechanism is identical.
