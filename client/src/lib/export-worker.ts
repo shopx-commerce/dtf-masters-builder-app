@@ -32,7 +32,10 @@ interface PrerenderedDesign {
   height: number;
 }
 
-const STRIP_HEIGHT = 8192;
+// Keep temporary export canvases bounded for tall sheets. This only changes
+// internal batching; output dimensions, DPI, placement, and pixel quality are
+// unchanged.
+const STRIP_HEIGHT = 4096;
 const BATCH_ROWS = 1024;
 const MAX_IDAT_BYTES = 2 * 1024 * 1024;
 
