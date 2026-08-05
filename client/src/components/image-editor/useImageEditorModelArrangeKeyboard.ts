@@ -630,14 +630,17 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         const gr = gridPack(g);
         if (gr) cands.push(ev(gr));
       }
-      // Height-first candidate sort — mirrors `arrange-worker.ts`.
-      // See the extended comment on the worker's sort for rationale; the
-      // fallback path had the same "utilisation threshold masks small
-      // height wins" bug and needs the same simplified priority.
+      // Preserve the same legacy candidate ranking as `arrange-worker.ts`.
+      // This keeps duplicate/copy arrangements consistent when the worker
+      // is unavailable or times out.
+      const totalItemArea = items.reduce((sum, d) => sum + d.w * d.h, 0);
       cands.sort((a, b) => {
         if (a.overflows !== b.overflows) return a.overflows - b.overflows;
         const af = a.maxHeight <= usableH ? 0 : 1, bf = b.maxHeight <= usableH ? 0 : 1;
         if (af !== bf) return af - bf;
+        const au = totalItemArea / (usableW * Math.max(a.maxHeight, 0.01));
+        const bu = totalItemArea / (usableW * Math.max(b.maxHeight, 0.01));
+        if (Math.abs(au - bu) > 0.02) return bu - au;
         if (Math.abs(a.maxHeight - b.maxHeight) > 0.01) return a.maxHeight - b.maxHeight;
         return a.wastedArea - b.wastedArea;
       });
