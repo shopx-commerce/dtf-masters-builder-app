@@ -72,48 +72,54 @@ export default function SizeInput({
     </div>
   );
 
-  if (editing) {
-    return (
-      <div className="flex items-center gap-px">
-        <input
-          type="text"
-          inputMode="decimal"
-           className={`h-7 bg-white border-2 border-cyan-500 rounded font-bold text-gray-900 text-center outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none shadow-sm ${metric ? 'w-16 text-[12px]' : 'w-14 text-[12px]'}`}
-          value={draft}
-          autoFocus
-          onChange={(e) => setDraft(e.target.value)}
-          onFocus={() => {
-            onCommitAtFocusRef.current = onCommit;
-          }}
-          onBlur={() => {
-            commit(draft);
-            setEditing(false);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              commit(draft);
-              setEditing(false);
-            } else if (e.key === "Escape") setEditing(false);
-          }}
-          title={title}
-        />
-        {arrows}
-      </div>
-    );
-  }
+  // One input for both the idle and the editing state, never `readOnly`.
+  //
+  // This was two branches: an idle `readOnly` input whose `onFocus` swapped in
+  // an editable one. iOS decides whether to raise the software keyboard at the
+  // moment focus is granted, and at that moment the field was still read-only,
+  // so an iPhone got no keyboard and the size could never be typed. Clearing
+  // `readOnly` in the next render is too late — iOS does not re-evaluate an
+  // element that is already focused. `inputMode` has to be there before the tap
+  // for the same reason.
+  //
+  // Height: 44px on phones (`h-11`), the smallest comfortable thumb target, back to
+  // 28px (`h-7`) from `md` up. `md` and not `lg` because that is where the layout
+  // actually swaps — `image-editor-view` renders its size column only while
+  // `useIsMobile()` (max-width 767px) holds, and above that the same component is used
+  // by the desktop toolbar, so `lg:` would have left that toolbar 44px tall between
+  // 768px and 1023px. The arrows stay 14px by choice: they are keyboard/mouse
+  // affordances, and the field itself is what a thumb aims for.
   return (
-      <div className="flex items-center gap-px">
+    <div className="flex items-center gap-px">
       <input
         type="text"
-        readOnly
-         className={`h-7 bg-white border-2 border-gray-300 rounded font-bold text-gray-900 text-center outline-none cursor-pointer hover:border-cyan-400 hover:bg-cyan-50 active:bg-cyan-100 transition-colors shadow-sm ${metric ? 'w-16 text-[12px]' : 'w-14 text-[12px]'}`}
-        value={display}
+        inputMode="decimal"
+        className={`h-11 md:h-7 bg-white border-2 rounded font-bold text-gray-900 text-center outline-none shadow-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${metric ? 'w-16 text-[12px]' : 'w-14 text-[12px]'} ${
+          editing
+            ? 'border-cyan-500'
+            : 'border-gray-300 cursor-pointer hover:border-cyan-400 hover:bg-cyan-50 active:bg-cyan-100 transition-colors'
+        }`}
+        value={editing ? draft : display}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          setEditing(true);
+        }}
         onFocus={() => {
           onCommitAtFocusRef.current = onCommit;
           setDraft(display);
           setEditing(true);
         }}
-        title={title + " — click to edit"}
+        onBlur={() => {
+          if (editing) commit(draft);
+          setEditing(false);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            commit(draft);
+            setEditing(false);
+          } else if (e.key === "Escape") setEditing(false);
+        }}
+        title={editing ? title : title + " — click to edit"}
       />
       {arrows}
     </div>
