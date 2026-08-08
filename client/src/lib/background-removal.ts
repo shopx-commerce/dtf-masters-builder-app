@@ -2,7 +2,10 @@
  * Background removal using a Web Worker for zero UI lag.
  * Flood-fill from edges removes contiguous white background.
  * White areas inside the design are preserved.
- * Serialized: only one job runs at a time; new requests cancel prior ones.
+ *
+ * Serialized: only one job runs at a time and further requests queue behind it. Removing the
+ * background from a multi-selection is the reason — those calls all want their own result, so
+ * the older behaviour of cancelling the previous request threw away every design but the last.
  */
 
 import BgRemovalWorker from './bg-removal-worker?worker';
@@ -18,9 +21,12 @@ import BgRemovalWorker from './bg-removal-worker?worker';
 const REMOVAL_TIMEOUT_MS = 60_000;
 
 let workerInstance: Worker | null = null;
-let currentReject: ((reason: Error) => void) | null = null;
-/** Tears down the in-flight request's listeners and timer. Paired with `currentReject`. */
-let currentCleanup: (() => void) | null = null;
+let requestCounter = 0;
+/**
+ * Tail of the queue. Each call chains onto it, so jobs reach the worker one at a time no
+ * matter how many callers start at once.
+ */
+let queueTail: Promise<unknown> = Promise.resolve();
 
 function getWorker(): Worker {
   if (!workerInstance) {
@@ -32,9 +38,9 @@ function getWorker(): Worker {
 /**
  * Throw away the shared worker so the next call spawns a fresh one.
  *
- * Requests here are not correlated by id — the module relies on only one job being in
- * flight — so a worker that failed or went quiet cannot be kept: if it later posted the
- * reply we stopped waiting for, that reply would resolve somebody else's request.
+ * A worker that timed out or errored cannot be trusted to have stopped: it may still be
+ * mid-flood-fill on a buffer we have given up on, holding a core that the queued jobs behind
+ * it now need.
  */
 function discardWorker(): void {
   const worker = workerInstance;
@@ -58,16 +64,21 @@ export async function removeBackgroundFromCanvas(
   threshold: number = 95,
   mode: 'white' | 'black' = 'white'
 ): Promise<void> {
-  if (currentReject) {
-    const cancelled = currentReject;
-    // Tear the old request down before rejecting it: its timeout is still armed, and
-    // firing later it would discard the worker this new request is about to use.
-    currentCleanup?.();
-    currentReject = null;
-    currentCleanup = null;
-    cancelled(new Error('Cancelled: new background removal request'));
-  }
+  // Wait for whatever is already queued, but never inherit its failure: one design failing
+  // to have its background removed must not fail the rest of a multi-selection.
+  const run = queueTail.then(
+    () => removeBackgroundNow(canvas, threshold, mode),
+    () => removeBackgroundNow(canvas, threshold, mode),
+  );
+  queueTail = run.catch(() => {});
+  return run;
+}
 
+async function removeBackgroundNow(
+  canvas: HTMLCanvasElement,
+  threshold: number,
+  mode: 'white' | 'black'
+): Promise<void> {
   const { width, height } = canvas;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('Failed to get canvas context');
@@ -82,6 +93,7 @@ export async function removeBackgroundFromCanvas(
 
   return new Promise<void>((resolve, reject) => {
     const worker = getWorker();
+    const requestId = ++requestCounter;
 
     let settled = false;
     const cleanup = () => {
@@ -91,15 +103,13 @@ export async function removeBackgroundFromCanvas(
       worker.removeEventListener('message', onMessage);
       worker.removeEventListener('error', onError);
       worker.removeEventListener('messageerror', onMessageError);
-      if (currentReject === reject) {
-        currentReject = null;
-        currentCleanup = null;
-      }
     };
-    currentReject = reject;
-    currentCleanup = cleanup;
 
     const onMessage = (e: MessageEvent) => {
+      // A reply from a job we already gave up on carries another design's pixels. Without
+      // this check it would be painted into *this* canvas, silently swapping two designs'
+      // artwork rather than merely wasting the work.
+      if (e.data.requestId !== requestId) return;
       cleanup();
 
       if (e.data.type === 'error') {
@@ -138,7 +148,7 @@ export async function removeBackgroundFromCanvas(
     worker.addEventListener('messageerror', onMessageError);
     try {
       worker.postMessage(
-        { imageData: pixels, width, height, threshold, mode },
+        { requestId, imageData: pixels, width, height, threshold, mode },
         [pixels.buffer]
       );
     } catch (err) {

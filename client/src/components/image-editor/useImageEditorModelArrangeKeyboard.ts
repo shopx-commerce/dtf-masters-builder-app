@@ -1,8 +1,9 @@
-import { useRef, useCallback, useEffect, useMemo } from "react";
+import { useRef, useCallback, useEffect, useMemo, useState } from "react";
 import { formatDimensions } from "@/lib/format-length";
 import {
   clampDesignToArtboard,
   getArrangeWorker,
+  discardArrangeWorker,
   getDesignNestSilhouette,
   getEffectiveHeight,
   getDesignSelectionBounds,
@@ -155,6 +156,61 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
   /** Armed by an expansion so the next arrange knows it is a continuation, not a new one. */
   const ladderChainRef = useRef(false);
 
+  /**
+   * Arrange runs one at a time.
+   *
+   * Every duplicate, copy-count change and resize schedules its own arrange, and a pack of
+   * a full sheet takes long enough that a customer clicking "+" a few times in a second
+   * used to have several in flight at once. They all shared one worker, so they came back
+   * in whatever order they finished, and each result only carried placements for the
+   * designs that existed when it was posted. An older result landing last therefore shoved
+   * designs back to where they were *and* left every copy made in the meantime sitting on
+   * top of its original — the "arrange is thinking a step behind" report.
+   *
+   * So: while a run is in flight, a new request does not start a second pack, it just
+   * records that another run is wanted. Whatever asked last wins, and it packs the design
+   * list as it stands when it finally runs, which is the layout the customer was going to
+   * get anyway. Bursts of clicks now cost two packs rather than one per click.
+   */
+  const arrangeInFlightRef = useRef(false);
+  /** Bumped per externally-requested arrange, so a stale result can be recognised and dropped. */
+  const arrangeGenerationRef = useRef(0);
+  type ArrangeOpts = {
+    skipSnapshot?: boolean;
+    preserveSelection?: boolean;
+    arrangeAll?: boolean;
+    fullRepack?: boolean;
+    /** Internal: a ladder step continuing the run that is already in flight. */
+    continuation?: boolean;
+  };
+  const pendingArrangeRef = useRef<ArrangeOpts | null>(null);
+  /**
+   * Fold a superseded request into the one already waiting. Work flags are unioned so a
+   * coalesced burst never does *less* than the requests it stands in for; `skipSnapshot`
+   * is intersected, because a request that wanted an undo point never got to take one.
+   */
+  const mergeArrangeOpts = (a: ArrangeOpts | null, b: ArrangeOpts | undefined): ArrangeOpts => ({
+    skipSnapshot: (a?.skipSnapshot ?? true) && (b?.skipSnapshot ?? false),
+    preserveSelection: (a?.preserveSelection ?? false) || (b?.preserveSelection ?? false),
+    arrangeAll: (a?.arrangeAll ?? false) || (b?.arrangeAll ?? false),
+    fullRepack: (a?.fullRepack ?? false) || (b?.fullRepack ?? false),
+  });
+  /**
+   * Release the lock and start whatever queued up behind the run that just finished.
+   *
+   * Every way out of an arrange has to reach this, including the guards that bail before
+   * any packing happens — a ladder step that finds the sheet emptied under it would
+   * otherwise hold the lock forever and the editor would never arrange again. Safe to call
+   * when the lock is already clear, which is what makes it usable from those guards without
+   * each one having to know whether this call was the one that took it.
+   */
+  const settleArrange = () => {
+    arrangeInFlightRef.current = false;
+    const next = pendingArrangeRef.current;
+    pendingArrangeRef.current = null;
+    if (next) setTimeout(() => handleAutoArrangeRef.current(next), 0);
+  };
+
   const getAlignDelta = useCallback((corner: 'tl' | 'tr' | 'bl' | 'br') => {
     const ids = selectedDesignIds.size > 0
       ? selectedDesignIds
@@ -244,9 +300,17 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
      * moving everything else is the behaviour users complain about.
      */
     fullRepack?: boolean;
+    /** Internal: a ladder step continuing the run that is already in flight. */
+    continuation?: boolean;
   }) => {
     const currentDesigns = designsRef.current;
-    if (currentDesigns.length === 0) { console.warn('[autoArrange] no designs'); return; }
+    if (currentDesigns.length === 0) {
+      console.warn('[autoArrange] no designs');
+      // Only does anything for a ladder step that arrives to find the sheet cleared; a
+      // fresh call has not taken the lock yet and this is a no-op.
+      settleArrange();
+      return;
+    }
     if (currentDesigns.some(d =>
       !d.imageInfo?.image?.complete ||
       !(d.imageInfo.image.naturalWidth || d.imageInfo.image.width) ||
@@ -266,11 +330,13 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
             description: "Your progress is saved, but one design could not be reloaded. Please recover the draft and try again.",
             variant: "destructive",
           });
+          settleArrange();
           return;
         }
         handleAutoArrangeRef.current(opts);
       }).catch(error => {
         console.warn("[autoArrange] image rehydration failed", error);
+        settleArrange();
         toast({
           title: t("toast.arrangeUnavailable"),
           description: "Your progress is saved, but one design could not be reloaded. Please recover the draft and try again.",
@@ -279,6 +345,18 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       });
       return;
     }
+    // A ladder step is the same logical arrange continuing, so it runs straight through;
+    // anything else queues behind whatever is already packing. See `arrangeInFlightRef`.
+    if (!opts?.continuation) {
+      if (arrangeInFlightRef.current) {
+        pendingArrangeRef.current = mergeArrangeOpts(pendingArrangeRef.current, opts);
+        return;
+      }
+      arrangeInFlightRef.current = true;
+      arrangeGenerationRef.current++;
+    }
+    const generation = arrangeGenerationRef.current;
+
     // Claim this entry's place in the expansion chain. The step count cannot ride in `opts`
     // because the type of `handleAutoArrangeRef` is declared with the rest of the editor
     // state, so it travels in a ref that the recursion arms and the next entry consumes.
@@ -306,10 +384,11 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       }
       // One design left on a sheet sized for many is the clearest case of paying for blank film.
       setTimeout(() => shrinkSheetToFitRef.current(), 0);
+      settleArrange();
       return;
     }
 
-    if (designsToArrange.length < 2) return;
+    if (designsToArrange.length < 2) { settleArrange(); return; }
 
     const fillCache = contentFillCacheRef.current;
     /**
@@ -532,6 +611,10 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
           preserveSelection: true,
           arrangeAll: opts?.arrangeAll,
           fullRepack: opts?.fullRepack,
+          // Keeps the lock held across the climb: a rung is part of this arrange, not a
+          // competing one, and releasing here would let a queued request interleave with
+          // a half-finished expansion.
+          continuation: true,
         }), 0);
         return;
       }
@@ -628,11 +711,13 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       // rather than the one it replaced. Never snapshots: whatever asked for this arrange
       // already did, so one undo takes the arrange and the resize back together.
       if (!hasOverflow) setTimeout(() => shrinkSheetToFitRef.current(), 0);
+      settleArrange();
     };
 
     const worker = getArrangeWorker();
     if (fixedRects && fixedRects.length > 0 && !worker) {
       toast({ title: t("toast.arrangeUnavailable"), description: t("toast.arrangeUnavailableDesc"), variant: "destructive" });
+      settleArrange();
       return;
     }
     if (worker) {
@@ -645,7 +730,15 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         settled = true;
         cleanup();
         if (!mountedRef.current) return;
-        if (e.data.type === 'error') { console.warn('[autoArrange] worker error:', e.data.error); toast({ title: "Arrange failed", variant: "destructive" }); return; }
+        // A result from a superseded run would undo placements the current one has already
+        // made, and would carry nothing at all for designs added since it was posted.
+        if (generation !== arrangeGenerationRef.current) return;
+        if (e.data.type === 'error') {
+          console.warn('[autoArrange] worker error:', e.data.error);
+          toast({ title: "Arrange failed", variant: "destructive" });
+          settleArrange();
+          return;
+        }
         const bestResult: PlacedItem[] = e.data.result;
         const anyRotated = bestResult.some(p => p.rotation !== 0);
         const hasOverflow = bestResult.some(p => p.overflows);
@@ -659,6 +752,9 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
           settled = true;
           cleanup();
           console.warn('[autoArrange] worker timed out, using fallback');
+          // Terminate before packing again here, or the abandoned worker spends the whole
+          // fallback competing with it for a CPU that already proved too slow.
+          discardArrangeWorker();
           runFallbackArrange();
         }
       }, 10_000);
@@ -741,10 +837,27 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
   }, [designs.length, saveSnapshot, artboardWidth, artboardHeight]);
   handleArtboardResizeRef.current = handleArtboardResize;
 
-  const recommendedArtboardHeight = useMemo(
-    () => fitGangsheetHeight(designs, artboardHeight, designGap, GANGSHEET_HEIGHTS)?.height ?? null,
-    [designs, artboardHeight, designGap, GANGSHEET_HEIGHTS],
-  );
+  /**
+   * Which purchasable height today's artwork would fit on, for the tick beside that size in
+   * the gangsheet size dropdown.
+   *
+   * Deliberately lags the sheet. Answering it means measuring the *ink* bounds of every
+   * design, and each of those is a nest-mask lookup plus corner trigonometry — while
+   * `designs` is committed on every pointer move of a multi-select drag. As a plain `useMemo`
+   * this recomputed sixty times a second, and it was measurable in a drag profile, all to
+   * keep a checkmark current inside a dropdown that is usually closed. Nothing acts on this
+   * value automatically (auto-shrink measures the sheet itself), so letting it settle first
+   * costs nothing but a beat of staleness in a hint.
+   */
+  const [recommendedArtboardHeight, setRecommendedArtboardHeight] = useState<number | null>(null);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setRecommendedArtboardHeight(
+        fitGangsheetHeight(designs, artboardHeight, designGap, GANGSHEET_HEIGHTS)?.height ?? null,
+      );
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [designs, artboardHeight, designGap, GANGSHEET_HEIGHTS]);
 
   /**
    * Resize, then record the pick. Wired to the Gangsheet Size dropdown.

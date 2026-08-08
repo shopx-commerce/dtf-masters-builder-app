@@ -587,6 +587,21 @@ function getColorWorker(): Worker | null {
   return _colorWorker;
 }
 
+/**
+ * Kill the shared extraction worker so the next call spawns a fresh one.
+ *
+ * Called before falling back to the main thread: extraction only times out on a device that is
+ * already saturated, and letting the worker keep grinding on a result nobody will read leaves
+ * it competing with the fallback that replaced it.
+ */
+function discardColorWorker(): void {
+  const worker = _colorWorker;
+  _colorWorker = null;
+  if (worker) {
+    try { worker.terminate(); } catch { /* already dead */ }
+  }
+}
+
 export function extractColorsFromImageAsync(image: HTMLImageElement, maxColors: number = 999): Promise<ExtractedColor[]> {
   return new Promise((resolve) => {
     try {
@@ -628,6 +643,7 @@ export function extractColorsFromImageAsync(image: HTMLImageElement, maxColors: 
       };
       const timeout = setTimeout(() => {
         worker.removeEventListener('message', handler);
+        discardColorWorker();
         try {
           resolve(extractDominantColors(ctx.getImageData(0, 0, w, h), maxColors));
         } catch {

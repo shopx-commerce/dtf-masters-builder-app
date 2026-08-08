@@ -194,21 +194,22 @@ function processRemoval(
 }
 
 self.onmessage = (e: MessageEvent) => {
-  const { imageData, width, height, threshold, mode } = e.data as {
+  const { imageData, width, height, threshold, mode, requestId } = e.data as {
     imageData: Uint8ClampedArray;
     width: number;
     height: number;
     threshold: number;
     mode?: 'white' | 'black';
+    requestId: number;
   };
 
   try {
     processRemoval(imageData, width, height, threshold, mode ?? 'white');
     (self as unknown as Worker).postMessage(
-      { type: 'result', imageData, width, height },
+      { type: 'result', requestId, imageData, width, height },
       [imageData.buffer] as any
     );
   } catch (err: any) {
-    (self as unknown as Worker).postMessage({ type: 'error', error: err?.message || String(err) });
+    (self as unknown as Worker).postMessage({ type: 'error', requestId, error: err?.message || String(err) });
   }
 };

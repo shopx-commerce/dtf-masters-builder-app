@@ -192,7 +192,14 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   }, [profile.gangsheetHeights, initialHeight, initialGangsheetHeights]);
   const contentFillCacheRef = useRef<Map<string, number>>(new Map());
   const handleAutoArrangeRef = useRef<(
-    opts?: { skipSnapshot?: boolean; preserveSelection?: boolean; arrangeAll?: boolean; fullRepack?: boolean }
+    opts?: {
+      skipSnapshot?: boolean;
+      preserveSelection?: boolean;
+      arrangeAll?: boolean;
+      fullRepack?: boolean;
+      /** Internal to the arrange hook: a height-ladder step continuing the run in flight. */
+      continuation?: boolean;
+    }
   ) => void>(() => {});
   // Assigned by `useImageEditorModelArrangeKeyboard`, which owns the height list. Held here so
   // the delete handlers below can drop the sheet to the smallest size the remaining artwork
@@ -949,7 +956,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   // Two-stage coalescing:
   //   1. 750 ms debounce collapses bursts of state updates (typing, dragging,
   //      selection toggles) into a single scheduled write.
-  //   2. `computeDraftSignature` compares the debounced state against the
+  //   2. `computeDraftSignature` compares the settled state against the
   //      last write and short-circuits when they match — React re-renders
   //      often produce a new `designs` Array reference without any field
   //      actually differing.
@@ -957,30 +964,36 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   //      slot before serializing and hitting IndexedDB, so a save never
   //      contends with an active user interaction. `setTimeout(0)` fallback
   //      preserves behavior on Safari.
+  //
+  // The signature is computed after the debounce rather than before it. It walks the metadata
+  // of every design to build a string, and `designs` is committed on every pointer move of a
+  // multi-select drag, so computing it up front meant paying for that walk sixty times a
+  // second to answer a question that only matters once the sheet stops moving.
   useEffect(() => {
     if (draftSaveGated) return;
 
-    // `manualHeightFloorRef` is read rather than depended on, and that is sound because every
-    // route that moves the floor also replaces the `designs` array: the height dropdown goes
-    // through `handleArtboardResize`, the delete handlers clear it while removing designs, and
-    // undo restores it while restoring designs. So this effect always re-runs after a floor
-    // change — and the floor being *inside* the signature is what makes the one case that
-    // changes nothing else (picking the height the sheet is already on) still reach disk.
-    const signature = computeDraftSignature(
-      profile.id,
-      designs,
-      artboardWidth,
-      artboardHeight,
-      manualHeightFloorRef.current,
-      quantity,
-      designGap,
-      selectedDesignId,
-      selectedDesignIds,
-    );
-    if (signature === lastDraftSignatureRef.current) return;
-
     if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
     draftSaveTimerRef.current = setTimeout(() => {
+      // `manualHeightFloorRef` is read rather than depended on, and that is sound because
+      // every route that moves the floor also replaces the `designs` array: the height
+      // dropdown goes through `handleArtboardResize`, the delete handlers clear it while
+      // removing designs, and undo restores it while restoring designs. So this effect always
+      // re-runs after a floor change — and the floor being *inside* the signature is what
+      // makes the one case that changes nothing else (picking the height the sheet is already
+      // on) still reach disk.
+      const signature = computeDraftSignature(
+        profile.id,
+        designs,
+        artboardWidth,
+        artboardHeight,
+        manualHeightFloorRef.current,
+        quantity,
+        designGap,
+        selectedDesignId,
+        selectedDesignIds,
+      );
+      if (signature === lastDraftSignatureRef.current) return;
+
       const idleCb: (cb: IdleRequestCallback, opts?: IdleRequestOptions) => number =
         typeof window !== "undefined" && "requestIdleCallback" in window
           ? window.requestIdleCallback.bind(window)
@@ -1304,19 +1317,27 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     // Run the removal against the full-resolution print source so it reaches
     // the printed sheet. Only designs with no separate print source fall back
     // to editing the preview, where the preview *is* what prints.
-    const results = await Promise.all(
-      targetDesigns.map(async (d): Promise<Partial<ImageInfo> | null> => {
-        const edited = await applyEditAtPrintResolution(
-          d.imageInfo,
-          d.widthInches,
-          d.heightInches,
-          canvas => removeBackgroundFromCanvas(canvas, 75),
-        ).catch(() => null);
-        if (edited) return printSourceFieldsAfterEdit(edited);
-        const image = await removeBackgroundFromImage(d.imageInfo.image, 75).catch(() => null);
-        return image ? { image } : null;
-      })
-    );
+    //
+    // One design at a time, deliberately. Each pass rasterises its design at print
+    // resolution, which is ~137 MB of pixels for a 36 MP artwork, so removing the background
+    // from a selection of eight in parallel would ask the device for a gigabyte of canvas
+    // before the first flood fill finished. The removal worker processes them serially
+    // regardless, so the parallelism bought nothing but the memory spike.
+    const results: (Partial<ImageInfo> | null)[] = [];
+    for (const d of targetDesigns) {
+      const edited = await applyEditAtPrintResolution(
+        d.imageInfo,
+        d.widthInches,
+        d.heightInches,
+        canvas => removeBackgroundFromCanvas(canvas, 75),
+      ).catch(() => null);
+      if (edited) {
+        results.push(printSourceFieldsAfterEdit(edited));
+        continue;
+      }
+      const image = await removeBackgroundFromImage(d.imageInfo.image, 75).catch(() => null);
+      results.push(image ? { image } : null);
+    }
     const updates = new Map<string, ImageInfo>();
     targetDesigns.forEach((d, i) => {
       if (results[i]) updates.set(d.id, { ...d.imageInfo, ...results[i]! });

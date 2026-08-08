@@ -258,7 +258,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       if (repairedDesigns.some(design => !isRecoverableImageInfo(design.imageInfo))) {
         throw new Error("A design image could not be reloaded. Your progress is saved; recover the draft and try again.");
       }
-      const exportProductionPng = async (): Promise<{ pngBlob: Blob; exportWorkerBuffer: ArrayBuffer | null }> => {
+      const exportProductionPng = async (): Promise<Blob> => {
         const currentDesigns = designsRef.current;
         // Dedupe halftone pre-cleaning by imageInfo identity. Duplicates share
         // the same source imageInfo reference, so 20 copies of the same
@@ -314,7 +314,6 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
           });
         }
         let pngBlob: Blob;
-        let exportWorkerBuffer: ArrayBuffer | null = null;
 
         // The print source for each non-halftoned design is its retained
         // `exportBlob`, which stays encoded until the moment it is drawn. The
@@ -371,8 +370,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
               else setExportProgressLabel("Finalizing PNG...");
             },
           });
-          exportWorkerBuffer = result.buffer;
-          pngBlob = new Blob([exportWorkerBuffer], { type: 'image/png' });
+          pngBlob = result.blob;
         } else {
           toast({
             title: t("toast.exportCompatibilityWarning"),
@@ -415,7 +413,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
           exportCanvas.height = 0;
           pngBlob = await injectPngDpi(rawBlob, exportDpi);
         }
-        return { pngBlob, exportWorkerBuffer };
+        return pngBlob;
       };
 
       const exportProductionPdf = async (): Promise<Blob> => {
@@ -661,7 +659,6 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       }
 
       let productionBlob: Blob | null = null;
-      let exportWorkerBuffer: ArrayBuffer | null = null;
       const productionIsPdf = profile?.id === "fluorescent";
       let designState: Awaited<ReturnType<typeof buildDesignStatePayload>>;
       if (canReuseProduction) {
@@ -673,9 +670,8 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
           productionBlob = pdf;
           designState = fluorescentDesignState;
         } else {
-          const [exp, pngDesignState] = await Promise.all([exportProductionPng(), buildDesignStatePayload()]);
-          productionBlob = exp.pngBlob;
-          exportWorkerBuffer = exp.exportWorkerBuffer;
+          const [png, pngDesignState] = await Promise.all([exportProductionPng(), buildDesignStatePayload()]);
+          productionBlob = png;
           designState = pngDesignState;
         }
       }
@@ -704,7 +700,8 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       let productionUrl: string | null = null;
       let cartPreviewUrl: string | null = null;
       let uploadedProductionKey: string | null = productionKey || null;
-      let exportBufferForUpload = exportWorkerBuffer;
+      /** Why the builder's own upload failed, for the error the customer actually sees. */
+      let uploadFailureDetail: string | null = null;
 
       if (canReuseProduction && existingProduction?.url) {
         // Nothing affecting the sheet changed — point at the already-uploaded production PNG.
@@ -720,13 +717,13 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
           useShellRelay: !uploadUrl && canUseShellRelay(),
           productionFormat: productionIsPdf ? "pdf" as const : "png" as const,
         };
-        const uploadBody =
-          exportBufferForUpload && exportBufferForUpload.byteLength > 0
-            ? new Blob([exportBufferForUpload], { type: "image/png" })
-            : productionBlob;
         try {
+          // `productionBlob` is uploaded as-is. Building a fresh Blob here duplicated the
+          // encoded sheet one more time at the exact moment the device was already holding
+          // the export, which is how a phone ran out of memory on a large gangsheet and
+          // reported it as the store refusing the file.
           const uploaded = await uploadProductionToR2(
-            uploadBody as Blob,
+            productionBlob as Blob,
             filename,
             uploadUrl,
             onUploadProgress,
@@ -735,9 +732,9 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
           productionUrl = uploaded.productionUrl;
           cartPreviewUrl = uploaded.cartPreviewUrl || uploaded.productionUrl;
           uploadedProductionKey = uploaded.key || uploadedProductionKey;
-          exportBufferForUpload = null;
         } catch (uploadErr) {
           const detail = uploadErr instanceof Error ? uploadErr.message : String(uploadErr);
+          uploadFailureDetail = detail;
           console.warn("[handleAddToCart] Builder R2 upload failed, falling back to parent shell:", detail);
           setAddToCartProgressLabel(undefined);
           // Parent shell can upload via signed proxy URL when builder→R2 or shell relay fails.
@@ -776,8 +773,13 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       if (!productionUrl) {
         if (!productionBlob || !productionBlob.size) throw new Error("Empty design file");
         if (canUseShellRelay()) {
+          // Say why. Posting the file to the parent instead is not an option here — the
+          // storefront proxy rejects bodies this size with a 413 — so this is the end of the
+          // road, and without the underlying reason it is undiagnosable on a phone, where
+          // nobody can open a console.
           throw new Error(
-            `The store upload relay did not accept the ${productionIsPdf ? "PDF" : "PNG"} production file. Please refresh the storefront and try again.`,
+            `The store upload relay did not accept the ${productionIsPdf ? "PDF" : "PNG"} production file` +
+              `${uploadFailureDetail ? ` (${uploadFailureDetail})` : ""}. Please refresh the storefront and try again.`,
           );
         }
         const productionBuffer = await productionBlob.arrayBuffer();
@@ -797,7 +799,6 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       }
       // Drop large local references after the parent has received the message.
       productionBlob = null;
-      exportWorkerBuffer = null;
       // Keep loading state until parent redirects (upload runs in parent). Do not clear in finally.
     } catch (error) {
       // Nothing reached the shell, so no status can legitimately arrive for it.

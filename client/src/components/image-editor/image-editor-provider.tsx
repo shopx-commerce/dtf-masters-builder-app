@@ -12,11 +12,85 @@ import {
   clampDesignToArtboard,
   getDesignSelectionBounds,
   getDesignSelectionUnits,
+  getRotatedBounds,
   rotateDesignSelection,
 } from "./utils";
 import type { DesignItem } from "@/lib/types";
 
 export type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
+
+/**
+ * Provisional spacing for freshly-created copies, in inches. Only has to be close: the
+ * arrange that follows repacks everything with the customer's real gap setting.
+ */
+const COPY_SEED_GAP_INCHES = 0.25;
+
+/**
+ * Lay new copies out in a grid below the existing artwork instead of stacking them all on
+ * the design they came from.
+ *
+ * Copies used to be born at the base's exact transform, so for the whole time the packer
+ * was working — seconds, on a sheet with a couple of hundred designs — the customer was
+ * looking at a single design with N invisible duplicates underneath it. Any hiccup in the
+ * arrange left that pile on screen, which is what "it just overlaps everything and doesn't
+ * even auto arrange" describes.
+ *
+ * This is deliberately arithmetic rather than a pack: it runs in the same tick as the
+ * click, it never overlaps, and it starts below the current content so it does not disturb
+ * work the customer has already placed — which also gives the packer's stable-layout pass
+ * a sensible starting point. Rows that run past the bottom of the sheet are fine; the
+ * arrange that follows either fits them or grows the sheet, exactly as before.
+ */
+function seedCopyGrid(args: {
+  base: Omit<DesignItem, "groupId">;
+  baseName: string;
+  ids: string[];
+  existing: DesignItem[];
+  artboardWidth: number;
+  artboardHeight: number;
+}): DesignItem[] {
+  const { base, baseName, ids, existing, artboardWidth, artboardHeight } = args;
+  const bounds = getRotatedBounds(base);
+  const footprintW = bounds.maxX - bounds.minX;
+  const footprintH = bounds.maxY - bounds.minY;
+
+  const makeCopy = (id: string, transform: DesignItem["transform"]): DesignItem => ({
+    ...base,
+    id,
+    name: baseName,
+    transform,
+    printFileName: false,
+  });
+
+  // A degenerate footprint would divide by zero below. Falling back to the old co-located
+  // behaviour is worse than nothing but still lets arrange sort it out.
+  if (!(footprintW > 0) || !(footprintH > 0)) {
+    return ids.map(id => makeCopy(id, { ...base.transform }));
+  }
+
+  let bandBottom = 0;
+  for (const d of existing) {
+    const b = getRotatedBounds(d);
+    const bottom = d.transform.ny * artboardHeight + b.maxY;
+    if (bottom > bandBottom) bandBottom = bottom;
+  }
+
+  const gap = COPY_SEED_GAP_INCHES;
+  const columns = Math.max(1, Math.floor((artboardWidth + gap) / (footprintW + gap)));
+  return ids.map((id, i) => {
+    const column = i % columns;
+    const rowIndex = Math.floor(i / columns);
+    // Grid cell's top-left, converted to the design's centre — which is not the centre of
+    // its bounding box once rotation or a print-name stamp is involved.
+    const left = gap + column * (footprintW + gap);
+    const top = bandBottom + gap + rowIndex * (footprintH + gap);
+    return makeCopy(id, {
+      ...base.transform,
+      nx: (left - bounds.minX) / artboardWidth,
+      ny: (top - bounds.minY) / artboardHeight,
+    });
+  });
+}
 
 export function ImageEditorProvider({ children, ...props }: ImageEditorProps & { children: React.ReactNode }) {
   const value = useImageEditorModel(props);
@@ -62,25 +136,24 @@ function useImageEditorModel(props: ImageEditorProps) {
       const baseName = base.name.replace(/ copy( \d+)?$/, "");
       // Strip `groupId` from row-count copies. If the source belongs to
       // a user-defined group, inheriting that `groupId` would collapse
-      // every copy into the same super-item during auto-arrange — and
-      // because all copies start at the base's exact transform, the
-      // super-item bbox is one item's size, so arrange happily places
-      // the group in a tiny slot with N copies stacked on top of each
-      // other. Stripping matches `handleDuplicateDesign`'s behavior for
+      // every copy into the same super-item during auto-arrange, and the
+      // packer would then look for one slot big enough for the lot.
+      // Stripping matches `handleDuplicateDesign`'s behavior for
       // single-source copies: layer-row "+" is semantically "add N more
       // of this item to the sheet", not "expand the group", so the new
       // copies should be free to be placed independently by arrange.
       const { groupId: _dropGid, ...baseNoGroup } = base;
-      const copies = Array.from({ length: delta }, () => ({
-        ...baseNoGroup,
-        id: crypto.randomUUID(),
-        name: baseName,
-        transform: { ...base.transform },
-        printFileName: false,
-      }));
-      bagSetDesigns(prev => [...prev, ...copies]);
-      bagSetSelectedDesignIds(new Set([...row.designs.map(d => d.id), ...copies.map(d => d.id)]));
-      bagSetSelectedDesignId(copies[copies.length - 1].id);
+      const copyIds = Array.from({ length: delta }, () => crypto.randomUUID());
+      bagSetDesigns(prev => [...prev, ...seedCopyGrid({
+        base: baseNoGroup,
+        baseName,
+        ids: copyIds,
+        existing: prev,
+        artboardWidth: bagArtboardWidth,
+        artboardHeight: bagArtboardHeight,
+      })]);
+      bagSetSelectedDesignIds(new Set([...row.designs.map(d => d.id), ...copyIds]));
+      bagSetSelectedDesignId(copyIds[copyIds.length - 1]);
     } else {
       const idsToRemove = new Set(row.designs.slice(targetCount).map(d => d.id));
       bagSetDesigns(prev => prev.filter(d => !idsToRemove.has(d.id)));
@@ -104,7 +177,7 @@ function useImageEditorModel(props: ImageEditorProps) {
         });
       });
     });
-  }, [bagSaveSnapshot, bagSetDesigns, bagSetSelectedDesignIds, bagSetSelectedDesignId, bagSelectedDesignId, bagHandleAutoArrangeRef]);
+  }, [bagSaveSnapshot, bagSetDesigns, bagSetSelectedDesignIds, bagSetSelectedDesignId, bagSelectedDesignId, bagHandleAutoArrangeRef, bagArtboardWidth, bagArtboardHeight]);
 
   const handleSetRotation = useCallback((degrees: number) => {
     const ids = bagSelectedDesignIds.size > 0

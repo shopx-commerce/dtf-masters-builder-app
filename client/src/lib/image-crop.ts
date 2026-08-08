@@ -317,6 +317,21 @@ function getCropWorker(): Worker | null {
   return _cropWorker;
 }
 
+/**
+ * Kill the shared crop worker so the next call spawns a fresh one.
+ *
+ * Called before falling back to the main thread. A crop only times out on a device that is
+ * already saturated, so leaving the worker to finish a result nobody will read would have the
+ * fallback competing with the very job it is replacing — on the one thread that paints the UI.
+ */
+function discardCropWorker(): void {
+  const worker = _cropWorker;
+  _cropWorker = null;
+  if (worker) {
+    try { worker.terminate(); } catch { /* already dead */ }
+  }
+}
+
 let _cropRequestCounter = 0;
 
 export function cropImageToContentAsync(image: HTMLImageElement): Promise<HTMLCanvasElement | null> {
@@ -342,6 +357,7 @@ export function cropImageToContentAsync(image: HTMLImageElement): Promise<HTMLCa
       const buffer = imageData.data.buffer;
       const timeout = setTimeout(() => {
         worker.removeEventListener('message', handler);
+        discardCropWorker();
         resolve(cropImageToContent(image));
       }, 15000);
 

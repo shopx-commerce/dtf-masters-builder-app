@@ -384,6 +384,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const topRulerRef = useRef<HTMLCanvasElement>(null);
     const leftRulerRef = useRef<HTMLCanvasElement>(null);
     const rulerSigRef = useRef('');
+    /** Restarts the ruler tracking loop; see the ruler effect for why it sleeps. */
+    const rulerWakeRef = useRef<(() => void) | null>(null);
     const dpiScaleRef = useRef(BASE_DPI_SCALE);
     const lastImageRef = useRef<string | null>(null);
     /** Start at 0×0 so we never paint a wrong aspect (e.g. 360×360) before the first measure — that was the visible “snap”. */
@@ -397,7 +399,6 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     /** The first measured viewport is the only layout measurement allowed to establish the initial zoom. */
     const hasInitialViewportFitRef = useRef(false);
     const spotPulseRef = useRef(1);
-    const spotAnimFrameRef = useRef<number | null>(null);
     const spotOverlayCacheRef = useRef<{ key: string; canvas: HTMLCanvasElement } | null>(null);
     const createSpotOverlayCanvasRef = useRef<((source?: HTMLImageElement | HTMLCanvasElement) => HTMLCanvasElement | null) | null>(null);
 
@@ -583,6 +584,21 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const dragPerfLastTsRef = useRef<number | null>(null);
     const dragPerfSamplesRef = useRef<number[]>([]);
     const dragPerfLastCommitRef = useRef(0);
+    /**
+     * How long the render function itself takes, as distinct from the frame
+     * cadence around it. Cadence answers "are we keeping up"; this answers "is
+     * the canvas work the reason we are not", which is the only one of the two
+     * that says whether moving the dragged design to its own layer would help.
+     */
+    const renderPerfSamplesRef = useRef<number[]>([]);
+    /**
+     * Static-composite rebuilds within the current gesture. A drag should cost
+     * exactly two: one when the selected design leaves the composite, one when
+     * it rejoins. Anything above that is a signature being invalidated
+     * mid-gesture, which is a different bug from a slow frame.
+     */
+    const compositeRebuildsRef = useRef(0);
+    const dragPerfGestureRef = useRef<string | null>(null);
     const queuePanStateCommit = useCallback((x: number, y: number) => {
       panXRef.current = x;
       panYRef.current = y;
@@ -633,9 +649,20 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
     const AUTOPAN_EDGE = 60;
     const AUTOPAN_MAX_SPEED = 8;
+    /**
+     * How stale the canvas-area rect may get while auto-pan is running.
+     *
+     * Auto-pan starts on the first move of any drag and ticks until the pointer is released,
+     * so reading the rect each frame billed the whole gesture a forced layout — even for the
+     * overwhelming majority of drags that never come near an edge. The rect only moves when
+     * the window resizes or the page scrolls, neither of which happens mid-drag, so a short
+     * lease is indistinguishable from reading it fresh.
+     */
+    const AUTOPAN_RECT_MAX_AGE_MS = 200;
 
     const stopAutoPan = useCallback(() => {
       autoPanActiveRef.current = false;
+      autoPanRectRef.current = null;
       if (autoPanRafRef.current != null) {
         cancelAnimationFrame(autoPanRafRef.current);
         autoPanRafRef.current = null;
@@ -647,7 +674,13 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const el = canvasAreaRef.current;
       if (!el) { stopAutoPan(); return; }
 
-      const rect = el.getBoundingClientRect();
+      const now = performance.now();
+      let rect = autoPanRectRef.current;
+      if (rect === null || now - autoPanRectAtRef.current > AUTOPAN_RECT_MAX_AGE_MS) {
+        rect = el.getBoundingClientRect();
+        autoPanRectRef.current = rect;
+        autoPanRectAtRef.current = now;
+      }
       const mx = autoPanMouseRef.current.x;
       const my = autoPanMouseRef.current.y;
       const z = zoomRef.current;
@@ -710,9 +743,13 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       autoPanMouseRef.current = { x: clientX, y: clientY };
       if (!autoPanActiveRef.current) {
         autoPanActiveRef.current = true;
+        autoPanRectRef.current = null;
         autoPanRafRef.current = requestAnimationFrame(tickAutoPan);
       }
     }, [tickAutoPan]);
+    // A drag interrupted by unmount — a route change, or the mobile sheet closing mid-gesture
+    // — would otherwise leave this loop ticking against a detached element.
+    useEffect(() => () => stopAutoPan(), [stopAutoPan]);
 
     const updateAutoPanMouse = useCallback((clientX: number, clientY: number) => {
       autoPanMouseRef.current = { x: clientX, y: clientY };
@@ -720,9 +757,48 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
     useEffect(() => {
       if (!showDragPerfDebug) return;
+      /**
+       * Which gesture is being measured. Panning and design dragging stress
+       * completely different paths — panning is a CSS transform and touches no
+       * canvas at all, dragging re-renders — so reporting them under one label
+       * would average two unrelated things together.
+       */
+      const activeGesture = (): string | null => {
+        if (isPanningRef.current) return 'pan';
+        if (scrollDragRef.current) return 'scrollbar';
+        if (isMultiDragRef.current) return 'group drag';
+        if (isMultiResizeRef.current) return 'group resize';
+        if (isMultiRotateRef.current) return 'group rotate';
+        if (isDraggingRef.current) return 'drag';
+        if (isResizingRef.current) return 'resize';
+        if (isRotatingRef.current) return 'rotate';
+        return null;
+      };
+      // Median rather than mean: a stalled frame or a one-off composite rebuild
+      // drags a mean far away from what the gesture actually feels like, and
+      // the p95 already covers the tail.
+      const stats = (samples: number[]) => {
+        const sorted = [...samples].sort((a, b) => a - b);
+        return {
+          med: sorted[Math.floor(sorted.length / 2)],
+          p95: sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)],
+        };
+      };
       const loop = (ts: number) => {
+        const gesture = activeGesture();
+        // Counters are per-gesture, so a boundary clears them. Without this the
+        // idle 60fps frames before a drag sit in the window and flatter the
+        // average for the first two seconds of it.
+        if (gesture !== dragPerfGestureRef.current) {
+          dragPerfGestureRef.current = gesture;
+          dragPerfSamplesRef.current.length = 0;
+          renderPerfSamplesRef.current.length = 0;
+          compositeRebuildsRef.current = 0;
+          if (!gesture) setDragPerfText('');
+        }
+
         const prev = dragPerfLastTsRef.current;
-        if (prev != null) {
+        if (gesture && prev != null) {
           const dt = ts - prev;
           if (dt > 0 && dt < 1000) {
             const samples = dragPerfSamplesRef.current;
@@ -732,18 +808,20 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         }
         dragPerfLastTsRef.current = ts;
 
-        const active = !!scrollDragRef.current || isPanningRef.current;
-        if (active && ts - dragPerfLastCommitRef.current > 250) {
-          const samples = dragPerfSamplesRef.current;
-          if (samples.length > 0) {
-            const avgMs = samples.reduce((a, b) => a + b, 0) / samples.length;
-            const fps = avgMs > 0 ? 1000 / avgMs : 0;
-            const p95 = [...samples].sort((a, b) => a - b)[Math.max(0, Math.floor(samples.length * 0.95) - 1)];
-            setDragPerfText(`drag fps ${Math.round(fps)} | avg ${avgMs.toFixed(1)}ms | p95 ${p95.toFixed(1)}ms`);
+        if (gesture && ts - dragPerfLastCommitRef.current > 250) {
+          const frames = dragPerfSamplesRef.current;
+          if (frames.length > 0) {
+            const f = stats(frames);
+            const renders = renderPerfSamplesRef.current;
+            const r = renders.length > 0 ? stats(renders) : null;
+            setDragPerfText(
+              `${gesture} ${Math.round(f.med > 0 ? 1000 / f.med : 0)}fps` +
+              ` | frame med ${f.med.toFixed(1)} p95 ${f.p95.toFixed(1)}ms` +
+              (r ? ` | render med ${r.med.toFixed(1)} p95 ${r.p95.toFixed(1)}ms x${renders.length}` : ' | render —') +
+              ` | rebuilds ${compositeRebuildsRef.current}`,
+            );
             dragPerfLastCommitRef.current = ts;
           }
-        } else if (!active && dragPerfText) {
-          setDragPerfText('');
         }
 
         dragPerfRafRef.current = requestAnimationFrame(loop);
@@ -755,7 +833,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           dragPerfRafRef.current = null;
         }
       };
-    }, [dragPerfText, showDragPerfDebug]);
+    }, [showDragPerfDebug]);
     const renderRef = useRef<(() => void) | null>(null);
     
     const checkerboardPatternRef = useRef<{width: number; height: number; pattern: CanvasPattern} | null>(null);
@@ -766,6 +844,18 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     // single drawImage call instead of iterating N designs per frame —
     // ~5–10× faster on multi-design gangsheets on mid-range mobile devices.
     const staticCompositeRef = useRef<{ canvas: HTMLCanvasElement; signature: string } | null>(null);
+
+    // Dev-only A/B for viewport culling. `?cullprobe=1` makes every composite
+    // rebuild happen twice — once drawing every design as we ship today, once
+    // drawing only the designs whose bounds intersect the visible part of the
+    // sheet — and records both timings on `window.__cullProbe`. The second
+    // pass goes to a scratch canvas so the visible result is unchanged.
+    // Doubles rebuild cost while enabled; never runs in production.
+    const cullProbeEnabled = useRef(
+      import.meta.env.DEV && typeof window !== 'undefined'
+        && new URLSearchParams(window.location.search).get('cullprobe') === '1',
+    ).current;
+    const cullProbeCanvasRef = useRef<HTMLCanvasElement | null>(null);
     
     const [editingRotation, setEditingRotation] = useState(false);
     const [rotationInput, setRotationInput] = useState('0');
@@ -809,6 +899,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const autoPanRafRef = useRef<number | null>(null);
     const autoPanMouseRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
     const autoPanActiveRef = useRef(false);
+    const autoPanRectRef = useRef<DOMRect | null>(null);
+    const autoPanRectAtRef = useRef(0);
 
     const isMarqueeRef = useRef(false);
     const marqueeStartRef = useRef<{x: number; y: number}>({x: 0, y: 0});
@@ -833,10 +925,69 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const moveRafRef = useRef<number | null>(null);
     const pendingMoveRef = useRef<{ cx: number; cy: number; alt?: boolean } | null>(null);
 
+    /** True while any gesture is under way, in which case the sheet is already repainting. */
+    const isInteractionActive = useCallback(() => (
+      isDraggingRef.current || isResizingRef.current || isRotatingRef.current ||
+      isMultiDragRef.current || isMultiResizeRef.current || isMultiRotateRef.current ||
+      isPanningRef.current || scrollDragRef.current !== null
+    ), []);
+
+    /**
+     * The single frame loop for continuous animations over the sheet.
+     *
+     * Two things animate independently — the spot-colour pulse and the bottom-edge expand
+     * glow — and each used to own a `requestAnimationFrame` that called `renderRef` itself.
+     * Alive together they drew the whole sheet twice per frame, on top of whatever the React
+     * render effect was already drawing for the gesture underneath. Animators register here
+     * instead: they are ticked together and the sheet is repainted at most once per frame.
+     *
+     * A tick returns whether it needs the sheet repainted, which lets an animation update its
+     * value without forcing a draw — the way the spot pulse behaves mid-gesture, when the
+     * render effect is going to repaint anyway and would pick the new value up regardless.
+     */
+    const animatorsRef = useRef<Map<string, (now: number) => boolean>>(new Map());
+    const animatorRafRef = useRef<number | null>(null);
+
+    const runAnimatorFrame = useCallback((now: number) => {
+      animatorRafRef.current = null;
+      const animators = animatorsRef.current;
+      if (animators.size === 0) return;
+      let needsRepaint = false;
+      for (const tick of animators.values()) {
+        if (tick(now)) needsRepaint = true;
+      }
+      if (needsRepaint) renderRef.current?.();
+      if (animators.size > 0) {
+        animatorRafRef.current = requestAnimationFrame(runAnimatorFrame);
+      }
+    }, []);
+
+    const startAnimator = useCallback((key: string, tick: (now: number) => boolean) => {
+      animatorsRef.current.set(key, tick);
+      if (animatorRafRef.current === null) {
+        animatorRafRef.current = requestAnimationFrame(runAnimatorFrame);
+      }
+    }, [runAnimatorFrame]);
+
+    const stopAnimator = useCallback((key: string) => {
+      animatorsRef.current.delete(key);
+      if (animatorsRef.current.size === 0 && animatorRafRef.current !== null) {
+        cancelAnimationFrame(animatorRafRef.current);
+        animatorRafRef.current = null;
+      }
+    }, []);
+
+    useEffect(() => () => {
+      animatorsRef.current.clear();
+      if (animatorRafRef.current !== null) {
+        cancelAnimationFrame(animatorRafRef.current);
+        animatorRafRef.current = null;
+      }
+    }, []);
+
     const bottomGlowRef = useRef(0);
     const expandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const expandTimerStartRef = useRef<number>(0);
-    const glowAnimRef = useRef<number | null>(null);
     const onExpandArtboardRef = useRef(onExpandArtboard);
     onExpandArtboardRef.current = onExpandArtboard;
     const bottomGlowActiveRef = useRef(false);
@@ -845,19 +996,17 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       if (bottomGlowActiveRef.current) return;
       bottomGlowActiveRef.current = true;
       expandTimerStartRef.current = Date.now();
-      const tick = () => {
-        if (!bottomGlowActiveRef.current) return;
+      startAnimator('bottomGlow', () => {
+        if (!bottomGlowActiveRef.current) return false;
         const elapsed = Date.now() - expandTimerStartRef.current;
         bottomGlowRef.current = Math.min(1, elapsed / 1900);
-        renderRef.current?.();
-        glowAnimRef.current = requestAnimationFrame(tick);
-      };
-      glowAnimRef.current = requestAnimationFrame(tick);
+        return true;
+      });
       expandTimerRef.current = setTimeout(() => {
         onExpandArtboardRef.current?.();
         stopBottomGlow();
       }, 1900);
-    }, []);
+    }, [startAnimator]);
 
     const stopBottomGlow = useCallback(() => {
       // The drag path calls this on every pointer-move frame, so an
@@ -870,13 +1019,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         clearTimeout(expandTimerRef.current);
         expandTimerRef.current = null;
       }
-      if (glowAnimRef.current !== null) {
-        cancelAnimationFrame(glowAnimRef.current);
-        glowAnimRef.current = null;
-      }
+      stopAnimator('bottomGlow');
       bottomGlowRef.current = 0;
       if (hadGlow) renderRef.current?.();
-    }, []);
+    }, [stopAnimator]);
     useEffect(() => () => stopBottomGlow(), [stopBottomGlow]);
 
     const altDragDuplicatedRef = useRef(false);
@@ -3167,10 +3313,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     useEffect(() => {
       if (!spotPreviewData?.enabled) {
         spotPulseRef.current = 1;
-        if (spotAnimFrameRef.current !== null) {
-          cancelAnimationFrame(spotAnimFrameRef.current);
-          spotAnimFrameRef.current = null;
-        }
+        stopAnimator('spotPulse');
         spotOverlayCacheRef.current = null;
         if (renderRef.current) renderRef.current();
         return;
@@ -3178,7 +3321,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const hasAny = spotPreviewData?.colors?.some(c => c.spotFluorY || c.spotFluorM || c.spotFluorG || c.spotFluorOrange || c.spotWhite || c.spotGloss);
       if (!hasAny) {
         spotPulseRef.current = 1;
-        if (spotAnimFrameRef.current !== null) { cancelAnimationFrame(spotAnimFrameRef.current); spotAnimFrameRef.current = null; }
+        stopAnimator('spotPulse');
         spotOverlayCacheRef.current = null;
         if (renderRef.current) renderRef.current();
         return;
@@ -3186,22 +3329,22 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       let startTime: number | null = null;
       let lastFrameTime = 0;
       const FRAME_INTERVAL = 1000 / 30;
-      const animate = (timestamp: number) => {
+      startAnimator('spotPulse', (timestamp) => {
         if (startTime === null) startTime = timestamp;
-        if (timestamp - lastFrameTime >= FRAME_INTERVAL) {
-          lastFrameTime = timestamp;
-          const elapsed = (timestamp - startTime) / 1000;
-          spotPulseRef.current = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(elapsed * Math.PI * 1.5));
-          if (renderRef.current) renderRef.current();
-        }
-        spotAnimFrameRef.current = requestAnimationFrame(animate);
-      };
-      spotAnimFrameRef.current = requestAnimationFrame(animate);
+        if (timestamp - lastFrameTime < FRAME_INTERVAL) return false;
+        lastFrameTime = timestamp;
+        const elapsed = (timestamp - startTime) / 1000;
+        spotPulseRef.current = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(elapsed * Math.PI * 1.5));
+        // Mid-gesture the sheet is already being repainted every frame and will read the
+        // new pulse value on its way through. Asking for a draw here would paint the whole
+        // sheet a second time to show a highlight that is about to be drawn anyway.
+        return !isInteractionActive();
+      });
       return () => {
-        if (spotAnimFrameRef.current !== null) { cancelAnimationFrame(spotAnimFrameRef.current); spotAnimFrameRef.current = null; }
+        stopAnimator('spotPulse');
         spotPulseRef.current = 1;
       };
-    }, [spotPreviewData]);
+    }, [spotPreviewData, startAnimator, stopAnimator, isInteractionActive]);
 
     const createSpotOverlayCanvas = useCallback((source?: HTMLImageElement | HTMLCanvasElement): HTMLCanvasElement | null => {
       if (!imageInfo || !spotPreviewData?.enabled) return null;
@@ -3564,7 +3707,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           cctx.clearRect(0, 0, compW, compH);
           cctx.imageSmoothingEnabled = true;
           cctx.imageSmoothingQuality = 'high';
+          const rebuildStart = cullProbeEnabled ? performance.now() : 0;
           drawStaticSceneInto(cctx, compW, compH);
+          if (cullProbeEnabled) recordCullProbe(performance.now() - rebuildStart, canvas, compW, compH);
+          compositeRebuildsRef.current++;
           staticCompositeRef.current = { canvas: composite, signature };
           ctx.drawImage(composite, 0, 0, canvasWidth, canvasHeight);
         }
@@ -3589,7 +3735,97 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         ctx.imageSmoothingQuality = prevQuality;
       }
 
-      function drawStaticSceneInto(dctx: CanvasRenderingContext2D, cw: number, ch: number) {
+      /** Rotation-aware bounding box of a design, in destination pixels. */
+      function designIntersects(
+        design: DesignItem,
+        cw: number,
+        ch: number,
+        r: { x0: number; y0: number; x1: number; y1: number },
+      ) {
+        const rect = computeLayerRect(
+          design.imageInfo.image.width, design.imageInfo.image.height,
+          design.transform, cw, ch,
+          artboardWidth, artboardHeight,
+          design.widthInches, design.heightInches,
+        );
+        const rad = (design.transform.rotation * Math.PI) / 180;
+        const c = Math.abs(Math.cos(rad));
+        const s = Math.abs(Math.sin(rad));
+        const halfW = (rect.width * c + rect.height * s) / 2;
+        const halfH = (rect.width * s + rect.height * c) / 2;
+        const cx = rect.x + rect.width / 2;
+        const cy = rect.y + rect.height / 2;
+        return cx + halfW >= r.x0 && cx - halfW <= r.x1
+          && cy + halfH >= r.y0 && cy - halfH <= r.y1;
+      }
+
+      /**
+       * Re-runs the rebuild we just did, this time skipping designs outside
+       * the visible slice of the sheet, and logs both timings. Scratch canvas
+       * only — nothing here reaches the screen.
+       */
+      function recordCullProbe(fullMs: number, sheetCanvas: HTMLCanvasElement, cw: number, ch: number) {
+        const area = canvasAreaRef.current;
+        if (!area) return;
+        const areaRect = area.getBoundingClientRect();
+        const sheetRect = sheetCanvas.getBoundingClientRect();
+        if (sheetRect.width <= 0 || sheetRect.height <= 0) return;
+        // Visible slice of the sheet, expressed in destination pixels.
+        const toX = (clientX: number) => ((clientX - sheetRect.left) / sheetRect.width) * cw;
+        const toY = (clientY: number) => ((clientY - sheetRect.top) / sheetRect.height) * ch;
+        const visibleRect = {
+          x0: toX(Math.max(areaRect.left, sheetRect.left)),
+          y0: toY(Math.max(areaRect.top, sheetRect.top)),
+          x1: toX(Math.min(areaRect.right, sheetRect.right)),
+          y1: toY(Math.min(areaRect.bottom, sheetRect.bottom)),
+        };
+
+        let considered = 0;
+        let visible = 0;
+        for (const design of designs) {
+          if (design.id === selectedDesignId) continue;
+          if (movingExcluded?.has(design.id)) continue;
+          considered++;
+          if (designIntersects(design, cw, ch, visibleRect)) visible++;
+        }
+
+        let scratch = cullProbeCanvasRef.current;
+        if (!scratch) {
+          scratch = document.createElement('canvas');
+          cullProbeCanvasRef.current = scratch;
+        }
+        if (scratch.width !== cw) scratch.width = cw;
+        if (scratch.height !== ch) scratch.height = ch;
+        const sctx = scratch.getContext('2d');
+        if (!sctx) return;
+        sctx.clearRect(0, 0, cw, ch);
+        sctx.imageSmoothingEnabled = true;
+        sctx.imageSmoothingQuality = 'high';
+        const culledStart = performance.now();
+        drawStaticSceneInto(sctx, cw, ch, visibleRect);
+        const culledMs = performance.now() - culledStart;
+
+        const w = window as unknown as { __cullProbe?: unknown[] };
+        if (!w.__cullProbe) w.__cullProbe = [];
+        w.__cullProbe.push({
+          fullMs: Math.round(fullMs * 100) / 100,
+          culledMs: Math.round(culledMs * 100) / 100,
+          considered,
+          visible,
+          sheet: `${artboardWidth}x${artboardHeight}`,
+          buffer: `${cw}x${ch}`,
+          zoom: Math.round(zoomRef.current * 100) / 100,
+        });
+      }
+
+      function drawStaticSceneInto(
+        dctx: CanvasRenderingContext2D,
+        cw: number,
+        ch: number,
+        // Dev probe only. When set, designs whose bounds fall entirely outside
+        // this rect (in dctx pixels) are skipped.
+        visibleRect?: { x0: number; y0: number; x1: number; y1: number } | null,
+      ) {
         if (previewBgColor === 'transparent') {
           const pattern = getCheckerboardPattern(dctx, cw, ch);
           if (pattern) {
@@ -3605,6 +3841,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           // Moving companions are drawn per-frame on top of the composite
           // (see below), not baked into it.
           if (movingExcluded?.has(design.id)) continue;
+          if (visibleRect && !designIntersects(design, cw, ch, visibleRect)) continue;
           drawSingleDesign(dctx, design, cw, ch);
           if (overlappingDesigns.has(design.id)) {
             const rect = computeLayerRect(
@@ -3789,8 +4026,19 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
       } catch (err) { console.warn('Render error:', err); }
       };
-      renderRef.current = doRender;
-      doRender();
+      // Timing wraps the render rather than living inside it, so the measured
+      // path is exactly what ships when the flag is off.
+      const render = showDragPerfDebug
+        ? () => {
+            const t0 = performance.now();
+            doRender();
+            const samples = renderPerfSamplesRef.current;
+            samples.push(performance.now() - t0);
+            if (samples.length > 120) samples.shift();
+          }
+        : doRender;
+      renderRef.current = render;
+      render();
     }, [imageInfo, resizeSettings, previewDims.height, previewDims.width, artboardWidth, artboardHeight, designTransform, designs, selectedDesignId, selectedDesignIds, drawSingleDesign, overlappingDesigns, previewBgColor, zoomDpiTier, isMobile, interactionEpoch]);
 
     const drawImageWithResizePreview = (ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number) => {
@@ -3962,8 +4210,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
     // ---- Rulers: inch tick strips pinned to the top/left edges of the ----
     // ---- preview area. Overlay-only: they track the sheet's on-screen ----
-    // ---- rect each frame (cheap signature check skips redraws) and    ----
-    // ---- never touch interaction, render, or export code.            ----
+    // ---- rect whenever something wakes them, and never touch          ----
+    // ---- interaction, render, or export code.                         ----
     useEffect(() => {
       const RULER = 18;
       let raf = 0;
@@ -4061,16 +4309,13 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         ctx.stroke();
       };
 
-      const tick = () => {
-        raf = requestAnimationFrame(tick);
+      const measure = () => {
         const area = canvasAreaRef.current;
         const sheet = canvasRef.current;
-        const topC = topRulerRef.current;
-        const leftC = leftRulerRef.current;
-        if (!area || !sheet || !topC || !leftC) return;
+        if (!area || !sheet) return null;
         const areaRect = area.getBoundingClientRect();
         const rect = sheet.getBoundingClientRect();
-        if (areaRect.width <= 0 || rect.width <= 0) return;
+        if (areaRect.width <= 0 || rect.width <= 0) return null;
         // rect includes the 3px white border on each side, scaled by zoom.
         const dims = previewDimsRef.current;
         const scale = dims.width > 0 ? rect.width / (dims.width + 6) : 1;
@@ -4082,18 +4327,87 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           areaRect.width, areaRect.height, contentLeft, contentTop, contentW, contentH,
           artboardWidth, artboardHeight, window.devicePixelRatio || 1,
         ].map(v => Math.round(v * 10) / 10).join('|');
-        if (sig === rulerSigRef.current) return;
-        rulerSigRef.current = sig;
-        drawStrip(topC, 'x', Math.max(1, areaRect.width - RULER), contentLeft, contentW, artboardWidth);
-        drawStrip(leftC, 'y', Math.max(1, areaRect.height - RULER), contentTop, contentH, artboardHeight);
+        return { sig, areaRect, contentLeft, contentTop, contentW, contentH };
       };
 
-      raf = requestAnimationFrame(tick);
+      const draw = (m: NonNullable<ReturnType<typeof measure>>) => {
+        const topC = topRulerRef.current;
+        const leftC = leftRulerRef.current;
+        if (!topC || !leftC) return;
+        rulerSigRef.current = m.sig;
+        drawStrip(topC, 'x', Math.max(1, m.areaRect.width - RULER), m.contentLeft, m.contentW, artboardWidth);
+        drawStrip(leftC, 'y', Math.max(1, m.areaRect.height - RULER), m.contentTop, m.contentH, artboardHeight);
+      };
+
+      // The loop used to run for the lifetime of the editor, reading two
+      // bounding rects every frame and almost always discarding the result.
+      // That forced a layout on every frame even while nothing moved, and it
+      // cost the most during a group drag, where React is mutating the DOM
+      // each frame so every forced layout is a fresh one.
+      //
+      // Now it sleeps. Anything that can move the sheet wakes it, and it keeps
+      // ticking until the geometry has been still for long enough to have
+      // ridden out a CSS transition, which is the one kind of movement that
+      // arrives without an event per frame.
+      const STILL_FRAMES = 24;
+      let still = 0;
+
+      const tick = () => {
+        const m = measure();
+        if (m && m.sig !== rulerSigRef.current) {
+          draw(m);
+          still = 0;
+        } else {
+          still++;
+        }
+        if (still > STILL_FRAMES) { raf = 0; return; }
+        raf = requestAnimationFrame(tick);
+      };
+
+      const wake = () => {
+        still = 0;
+        if (raf) return;
+        raf = requestAnimationFrame(tick);
+      };
+      rulerWakeRef.current = wake;
+
+      // Backstop for movement with no wake trigger at all — an ancestor
+      // reflow that shifts the area without resizing it, say. Two reads a
+      // second instead of sixty, and it only wakes the loop if something
+      // really did move.
+      const safety = window.setInterval(() => {
+        if (raf) return;
+        const m = measure();
+        if (m && m.sig !== rulerSigRef.current) wake();
+      }, 500);
+
+      const ro = new ResizeObserver(wake);
+      if (canvasAreaRef.current) ro.observe(canvasAreaRef.current);
+      if (canvasRef.current) ro.observe(canvasRef.current);
+      window.addEventListener('resize', wake);
+      window.addEventListener('orientationchange', wake);
+      const areaEl = canvasAreaRef.current;
+      areaEl?.addEventListener('transitionend', wake);
+
+      wake();
       return () => {
-        cancelAnimationFrame(raf);
+        if (raf) cancelAnimationFrame(raf);
+        raf = 0;
+        window.clearInterval(safety);
+        ro.disconnect();
+        window.removeEventListener('resize', wake);
+        window.removeEventListener('orientationchange', wake);
+        areaEl?.removeEventListener('transitionend', wake);
+        rulerWakeRef.current = null;
         rulerSigRef.current = '';
       };
     }, [artboardWidth, artboardHeight]);
+
+    // Pan, zoom and sheet-size changes move the sheet without resizing
+    // anything the observers watch, so they wake the rulers explicitly.
+    useEffect(() => {
+      rulerWakeRef.current?.();
+    }, [panX, panY, zoom, previewDims.width, previewDims.height, isMobile]);
 
     const swatchFill = (color: string) =>
       color === 'transparent'

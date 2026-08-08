@@ -286,20 +286,43 @@ export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) 
     return () => window.clearTimeout(timer);
   }, [designs, handleApplyHalftone]);
 
-  /** Open the halftone colour-picker dropdown, pre-loading top colours. */
+  /**
+   * Toggle the halftone colour-picker dropdown, filling in the design's top colours.
+   *
+   * This is the only place the colour extractor runs outside the fluorescent product — the
+   * halftone screen needs a palette to tint by, and halftone is offered on hot peel too. It
+   * goes through the worker for the same reason the fluorescent picker does: matching every
+   * pixel of a 512px sample against the hundred-odd palette entries is tens of millions of
+   * distance calculations, and on the main thread that lands as a visible stall between the
+   * click and the menu appearing.
+   */
+  const halftoneMenuJobRef = useRef(0);
   const handleOpenHalftoneMenu = useCallback(async () => {
+    // Closing needs no palette. Extracting first meant every dismissal paid full price for
+    // colours that were on their way off screen.
+    if (halftoneMenuOpen) {
+      halftoneMenuJobRef.current++;
+      setHalftoneMenuOpen(false);
+      return;
+    }
     const id = selectedDesignId;
     if (!id) return;
     const design = designs.find(d => d.id === id);
     if (!design) return;
-    const { extractColorsFromImage } = await import('@/lib/color-extractor');
-    const extracted = extractColorsFromImage(design.imageInfo.image, 8);
-    const top4 = extracted.slice(0, 4).map(c => ({
+    setHalftoneMenuOpen(true);
+
+    const job = ++halftoneMenuJobRef.current;
+    const { extractColorsFromImageAsync, extractColorsFromImage } = await import('@/lib/color-extractor');
+    let extracted = await extractColorsFromImageAsync(design.imageInfo.image, 8).catch(() => []);
+    if (extracted.length === 0) {
+      try { extracted = extractColorsFromImage(design.imageInfo.image, 8); } catch { extracted = []; }
+    }
+    // The menu may have been closed, or another design selected, while the worker ran.
+    if (job !== halftoneMenuJobRef.current) return;
+    setHalftoneTopColors(extracted.slice(0, 4).map(c => ({
       r: c.rgb.r, g: c.rgb.g, b: c.rgb.b, hex: c.hex, name: c.name,
-    }));
-    setHalftoneTopColors(top4);
-    setHalftoneMenuOpen(prev => !prev);
-  }, [selectedDesignId, designs]);
+    })));
+  }, [selectedDesignId, designs, halftoneMenuOpen]);
 
   return {
     ...bag,

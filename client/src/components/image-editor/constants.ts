@@ -33,8 +33,14 @@ export const DEFAULT_DESIGN_TRANSFORM: ImageTransform = {
 /** Default print resolution when an uploaded raster has no reliable DPI metadata. */
 export const RASTER_DPI_FALLBACK = 300;
 export const EXPORT_DPI = 300;
-/** Warn when effective layer DPI falls below export DPI minus this margin. */
-export const LOW_RES_EFFECTIVE_DPI_THRESHOLD = EXPORT_DPI - 22;
+/**
+ * Warn on upload only when the artwork is genuinely unprintable — 36 DPI or
+ * below. This used to sit at `EXPORT_DPI - 22` (278), which fires for every
+ * ordinary 72 DPI file, so the toast appeared on almost every upload and
+ * stopped carrying information. The DPI badge in the toolbar still shows the
+ * softer 198/277 tiers, so customers keep the advisory signal without a popup.
+ */
+export const LOW_RES_EFFECTIVE_DPI_THRESHOLD = 37;
 /** Max pixel width/height for the *preview* copy of an uploaded raster kept
  *  in RAM. Export re-decodes from `imageInfo.exportBlob` so lowering this
  *  does not sacrifice print quality; it only bounds the interactive editing

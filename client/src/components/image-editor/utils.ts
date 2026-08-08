@@ -344,7 +344,7 @@ export async function exportPngWithWorker(options: {
   outH: number;
   exportDpi: number;
   onProgress?: (progress: PngExportProgress) => void;
-}): Promise<{ blob: Blob; buffer: ArrayBuffer }> {
+}): Promise<{ blob: Blob }> {
   const worker = getExportWorker();
   if (!worker || !canUseMemoryEfficientPngExport()) {
     throw new Error("The memory-efficient PNG export path is unavailable in this browser.");
@@ -448,10 +448,12 @@ export async function exportPngWithWorker(options: {
     }
   });
 
-  return {
-    buffer: result.buffer,
-    blob: new Blob([result.buffer], { type: "image/png" }),
-  };
+  // Only the Blob is returned. Handing back the ArrayBuffer as well kept the encoded sheet
+  // alive twice for as long as the caller held the result, and the add-to-cart path then
+  // built further Blobs from it — four live copies of a production PNG that can be 150 MB.
+  // Letting the buffer fall out of scope here means the copy the Blob just took is the only
+  // one that survives this function.
+  return { blob: new Blob([result.buffer], { type: "image/png" }) };
 }
 
 let _arrangeWorker: Worker | null = null;
@@ -461,6 +463,23 @@ export function getArrangeWorker(): Worker | null {
     catch { return null; }
   }
   return _arrangeWorker;
+}
+
+/**
+ * Kill the shared arrange worker so the next arrange spawns a fresh one.
+ *
+ * Packing only overruns its deadline on a device that is already struggling, and the caller
+ * answers a timeout by packing the same sheet again on the main thread. Left alive, the
+ * abandoned worker would keep a core busy on a layout nobody will read for as long as the
+ * fallback takes — turning one slow arrange into a frozen tab on exactly the hardware that
+ * could least afford it.
+ */
+export function discardArrangeWorker(): void {
+  const worker = _arrangeWorker;
+  _arrangeWorker = null;
+  if (worker) {
+    try { worker.terminate(); } catch { /* worker already dead */ }
+  }
 }
 
 /**

@@ -1,4 +1,5 @@
 import { isTrustedShellMessage } from "./shell-message";
+import { isMobileDevice } from "./upload-queue";
 
 type UploadJson = Record<string, unknown>;
 export type R2UploadBody = Blob | ArrayBuffer | Uint8Array;
@@ -337,7 +338,12 @@ export async function uploadPreparedPartsToR2(
 
   const partSize = Number(meta.partSize) || 64 * 1024 * 1024;
   const totalParts = Number(meta.totalParts) || parts.length;
-  const parallelism = Math.max(1, Math.min(Number(meta.parallelism) || 16, totalParts));
+  // Parts are 64 MB by default, and each one in flight is that much memory held by the
+  // network stack. Sixteen at once is fine on a desktop and is roughly a gigabyte on a phone
+  // that has already just built the sheet — over the budget iOS allows a tab, where the
+  // failure surfaces as an upload error rather than anything mentioning memory.
+  const maxInFlight = isMobileDevice() ? 2 : 16;
+  const parallelism = Math.max(1, Math.min(Number(meta.parallelism) || maxInFlight, maxInFlight, totalParts));
   const sorted = parts.slice().sort((a, b) => Number(a.partNumber) - Number(b.partNumber));
   let nextIndex = 0;
   const uploadedParts: Array<{ partNumber: number; etag: string }> = [];
