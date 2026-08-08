@@ -385,3 +385,48 @@ export function sanitizeShellViewportWidth(raw: unknown): number | null {
   }
   return width;
 }
+
+/**
+ * Deepest keyboard overlap a shell may credibly claim, in CSS pixels.
+ *
+ * Deliberately not sized to a keyboard. The number is how far up *this frame*
+ * the keyboard reaches, so on an embed taller than the screen it is mostly
+ * iframe rather than keyboard — a 1600px iframe on a 390px-tall phone yields
+ * 1431 — and a keyboard-shaped ceiling would reject the honest answer. It
+ * shares the viewport width's ceiling above for the same reason that one has
+ * it: to keep an absurd value out of a layout calculation, not to guess a real
+ * device. Anything past the frame's own height already means "all of it is
+ * covered", which the caller handles by declining. Zero is meaningful and must
+ * be accepted: it is how a shell says the keyboard has closed.
+ */
+const MAX_SHELL_KEYBOARD_INSET = MAX_SHELL_VIEWPORT_WIDTH;
+
+/**
+ * Validate a shell-supplied keyboard inset before it is allowed to influence
+ * the layout. Returns the rounded inset, or `null` if it must be ignored — in
+ * which case the caller falls back to this frame's own measurement.
+ *
+ * Strictly a number, for the same reason as the viewport width: a shell posting
+ * `"216px"` degrades to the current behaviour instead of producing `NaN`
+ * somewhere further down.
+ *
+ * This is only the value check. The caller decides what an inset means and
+ * whether it is large enough to be a keyboard at all — see
+ * `use-keyboard-safe-focus.ts`, which still requires it to clear the same
+ * threshold a locally measured one has to clear, so a shell cannot make the
+ * hook engage with a number too small to be a keyboard.
+ */
+export function sanitizeShellKeyboardInset(raw: unknown): number | null {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    warnOnce("rejected a shell keyboardInset that is not a finite number", {
+      type: typeof raw,
+    });
+    return null;
+  }
+  const inset = Math.round(raw);
+  if (inset < 0 || inset > MAX_SHELL_KEYBOARD_INSET) {
+    warnOnce("rejected an out-of-range shell keyboardInset", { inset });
+    return null;
+  }
+  return inset;
+}
