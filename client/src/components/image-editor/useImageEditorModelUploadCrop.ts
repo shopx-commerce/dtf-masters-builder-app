@@ -1142,7 +1142,20 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
     });
   }, [processSidebarFile, GANGSHEET_HEIGHTS]);
 
+  /**
+   * The three values `handleResizeChange` reads but does not want in its dependency list.
+   *
+   * `selectedDesign` is a `useMemo` on `[designs, selectedDesignId]` and `imageInfo` moves
+   * with the artwork, so listing them made this callback change identity on every design
+   * mutation — including every frame of a drag. It is passed to `ControlsSection` as
+   * `onResizeChange`, and that identity churn was defeating the component's `React.memo`,
+   * re-rendering two closed thirteen-option height dropdowns per frame for nothing.
+   */
+  const resizeLiveRef = useRef({ imageInfo, selectedDesign, resizeSettings });
+  resizeLiveRef.current = { imageInfo, selectedDesign, resizeSettings };
+
   const handleResizeChange = useCallback((newSettings: Partial<ResizeSettings>) => {
+    const { imageInfo, selectedDesign, resizeSettings } = resizeLiveRef.current;
     const currentImageInfo = selectedDesign?.imageInfo || imageInfo;
     const hasSizeChange = newSettings.widthInches !== undefined || newSettings.heightInches !== undefined;
     if (hasSizeChange && selectedDesignId) saveSnapshot();
@@ -1174,7 +1187,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
         return { ...updated, transform: { ...updated.transform, nx, ny } };
       }));
     }
-  }, [imageInfo, selectedDesign, selectedDesignId, saveSnapshot, resizeSettings]);
+  }, [selectedDesignId, saveSnapshot]);
 
   /**
    * Upscales the selected design with the local WebGPU super-resolution model.

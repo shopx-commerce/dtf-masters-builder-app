@@ -63,6 +63,18 @@ const HANDLE_ROTATE_RING = 3.0;
 const TOUCH_RESIZE_HIT_R_CSS_PX = 22;
 const TOUCH_ROTATE_OUTER_R_CSS_PX = 34;
 /**
+ * Garment colours the sheet can be previewed against — the answer to "how will this look
+ * on a black shirt". Shared by the desktop row and the phone's compact picker so the two
+ * cannot drift apart.
+ */
+const BACKDROP_COLORS = [
+  { color: 'transparent', label: 'Transparent' },
+  { color: '#ffffff', label: 'White' },
+  { color: '#d1d5db', label: 'Light Gray' },
+  { color: '#6b7280', label: 'Gray' },
+  { color: '#000000', label: 'Black' },
+];
+/**
  * Floor on the drawn handle, as a full width/diameter in screen CSS px. Kept in
  * screen space (not canvas-buffer space) so zooming out cannot shrink a handle
  * into an invisible sliver the way a buffer-relative floor did.
@@ -233,10 +245,19 @@ interface PreviewSectionProps {
    */
   onRegisterFocus?: (focus: () => void) => void;
   bottomToolbarContainer?: HTMLElement | null;
+  /**
+   * Somewhere else to put the backdrop colour swatches.
+   *
+   * They normally ride along at the right-hand end of the bottom toolbar, but
+   * that row is 390px wide on a phone and the swatches are 135 of them. Given a
+   * container, they go there instead and the toolbar keeps only the view
+   * controls, which is what buys the room for the labelled undo/redo beside it.
+   */
+  backdropSwatchContainer?: HTMLElement | null;
 }
 
 const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
-  ({ imageInfo, resizeSettings, artboardWidth = 24.5, artboardHeight = 12, designTransform, onTransformChange, designs = [], selectedDesignId, selectedDesignIds = new Set(), onSelectDesign, onMultiSelect, onMultiDragDelta, onMultiResizeDelta, onMultiRotateDelta, onDuplicateSelected, onInteractionEnd, onExpandArtboard, onDesignContextMenu, spotPreviewData, activeSpotChannel, onWandTap, panModeActive = false, onPanModeChange, selectionZoomActive: selectionZoomActiveProp, onSelectionZoomChange, bottomToolbarContainer, wandDeleteActive = false, onWandDeleteTap, onWandDeactivate, onRegisterFocus }, ref) => {
+  ({ imageInfo, resizeSettings, artboardWidth = 24.5, artboardHeight = 12, designTransform, onTransformChange, designs = [], selectedDesignId, selectedDesignIds = new Set(), onSelectDesign, onMultiSelect, onMultiDragDelta, onMultiResizeDelta, onMultiRotateDelta, onDuplicateSelected, onInteractionEnd, onExpandArtboard, onDesignContextMenu, spotPreviewData, activeSpotChannel, onWandTap, panModeActive = false, onPanModeChange, selectionZoomActive: selectionZoomActiveProp, onSelectionZoomChange, bottomToolbarContainer, backdropSwatchContainer, wandDeleteActive = false, onWandDeleteTap, onWandDeactivate, onRegisterFocus }, ref) => {
     const { toast } = useToast();
     const { t, lang } = useLanguage();
     const isMobile = useIsMobile();
@@ -679,6 +700,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     // so the static composite is rebuilt without the mid-gesture exclusions.
     const [interactionEpoch, setInteractionEpoch] = useState(0);
     const [previewBgColor, setPreviewBgColor] = useState('transparent');
+    // Phone only: the compact backdrop button's menu, and where to put it. See
+    // `backdropSwatchCompact`.
+    const [backdropMenuOpen, setBackdropMenuOpen] = useState(false);
+    const [backdropMenuAt, setBackdropMenuAt] = useState<{ top: number; right: number } | null>(null);
+    const backdropButtonRef = useRef<HTMLButtonElement>(null);
     const isDraggingRef = useRef(false);
     const isResizingRef = useRef(false);
     const isRotatingRef = useRef(false);
@@ -1328,15 +1354,53 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const worker = overlapWorkerRef.current;
       if (worker && typeof createImageBitmap !== 'undefined') {
         const neededArr = Array.from(neededSet);
-        const bitmapPromises = neededArr.map(async (idx) => {
-          const d = designRects[idx].design;
-          const bmp = await createImageBitmap(d.imageInfo.image);
-          return { idx, bmp };
-        });
+        /**
+         * One decode per distinct (source, footprint) pair, at the size the worker
+         * actually draws.
+         *
+         * This used to be one full-resolution `createImageBitmap` per overlapping
+         * design. Both halves of that were waste. The worker rasterises into
+         * `drawW x drawH` on a canvas already scaled to a quarter — a couple of
+         * hundred pixels a side — so decoding a 1200x750 upload gave it eighty
+         * times the pixels it was about to throw away. And a sheet of copies is
+         * the same handful of images over and over: duplicating a design to 165
+         * copies measured 133 decodes of 4 distinct images, 64 megapixels, and a
+         * 1365ms frame in which the editor did not respond at all.
+         *
+         * Decoding to the footprint costs the resample either way — `drawImage`
+         * was doing it in the worker — so this moves the work rather than adding
+         * it, and hands the worker a bitmap it can blit.
+         */
+        const slotByKey = new Map<string, number>();
+        const decodes: Array<{ image: HTMLImageElement; w: number; h: number }> = [];
+        const slotByDesign = new Map<number, number>();
+        for (const idx of neededArr) {
+          const dr = designRects[idx];
+          const img = dr.design.imageInfo.image;
+          const naturalW = img.naturalWidth || img.width || 1;
+          const naturalH = img.naturalHeight || img.height || 1;
+          // Never upscale: past the natural size the extra pixels are invented,
+          // and the decoder charges for them.
+          const w = Math.max(1, Math.min(Math.ceil(dr.rect.width), naturalW));
+          const h = Math.max(1, Math.min(Math.ceil(dr.rect.height), naturalH));
+          const key = `${img.src}|${w}x${h}`;
+          let slot = slotByKey.get(key);
+          if (slot === undefined) {
+            slot = decodes.length;
+            slotByKey.set(key, slot);
+            decodes.push({ image: img, w, h });
+          }
+          slotByDesign.set(idx, slot);
+        }
         overlapRequestIdRef.current += 1;
         const myRequestId = overlapRequestIdRef.current;
-        Promise.all(bitmapPromises).then(bitmaps => {
-          const bmpMap = new Map(bitmaps.map(b => [b.idx, b.bmp]));
+        Promise.all(decodes.map(({ image, w, h }) => createImageBitmap(image, {
+          resizeWidth: w,
+          resizeHeight: h,
+          // Matches the quality `drawImage` gave these before, and the test
+          // downstream is "is any alpha above 20", not a visual comparison.
+          resizeQuality: 'low',
+        }))).then(bitmaps => {
           const workerDesigns = designRects.map((dr, idx) => {
             let stampExtraH = 0;
             if (dr.design.printFileName) {
@@ -1346,7 +1410,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
             return {
               id: dr.id,
               left: dr.left, top: dr.top, right: dr.right, bottom: dr.bottom,
-              imgBitmap: bmpMap.get(idx) ?? (null as unknown as ImageBitmap),
+              // An index into the shared `bitmaps` array rather than a bitmap of
+              // its own: copies share one, and a transferred bitmap can only be
+              // sent once anyway.
+              bitmapIndex: slotByDesign.get(idx) ?? -1,
               drawX: dr.rect.x, drawY: dr.rect.y,
               drawW: dr.rect.width, drawH: dr.rect.height,
               rotation: dr.design.transform.rotation,
@@ -1411,11 +1478,12 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           worker.addEventListener('message', handler);
           worker.addEventListener('error', onWorkerFailure);
           worker.addEventListener('messageerror', onWorkerFailure);
-          const transferable = Array.from(bmpMap.values());
           try {
-            worker.postMessage({ type: 'check', designs: workerDesigns, sw, sh }, transferable as Transferable[]);
+            worker.postMessage({ type: 'check', designs: workerDesigns, bitmaps, sw, sh }, bitmaps as Transferable[]);
           } catch (err) {
             finish();
+            // The transfer did not happen, so these are still ours to release.
+            for (const b of bitmaps) { try { b.close(); } catch { /* already gone */ } }
             console.warn('Overlap worker post failed:', err);
             runMainThreadOverlap();
           }
@@ -3884,11 +3952,20 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         ctx.font = '8px system-ui, sans-serif';
         ctx.textBaseline = 'top';
 
+        // One path for every tick on the strip, stroked once at the end.
+        //
+        // Each tick used to open and stroke its own path. `pickSteps` aims for a tick every
+        // ~7px, so a 1400px-wide sheet is ~200 separate `stroke()` calls on the horizontal
+        // strip alone, repeated on the vertical, and repeated again on every frame of a zoom
+        // or pan because the signature changes each frame. They all share one colour and one
+        // width, so the split bought nothing. `fillText` does not disturb the current path,
+        // so labels can still be drawn inside the loop.
+        ctx.beginPath();
+
         const drawTick = (inch: number, isLabel: boolean, forceLabelText?: string) => {
           const pos = origin + inch * ppi;
           if (pos < -20 || pos > stripLen + 20) return;
           const len = isLabel ? 7 : inch % (minor * 2) === 0 ? 5 : 3.5;
-          ctx.beginPath();
           if (axis === 'x') {
             const px = Math.round(pos) + 0.5;
             ctx.moveTo(px, RULER - 1);
@@ -3898,7 +3975,6 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
             ctx.moveTo(RULER - 1, py);
             ctx.lineTo(RULER - 1 - len, py);
           }
-          ctx.stroke();
           if (isLabel) {
             const text = forceLabelText ?? String(Math.round(inch * 100) / 100);
             if (axis === 'x') {
@@ -3920,6 +3996,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         }
         // Always mark the far edge with its exact value (e.g. 24.5).
         drawTick(inches, true);
+        ctx.stroke();
       };
 
       const tick = () => {
@@ -3955,6 +4032,85 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         rulerSigRef.current = '';
       };
     }, [artboardWidth, artboardHeight]);
+
+    const swatchFill = (color: string) =>
+      color === 'transparent'
+        ? 'repeating-conic-gradient(#ccc 0% 25%, #fff 0% 50%) 50% / 6px 6px'
+        : color;
+
+    const swatchButton = (color: string, label: string, size: number, onPick?: () => void) => (
+      <button
+        key={color}
+        onClick={() => { setPreviewBgColor(color); onPick?.(); }}
+        className={`rounded-full border-2 transition-all ${previewBgColor === color ? 'border-cyan-400 scale-110' : 'border-gray-300 hover:border-gray-500'}`}
+        title={label}
+        /* These are bare coloured circles with no text in them, so the name and
+           the selected state have to come from here. */
+        aria-label={`Preview on ${label}`}
+        aria-pressed={previewBgColor === color}
+        style={{ width: size, height: size, background: swatchFill(color) }}
+      />
+    );
+
+    const backdropSwatches = (
+      <div className={`flex items-center ${isMobile ? 'gap-1.5' : 'gap-1'} flex-shrink-0`}>
+        {BACKDROP_COLORS.map(({ color, label }) => swatchButton(color, label, isMobile ? 22 : 18))}
+      </div>
+    );
+
+    const currentBackdrop =
+      BACKDROP_COLORS.find(c => c.color === previewBgColor) ?? BACKDROP_COLORS[0];
+
+    /**
+     * The phone's version: one button wearing the current colour, opening the five.
+     *
+     * The view bar has 64px to spare beside the zoom group and the row of five needs 138,
+     * so inline was a choice between dropping colours and shrinking the targets below the
+     * point you can reliably hit them. A single swatch costs 44 and gives up neither.
+     *
+     * The menu is `position: fixed` in a body portal rather than absolutely positioned
+     * here, because its anchor lives inside the view bar's horizontal scroll container and
+     * anything positioned within that gets clipped by it.
+     */
+    const backdropSwatchCompact = (
+      <>
+        <button
+          ref={backdropButtonRef}
+          type="button"
+          onClick={() => {
+            const r = backdropButtonRef.current?.getBoundingClientRect();
+            if (r) setBackdropMenuAt({ top: Math.round(r.bottom + 6), right: Math.round(window.innerWidth - r.right) });
+            setBackdropMenuOpen(v => !v);
+          }}
+          className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded border transition-colors coarse:h-11 coarse:w-11 ${backdropMenuOpen ? 'border-cyan-500 bg-cyan-50' : 'border-gray-300 bg-white hover:bg-gray-50'}`}
+          title={`Preview on ${currentBackdrop.label}`}
+          aria-label={`Preview on ${currentBackdrop.label}`}
+          aria-expanded={backdropMenuOpen}
+          data-testid="backdrop-swatch-button"
+        >
+          <span
+            className="h-5 w-5 rounded-full border-2 border-gray-400"
+            style={{ background: swatchFill(currentBackdrop.color) }}
+          />
+        </button>
+        {backdropMenuOpen && backdropMenuAt && createPortal(
+          <>
+            {/* Swallows the tap that dismisses, so choosing "somewhere else" does
+                not also press whatever was underneath. */}
+            <div className="fixed inset-0 z-[60]" onClick={() => setBackdropMenuOpen(false)} />
+            <div
+              className="fixed z-[61] flex items-center gap-2.5 rounded-lg border border-gray-300 bg-white p-2.5 shadow-xl"
+              style={{ top: backdropMenuAt.top, right: backdropMenuAt.right }}
+              data-testid="backdrop-swatch-menu"
+            >
+              {BACKDROP_COLORS.map(({ color, label }) =>
+                swatchButton(color, label, 28, () => setBackdropMenuOpen(false)))}
+            </div>
+          </>,
+          document.body,
+        )}
+      </>
+    );
 
     return (
       <div className="h-full flex flex-col">
@@ -4300,8 +4456,14 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
         {/* Bottom toolbar */}
         {(bottomToolbarContainer ? createPortal(
-        <div className={`flex-shrink-0 flex items-center gap-2 bg-gray-100 border-t border-gray-200 px-2 py-1.5 lg:px-3 lg:py-1.5 min-w-0 ${isMobile ? 'justify-start overflow-x-auto [scrollbar-width:thin]' : 'justify-between'}`}>
-              <div className={`flex items-center gap-1.5 min-w-0 px-1 ${isMobile ? 'flex-shrink-0' : 'flex-1 overflow-x-auto overflow-y-hidden [scrollbar-width:thin]'}`}>
+        /* No background, border or vertical padding when portalled: the host
+           supplies them, and doubling the padding of a bar this tall comes
+           straight off the canvas. */
+        <div className={`flex min-w-0 flex-1 items-center gap-2 ${isMobile ? 'justify-start overflow-x-auto [scrollbar-width:thin]' : 'justify-between'}`}>
+              {/* Unpadded on the phone: the host bar already has its own, and
+                  with Focus present this row is within a few pixels of the
+                  390px edge — see the width note on `backdropSwatchContainer`. */}
+              <div className={`flex items-center gap-1.5 min-w-0 ${isMobile ? 'flex-shrink-0' : 'flex-1 px-1 overflow-x-auto overflow-y-hidden [scrollbar-width:thin]'}`}>
                 {selectedDesignId && designTransform && (
                   <>
                     {!isMobile && (
@@ -4346,11 +4508,16 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                       if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
                       resetView();
                     }}
-                    className="min-w-[40px] min-h-[40px] h-8 px-2 hover:bg-gray-200 rounded text-gray-700 whitespace-nowrap text-[12px] font-medium flex items-center justify-center"
+                    /* Icon-only, unlike its desktop twin. It shares this row
+                       with two labelled history buttons now, and "Restablecer"
+                       beside "Deshacer" and "Rehacer" left no width for the
+                       zoom controls at 390px. It groups with the zoom buttons
+                       either way, which have always been icons. */
+                    className="min-w-[40px] min-h-[40px] h-8 w-10 p-0 hover:bg-gray-200 rounded text-gray-700 flex items-center justify-center"
                     title={t("preview.resetView")}
+                    aria-label={t("preview.resetView")}
                   >
-                    <RotateCcw className="h-3.5 w-3.5 mr-1 flex-shrink-0" />
-                    {t("preview.reset")}
+                    <RotateCcw className="h-4 w-4 flex-shrink-0" />
                   </Button>
                 )}
                 <div className="flex items-center gap-0 flex-shrink-0 items-center">
@@ -4373,7 +4540,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                   >
                     <ZoomOut className="h-4 w-4 text-gray-600" />
                   </Button>
-                  <span className="text-[12px] text-gray-700 min-w-[36px] text-center font-semibold tabular-nums px-0.5">
+                  {/* Hidden on a 320px phone, where the bar cannot hold Undo, Redo,
+                      four 44px controls, the backdrop picker and a readout — and of
+                      those, a number you can only read is the one whose absence costs
+                      least. Wider phones keep it. */}
+                  <span className="text-[12px] text-gray-700 min-w-[32px] text-center font-semibold tabular-nums max-[359px]:hidden">
                     {Math.round(zoom * 100)}%
                   </span>
                   <Button
@@ -4438,29 +4609,12 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                 )}
               </div>
 
-              <div className={`flex items-center ${isMobile ? 'gap-1.5' : 'gap-1'} flex-shrink-0`}>
-                {[
-                  { color: 'transparent', label: 'Transparent' },
-                  { color: '#ffffff', label: 'White' },
-                  { color: '#d1d5db', label: 'Light Gray' },
-                  { color: '#6b7280', label: 'Gray' },
-                  { color: '#000000', label: 'Black' },
-                ].map(({ color, label }) => (
-                  <button
-                    key={color}
-                    onClick={() => setPreviewBgColor(color)}
-                    className={`rounded-full border-2 transition-all ${previewBgColor === color ? 'border-cyan-400 scale-110' : 'border-gray-300 hover:border-gray-500'}`}
-                    title={label}
-                    style={{
-                      width: isMobile ? 22 : 18,
-                      height: isMobile ? 22 : 18,
-                      background: color === 'transparent'
-                        ? 'repeating-conic-gradient(#ccc 0% 25%, #fff 0% 50%) 50% / 6px 6px'
-                        : color
-                    }}
-                  />
-                ))}
-              </div>
+              {/* No swatches here. The only caller that portals this toolbar
+                  is the phone, and it gives them a home of their own — see
+                  `backdropSwatchContainer`. They are absent, rather than
+                  conditional on that container existing, because the container
+                  is a sheet that spends most of its life closed and the
+                  swatches would flit back into this row every time it shut. */}
             </div>,
             bottomToolbarContainer
           ) : (
@@ -4582,13 +4736,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                   </Button>
                 )}
               </div>
-              <div className={`flex items-center ${isMobile ? 'gap-1.5' : 'gap-1'} flex-shrink-0`}>
-                {[{ color: 'transparent', label: 'Transparent' }, { color: '#ffffff', label: 'White' }, { color: '#d1d5db', label: 'Light Gray' }, { color: '#6b7280', label: 'Gray' }, { color: '#000000', label: 'Black' }].map(({ color, label }) => (
-                  <button key={color} onClick={() => setPreviewBgColor(color)} className={`rounded-full border-2 transition-all ${previewBgColor === color ? 'border-cyan-400 scale-110' : 'border-gray-300 hover:border-gray-500'}`} title={label} style={{ width: isMobile ? 22 : 18, height: isMobile ? 22 : 18, background: color === 'transparent' ? 'repeating-conic-gradient(#ccc 0% 25%, #fff 0% 50%) 50% / 6px 6px' : color }} />
-                ))}
-              </div>
+              {backdropSwatches}
             </div>
           ))}
+
+        {backdropSwatchContainer ? createPortal(backdropSwatchCompact, backdropSwatchContainer) : null}
 
         {/* Keyboard shortcut hints */}
         <div className="hidden lg:flex flex-shrink-0 items-center justify-center gap-4 bg-gray-100/90 border-t border-gray-200/80 px-3 py-0.5 text-[9px] text-gray-600">

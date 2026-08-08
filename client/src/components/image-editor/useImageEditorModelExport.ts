@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { EXPORT_DPI, EXPORT_TIMEOUT_MS } from "./constants";
 import {
   canUseMemoryEfficientPngExport,
@@ -27,7 +27,20 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
     ensureDesignImagesAvailable,
   } = bag;
 
+  /**
+   * The sheet as it stands, read at the moment Download is pressed rather than captured in
+   * the callback's dependency list.
+   *
+   * Export cares about the current sheet, so listing `designs` here was correct but
+   * expensive: it gave `handleDownload` a new identity on every design mutation, and since
+   * it is passed to `ControlsSection` as `onDownload` that alone defeated the component's
+   * `React.memo` for the whole of every drag.
+   */
+  const exportLiveRef = useRef({ imageInfo, designs, artboardWidth, artboardHeight });
+  exportLiveRef.current = { imageInfo, designs, artboardWidth, artboardHeight };
+
   const handleDownload = useCallback(async (downloadType: string = 'standard', format: string = 'png', spotColorsByDesign?: Record<string, any[]>) => {
+    const { imageInfo, designs, artboardWidth, artboardHeight } = exportLiveRef.current;
     if (designs.length === 0) {
       toast({ title: t("toast.noDesigns"), description: t("toast.noDesignsDesc"), variant: "destructive" });
       return;
@@ -377,7 +390,7 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
       setExportProgressLabel(undefined);
       setIsProcessing(false);
     }
-  }, [imageInfo, designs, artboardWidth, artboardHeight, toast, t, setExportProgressLabel, ensureDesignImagesAvailable, setIsProcessing]);
+  }, [toast, t, setExportProgressLabel, ensureDesignImagesAvailable, setIsProcessing]);
 
   const fileToDataUrl = useCallback((file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
