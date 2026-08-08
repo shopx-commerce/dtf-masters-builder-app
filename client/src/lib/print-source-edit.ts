@@ -24,6 +24,7 @@
  */
 
 import { fitWithinMegapixels } from "./image-budget";
+import { encodeCanvasToPng } from "./png-encoder";
 import { VECTOR_TARGET_DPI, vectorExportMaxEdge } from "./vector-raster-limits";
 import { createVectorPrintSourceResolver, hasVectorPrintSource } from "./vector-print-source";
 import type { ImageInfo } from "./types";
@@ -83,14 +84,12 @@ function blobToImage(blob: Blob): Promise<HTMLImageElement> {
   });
 }
 
-function toBlob(canvas: HTMLCanvasElement): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      blob => (blob ? resolve(blob) : reject(new Error("Could not encode edited pixels."))),
-      "image/png",
-    );
-  });
-}
+/**
+ * Encoding runs in a worker. It is by far the most expensive step of an edit —
+ * on a 4096 x 4096 print source it was 2.2s of a 3.6s magic-wand tap — and
+ * doing it on the main thread froze the editor for its whole duration.
+ */
+const toBlob = encodeCanvasToPng;
 
 /**
  * Decodes the design's print source onto a canvas at the resolution the edit
@@ -203,8 +202,6 @@ export async function applyEditAtPrintResolution(
     rendered.height = 0;
   }
 
-  const exportBlob = await toBlob(canvas);
-
   // Keep the preview at whatever size it already was, so applying an edit
   // never changes how sharp the design looks on the editor canvas.
   const previewMaxEdge = Math.max(
@@ -212,7 +209,15 @@ export async function applyEditAtPrintResolution(
     Math.max(info.image?.naturalWidth || info.image?.width || 0, info.image?.naturalHeight || info.image?.height || 0),
   );
   const previewCanvas = downscaleToPreview(canvas, previewMaxEdge);
-  const previewBlob = previewCanvas === canvas ? exportBlob : await toBlob(previewCanvas);
+
+  // The two encodes are independent, so overlap them rather than paying the
+  // sum. Both still finish before the edit is handed back, which keeps the
+  // print source and what is on screen guaranteed to be the same pixels.
+  const [exportBlob, encodedPreview] = await Promise.all([
+    toBlob(canvas),
+    previewCanvas === canvas ? Promise.resolve(null) : toBlob(previewCanvas),
+  ]);
+  const previewBlob = encodedPreview ?? exportBlob;
   const previewImage = await blobToImage(previewBlob);
 
   const sourceWidth = canvas.width;
@@ -270,9 +275,12 @@ export async function applyEditToPreviewSource(
     rendered.height = 0;
   }
 
-  const exportBlob = await toBlob(canvas);
   const previewCanvas = downscaleToPreview(canvas, previewMaxEdge);
-  const previewBlob = previewCanvas === canvas ? exportBlob : await toBlob(previewCanvas);
+  const [exportBlob, encodedPreview] = await Promise.all([
+    toBlob(canvas),
+    previewCanvas === canvas ? Promise.resolve(null) : toBlob(previewCanvas),
+  ]);
+  const previewBlob = encodedPreview ?? exportBlob;
   const previewImage = await blobToImage(previewBlob);
 
   const sourceWidth = canvas.width;

@@ -1347,6 +1347,17 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
 
     // Normalised coordinates, so the same fill can run at whatever resolution
     // the canvas happens to be — preview or full print source.
+    //
+    // Scanline fill: each step claims a whole horizontal run at once and only
+    // pushes one seed per adjacent run, rather than pushing every pixel. On a
+    // print-resolution source that is the difference between a stack of a few
+    // thousand entries and a queue of millions. A per-pixel queue was costing
+    // more than its own runtime in knock-on effects — holding hundreds of
+    // megabytes live made the PNG encode that follows several times slower.
+    //
+    // Erased pixels get alpha 0, and `matches` rejects anything transparent, so
+    // a filled pixel can never match again. That is what a `visited` array
+    // would have tracked, so there is no need to allocate one.
     const floodFillDelete = (canvas: HTMLCanvasElement): boolean => {
       const w = canvas.width, h = canvas.height;
       const ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -1358,22 +1369,56 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       const start = (py * w + px) * 4;
       if (data[start + 3] < 10) return false;
       const sr = data[start], sg = data[start + 1], sb = data[start + 2];
-      const visited = new Uint8Array(w * h);
-      const queue = [py * w + px];
-      visited[py * w + px] = 1;
-      let qi = 0;
-      while (qi < queue.length) {
-        const pos = queue[qi++];
-        const idx = pos * 4;
-        if (data[idx + 3] < 10) continue;
-        if (Math.max(Math.abs(data[idx] - sr), Math.abs(data[idx + 1] - sg), Math.abs(data[idx + 2] - sb)) > maxDiff) continue;
-        data[idx + 3] = 0;
-        const x = pos % w, y = Math.floor(pos / w);
-        if (x > 0 && !visited[pos - 1]) { visited[pos - 1] = 1; queue.push(pos - 1); }
-        if (x < w - 1 && !visited[pos + 1]) { visited[pos + 1] = 1; queue.push(pos + 1); }
-        if (y > 0 && !visited[pos - w]) { visited[pos - w] = 1; queue.push(pos - w); }
-        if (y < h - 1 && !visited[pos + w]) { visited[pos + w] = 1; queue.push(pos + w); }
+
+      const matches = (pos: number): boolean => {
+        const idx = pos << 2;
+        if (data[idx + 3] < 10) return false;
+        const dr = data[idx] - sr, dg = data[idx + 1] - sg, db = data[idx + 2] - sb;
+        return (dr < 0 ? -dr : dr) <= maxDiff
+          && (dg < 0 ? -dg : dg) <= maxDiff
+          && (db < 0 ? -db : db) <= maxDiff;
+      };
+
+      let stack = new Int32Array(1024);
+      let sp = 0;
+      const push = (pos: number) => {
+        if (sp === stack.length) {
+          const grown = new Int32Array(stack.length * 2);
+          grown.set(stack);
+          stack = grown;
+        }
+        stack[sp++] = pos;
+      };
+
+      // Seed rows adjacent to a just-filled run, one push per contiguous run.
+      const seedRow = (rowStart: number, from: number, to: number) => {
+        let x = from;
+        while (x <= to) {
+          if (!matches(rowStart + x)) { x++; continue; }
+          push(rowStart + x);
+          while (x <= to && matches(rowStart + x)) x++;
+        }
+      };
+
+      push(py * w + px);
+      while (sp > 0) {
+        const pos = stack[--sp];
+        const y = (pos / w) | 0;
+        const rowStart = y * w;
+        // Another run may have swallowed this seed since it was pushed.
+        if (!matches(pos)) continue;
+
+        let left = pos - rowStart;
+        while (left > 0 && matches(rowStart + left - 1)) left--;
+        let right = pos - rowStart;
+        while (right < w - 1 && matches(rowStart + right + 1)) right++;
+
+        for (let x = left; x <= right; x++) data[((rowStart + x) << 2) + 3] = 0;
+
+        if (y > 0) seedRow(rowStart - w, left, right);
+        if (y < h - 1) seedRow(rowStart + w, left, right);
       }
+
       ctx.putImageData(imageData, 0, 0);
       return true;
     };
