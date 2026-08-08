@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+﻿@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Fredoka+One&display=swap');
 @import url('https://db.onlinewebfonts.com/c/598a2bdeaef4affee05367e9e3dd54c6?family=Nabana+Shadow');
 
@@ -6,38 +6,18 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Magic-wand cursor always wins over zoom/pan cursor writes on desktop and touch preview surfaces.
-   The `!important` is what makes that true: the canvas writes `move`, `grab`, `pointer` and the
-   resize cursors straight onto `style.cursor` from about thirty places, and an important author
-   rule is the one thing that outranks a normal inline style.
+/* Magic-wand cursor always wins over the zoom/pan cursor writes. The `!important` is what
+   makes that true: the canvas writes `move`, `grab`, `pointer` and the resize cursors straight
+   onto `style.cursor` from about thirty places, and an important author rule is the one thing
+   that outranks a normal inline style.
 
-   The glyph is Lucide's `wand-sparkles` — the same drawing as the icon on the Magic Wand button,
-   the tool pill and the layers strip, so the pointer and the control that armed it are visibly
-   the same thing. It replaces a hand-drawn attempt whose sparkle was a fat `+` sitting on the
-   hotspot: at 32px that plus was the dominant shape and read as the four-arrow `move` cursor,
-   which is exactly the confusion the custom cursor existed to prevent.
-
-   Mirrored horizontally (`scale(-1,1)`) because Lucide's wand points up-right, and a cursor
-   whose tip is up-left is both the convention and the only version that does not cover the
-   artwork you are aiming at. Drawn twice — white underneath, fuchsia over — so it survives a
-   black backdrop, the transparency checkerboard and artwork of any colour. Fuchsia rather than
-   any other ink because it is the wand tool's colour everywhere else in the UI.
-
-   The hotspot is the wand's tip, which is the pixel the wand actually samples. `crosshair`
-   stays as the fallback for anything that will not take an image cursor. */
-/* Once a real mouse is over the canvas the glyph is drawn in the DOM and follows the pointer,
-   so the OS cursor gets out of the way entirely — see the `wand-pointer` element. Two
-   attribute selectors outrank the single one below, so this wins wherever it applies. The
-   image cursor beneath remains the fallback for the moment before the first pointer move,
-   and for anything that never sets `data-wand-follow`. */
-.preview-canvas-area[data-wand-active="true"][data-wand-follow="true"],
-.preview-canvas-area[data-wand-active="true"][data-wand-follow="true"] * {
-  cursor: none !important;
-}
-
+   A plain `crosshair` by preference. This spent a while as a custom wand — first hand-drawn,
+   then Lucide's `wand-sparkles`, then a DOM element following the pointer because an image
+   cursor is advisory and Chrome may decline it. All of that is gone: a keyword cursor cannot
+   be declined, cannot be dropped for being oversized, and stays crisp at any display scaling. */
 .preview-canvas-area[data-wand-active="true"],
 .preview-canvas-area[data-wand-active="true"] * {
-  cursor: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20width%3D'32'%20height%3D'32'%20viewBox%3D'0%200%2032%2032'%3E%3Cg%20transform%3D'translate(28%2C4)%20scale(-1%2C1)'%20fill%3D'none'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cg%20stroke%3D'%23ffffff'%20stroke-width%3D'4.5'%3E%3Cpath%20d%3D'm21.64%203.64-1.28-1.28a1.21%201.21%200%200%200-1.72%200L2.36%2018.64a1.21%201.21%200%200%200%200%201.72l1.28%201.28a1.2%201.2%200%200%200%201.72%200L21.64%205.36a1.2%201.2%200%200%200%200-1.72'%2F%3E%3Cpath%20d%3D'm14%207%203%203'%2F%3E%3Cpath%20d%3D'M5%206v4'%2F%3E%3Cpath%20d%3D'M19%2014v4'%2F%3E%3Cpath%20d%3D'M10%202v2'%2F%3E%3Cpath%20d%3D'M7%208H3'%2F%3E%3Cpath%20d%3D'M21%2016h-4'%2F%3E%3Cpath%20d%3D'M11%203H9'%2F%3E%3C%2Fg%3E%3Cg%20stroke%3D'%23c026d3'%20stroke-width%3D'2.2'%3E%3Cpath%20d%3D'm21.64%203.64-1.28-1.28a1.21%201.21%200%200%200-1.72%200L2.36%2018.64a1.21%201.21%200%200%200%200%201.72l1.28%201.28a1.2%201.2%200%200%200%201.72%200L21.64%205.36a1.2%201.2%200%200%200%200-1.72'%2F%3E%3Cpath%20d%3D'm14%207%203%203'%2F%3E%3Cpath%20d%3D'M5%206v4'%2F%3E%3Cpath%20d%3D'M19%2014v4'%2F%3E%3Cpath%20d%3D'M10%202v2'%2F%3E%3Cpath%20d%3D'M7%208H3'%2F%3E%3Cpath%20d%3D'M21%2016h-4'%2F%3E%3Cpath%20d%3D'M11%203H9'%2F%3E%3C%2Fg%3E%3C%2Fg%3E%3C%2Fsvg%3E") 6 8, crosshair !important;
+  cursor: crosshair !important;
 }
 
 :root {

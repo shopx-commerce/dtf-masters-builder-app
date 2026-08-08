@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, forwardRef, useImperativeHandle, useState, useCallback, useMemo, memo } from "react";
+﻿import { useEffect, useLayoutEffect, useRef, forwardRef, useImperativeHandle, useState, useCallback, useMemo, memo } from "react";
 import { createPortal } from "react-dom";
 import { ZoomIn, ZoomOut, RotateCcw, ScanSearch, Focus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
@@ -62,18 +62,6 @@ const HANDLE_ROTATE_RING = 3.0;
  */
 const TOUCH_RESIZE_HIT_R_CSS_PX = 22;
 const TOUCH_ROTATE_OUTER_R_CSS_PX = 34;
-/**
- * Lucide's `wand-sparkles`, the same drawing as the button that arms the tool. Rendered
- * mirrored so the tip points up-left at the pixel the wand samples, which is both the cursor
- * convention and the only orientation that does not cover what you are aiming at.
- */
-const WAND_GLYPH_PATHS = [
-  'm21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72',
-  'm14 7 3 3', 'M5 6v4', 'M19 14v4', 'M10 2v2', 'M7 8H3', 'M21 16h-4', 'M11 3H9',
-];
-/** Where the tip sits inside the 32px glyph, so it can be seated on the pointer. */
-const WAND_GLYPH_TIP = { x: 6, y: 8 };
-
 /**
  * Garment colours the sheet can be previewed against — the answer to "how will this look
  * on a black shirt". Shared by the desktop row and the phone's compact picker so the two
@@ -343,65 +331,6 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const onWandDeactivateRef = useRef(onWandDeactivate);
     onWandDeactivateRef.current = onWandDeactivate;
     moveModeRef.current = moveMode;
-    const wandFollowerRef = useRef<HTMLDivElement>(null);
-    const lastTouchAtRef = useRef(0);
-    /**
-     * Seat the drawn wand on the mouse for as long as the tool is armed.
-     *
-     * Whether to show it is decided by what the pointer actually does, not by what the device
-     * claims to be. An earlier version gated on `any-pointer: fine`, which reads as false on a
-     * hybrid machine and in Chrome's device toolbar — both of which still have a mouse and a
-     * visible cursor — and silently dropped those users back onto the image cursor this exists
-     * to replace. A real mouse move is the only evidence that matters.
-     *
-     * The touch guard is what the media query was there for: a tap synthesises a `mousemove`
-     * at the finger, which would otherwise strand the glyph there after the finger has gone.
-     */
-    useEffect(() => {
-      const area = canvasAreaRef.current;
-      const follower = wandFollowerRef.current;
-      if (!area || !follower) return;
-      const show = (e: MouseEvent) => {
-        if (!wandDeleteActiveRef.current) return;
-        if (Date.now() - lastTouchAtRef.current < 600) return;
-        const r = area.getBoundingClientRect();
-        follower.style.transform =
-          `translate3d(${e.clientX - r.left - WAND_GLYPH_TIP.x}px, ${e.clientY - r.top - WAND_GLYPH_TIP.y}px, 0)`;
-        if (area.dataset.wandFollow !== 'true') {
-          area.dataset.wandFollow = 'true';
-          follower.style.opacity = '1';
-        }
-      };
-      const hide = () => {
-        delete area.dataset.wandFollow;
-        follower.style.opacity = '0';
-      };
-      const onTouch = () => { lastTouchAtRef.current = Date.now(); hide(); };
-      area.addEventListener('mousemove', show);
-      area.addEventListener('mouseleave', hide);
-      area.addEventListener('touchstart', onTouch, { passive: true });
-      return () => {
-        area.removeEventListener('mousemove', show);
-        area.removeEventListener('mouseleave', hide);
-        area.removeEventListener('touchstart', onTouch);
-        hide();
-      };
-      // Deliberately mount-only. Every previous version of this attached when the tool was
-      // armed, and every one of them had a way to miss: the ref not yet populated, the effect
-      // having already run under a stale reading of the device. Attaching once and asking the
-      // handler whether the tool is on removes the timing from the problem entirely.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
-
-    // Put it away when the tool is switched off, since the handler above no longer re-runs.
-    useEffect(() => {
-      if (wandDeleteActive) return;
-      const area = canvasAreaRef.current;
-      const follower = wandFollowerRef.current;
-      if (area) delete area.dataset.wandFollow;
-      if (follower) follower.style.opacity = '0';
-    }, [wandDeleteActive]);
-
     function setPreviewCursor(cursor: string) {
       const area = canvasAreaRef.current;
       if (!area) return;
@@ -4202,45 +4131,6 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           className="preview-canvas-area flex-1 min-h-0 flex items-center justify-center bg-gray-100 p-3 relative overflow-hidden cursor-default"
           style={{ userSelect: 'none', touchAction: 'none', overscrollBehavior: 'none' }}
         >
-          {/* The wand pointer, drawn by us rather than handed to the OS.
-              
-              An image `cursor` is advisory: the browser is free to decline it —
-              Chrome drops custom cursors it considers oversized for the display
-              scaling, and silently falls back to the next entry in the list. A
-              thin `crosshair` fallback is near enough to the four-arrow `move`
-              cursor to be indistinguishable, which is the exact failure this was
-              supposed to fix, and it cannot be told apart from the real thing by
-              reading `getComputedStyle` — that reports what was asked for, not
-              what was painted. Drawing the glyph ourselves removes the browser's
-              say in it.
-              
-              Always in the DOM, revealed only once a real mouse has moved over
-              the canvas with the tool armed: `data-wand-follow` is what swaps the
-              OS cursor off, so a device with no pointer keeps whatever it had.
-              Permanent rather than conditional so the mount-only listener above
-              can never find it missing — an earlier version rendered it with the
-              tool and spent two rounds failing for exactly that reason.
-              Positioned straight from the event rather than through state,
-              because this moves with the mouse and a re-render per pointer move
-              is the one thing this canvas cannot afford. */}
-          <div
-            ref={wandFollowerRef}
-            aria-hidden="true"
-            className="pointer-events-none absolute left-0 top-0 z-40 opacity-0"
-            style={{ willChange: 'transform' }}
-            data-testid="wand-pointer"
-          >
-            <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-              <g transform="translate(28,4) scale(-1,1)" strokeLinecap="round" strokeLinejoin="round">
-                <g stroke="#ffffff" strokeWidth="4.5">
-                  {WAND_GLYPH_PATHS.map((d) => <path key={d} d={d} />)}
-                </g>
-                <g stroke="#c026d3" strokeWidth="2.2">
-                  {WAND_GLYPH_PATHS.map((d) => <path key={d} d={d} />)}
-                </g>
-              </g>
-            </svg>
-          </div>
           {previewDims.width > 0 && previewDims.height > 0 ? (
           <>
           {/* Inch rulers pinned to the top/left edges (overlay only) */}
