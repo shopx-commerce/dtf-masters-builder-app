@@ -86,6 +86,21 @@ interface MobileToolSheetProps {
    * onto one number — so `fill` derives them from the available height instead.
    */
   sizing?: "content" | "fill";
+  /**
+   * Never open taller than the content actually being shown.
+   *
+   * Detents above peek are a fraction of the available height, which holds on a
+   * phone where content grows to meet it — the eight design tools stack into
+   * four rows and fill their 60%. On a tablet the same eight tools reflow into
+   * two rows, and the sheet still opened to 60% of a much taller screen: a
+   * white slab covering the artwork with nothing in the bottom two thirds of
+   * it. This caps each detent at what it is rendering, so a sheet is as tall as
+   * it needs to be and no taller.
+   *
+   * Off by default: a sheet holding a long list wants the fraction, since
+   * capping at content there would mean opening full height for a long list.
+   */
+  fitContent?: boolean;
   /** Detent the sheet opens at. */
   initialDetent?: SheetDetent;
   /**
@@ -137,6 +152,7 @@ export default function MobileToolSheet({
   handleLabel,
   testId = "mobile-tool-sheet",
   sizing = "content",
+  fitContent = false,
   initialDetent = "peek",
   collapseSignal = 0,
   minCanvasStripPx = MIN_CANVAS_STRIP_PX,
@@ -150,6 +166,7 @@ export default function MobileToolSheet({
   const [dragH, setDragH] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [peekH, setPeekH] = useState(FALLBACK_PEEK_H);
+  const [contentH, setContentH] = useState(0);
   const [containerH, setContainerH] = useState(0);
   const [lift, setLift] = useState(0);
   const dragRef = useRef<{ startY: number; startH: number; moved: boolean } | null>(null);
@@ -209,6 +226,24 @@ export default function MobileToolSheet({
     ro.observe(el);
     return () => ro.disconnect();
   }, [detent, open, sizing, handleH]);
+
+  // Natural height of whatever the live detent is rendering. The content sits
+  // in a scroll container and is never squeezed by the sheet around it, so this
+  // reads true at any detent — which is what lets `fitContent` cap a detent
+  // against its own content rather than a fraction of the screen.
+  useLayoutEffect(() => {
+    const el = contentRef.current;
+    if (!fitContent || !el) return;
+    const read = () => {
+      if (dragRef.current) return;
+      const h = el.offsetHeight;
+      if (h > 0) setContentH(h);
+    };
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [detent, open, fitContent]);
 
   /**
    * Lift the whole sheet clear of the software keyboard while one of its own
@@ -279,12 +314,17 @@ export default function MobileToolSheet({
   // 0.6 rather than a literal half: at 0.5 the half detent's own content —
   // transform, duplicate, clean, halftone — did not fit and had to be scrolled
   // to, which is the wrong default for the detent that is meant to show them.
-  const halfH = sizing === "fill"
+  const rawHalf = sizing === "fill"
     ? Math.round(maxH * 0.8)
     : clamp(Math.round(maxH * 0.6), Math.min(peekCapped + 48, maxH), maxH);
-  const fullH = sizing === "fill"
+  const rawFull = sizing === "fill"
     ? maxH
-    : clamp(Math.round(maxH * 0.88), Math.min(halfH + 48, maxH), maxH);
+    : clamp(Math.round(maxH * 0.88), Math.min(rawHalf + 48, maxH), maxH);
+  // Capped at the content, but never below the detent beneath: the three have
+  // to stay ordered or dragging between them stops meaning anything.
+  const contentCeiling = fitContent && contentH > 0 ? handleH + contentH : Number.POSITIVE_INFINITY;
+  const halfH = Math.max(peekCapped, Math.min(rawHalf, contentCeiling));
+  const fullH = Math.max(halfH, Math.min(rawFull, contentCeiling));
   const heights: Record<SheetDetent, number> = { peek: peekCapped, half: halfH, full: fullH };
 
   const liveH = expanded ? dragH ?? heights[detent] : 0;

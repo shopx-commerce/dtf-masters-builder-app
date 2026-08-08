@@ -259,9 +259,14 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
     };
   }, [stateUrl, stateKey]);
 
-  // Dev-only: test page simulates storefront height options so expansion /
-  // size-picker flows work without Shopify. Override with `?heights=12,24,36`.
-  const TEST_MODE_DEFAULT_HEIGHTS = [12, 18, 24, 36, 48, 60, 72, 84, 96, 120, 160, 240, 340];
+  // Preview surfaces simulate storefront height options so expansion and the
+  // size picker work without Shopify. Override with `?heights=12,24,36`.
+  //
+  // Without this a preview falls back to the profile's list, which is empty, so
+  // the only size on offer is the sheet's current height — the gangsheet can
+  // never grow and "add copies" reports no space to arrange instead of
+  // expanding.
+  const PREVIEW_DEFAULT_HEIGHTS = [12, 18, 24, 36, 48, 60, 72, 84, 96, 120, 160, 240, 340];
   const devHeights = (import.meta.env.DEV && testMode)
     ? (rawParams["heights"] ?? "")
         .split(",")
@@ -270,9 +275,23 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
     : [];
   const resolvedWidth = variantConfig?.configured ? variantConfig.artboardWidth : undefined;
   const resolvedHeight = variantConfig?.configured ? variantConfig.selectedHeight : undefined;
+  // A configured variant always wins: those heights are the ones with real
+  // Shopify variants behind them, and offering a size that cannot be bought
+  // would break add-to-cart. `/embed` without a variant has nothing to buy
+  // either way, so it gets the preview list rather than a single stuck size.
+  //
+  // The variant check is what keeps that safe, and it has to be the variant
+  // rather than the route. `/embed?variant=` whose config fetch fails lands here
+  // too, with `configured: false` and no `variants` — and add-to-cart, finding
+  // no height match in an empty list, falls back to the variant the customer
+  // arrived on. Offering thirteen heights there would let them pick 96" and be
+  // charged for 12". Being stuck on one size is the better failure.
+  const nothingToBuy = !effectiveVariantId;
   const resolvedHeights = variantConfig?.configured
     ? variantConfig.gangsheetHeights
-    : (devHeights.length > 0 ? devHeights : (testMode ? TEST_MODE_DEFAULT_HEIGHTS : undefined));
+    : (devHeights.length > 0
+        ? devHeights
+        : (testMode || (directEmbedMode && nothingToBuy) ? PREVIEW_DEFAULT_HEIGHTS : undefined));
   const resolvedVariants = variantConfig?.configured ? variantConfig.variants : undefined;
   /** Wait for `/api/builder-context` before mounting the editor so artboard size isn’t briefly wrong (first variant / default). */
   const waitingForCtx = Boolean(ctxToken) && variantConfig === null;
@@ -363,10 +382,10 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
               <button
                 type="button"
                 onClick={requestCloseShopifyOverlay}
-                className="inline-flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-800 shadow-sm hover:bg-gray-50"
+                className="inline-flex h-9 w-9 sm:h-10 sm:w-10 coarse:!h-11 coarse:!w-11 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-800 shadow-sm hover:bg-gray-50"
                 aria-label={t("editor.closeBuilder")}
               >
-                <X className="w-4 h-4" />
+                <X className="w-5 h-5" />
               </button>
             </div>
           </div>

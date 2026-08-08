@@ -1,6 +1,6 @@
 import * as React from "react";
 import { isTrustedShellMessage, sanitizeShellViewportWidth } from "@/lib/shell-message";
-import { MOBILE_BREAKPOINT, SHORT_VIEWPORT_BREAKPOINT } from "./use-mobile";
+import { isCompactViewport, SHORT_VIEWPORT_BREAKPOINT } from "./use-mobile";
 
 /**
  * Which layout the editor should render: the phone two-panel slider, or the
@@ -19,6 +19,8 @@ import { MOBILE_BREAKPOINT, SHORT_VIEWPORT_BREAKPOINT } from "./use-mobile";
  *  - Height always comes from the real `window`. A shell cannot suppress the
  *    short-viewport guard, so a phone on its side keeps the phone layout no
  *    matter what width is claimed.
+ *  - Height also decides orientation, which is what puts a tablet held upright
+ *    on the phone layout: see `PORTRAIT_TABLET_MAX_WIDTH`.
  *
  * Unlike `useIsMobile` this is correct on the very first render, so the layout
  * does not paint desktop-first and flip.
@@ -72,10 +74,19 @@ export function effectiveViewportWidth(): number {
   return Math.max(own, Math.min(shellViewportWidth, ceiling));
 }
 
+/**
+ * Shares `isCompactViewport` with `useIsMobile` rather than restating the rule.
+ * The two answer different questions but they gate interlocking pieces of the
+ * same screen — the bottom bar is pinned by one and its clearance reserved by
+ * the other — so they must never disagree about a given viewport.
+ *
+ * Width may have been corrected upward by the shell; height is always this
+ * frame's own. A tablet handed a short iframe therefore reads as landscape and
+ * keeps the desktop layout, which is the same answer it gave before and the
+ * safe direction: the layout matches the space actually available.
+ */
 function readMobileLayout(): boolean {
-  const height = window.innerHeight;
-  if (height > 0 && height < SHORT_VIEWPORT_BREAKPOINT) return true;
-  return effectiveViewportWidth() < MOBILE_BREAKPOINT;
+  return isCompactViewport(effectiveViewportWidth(), window.innerHeight);
 }
 
 function subscribe(onStoreChange: () => void): () => void {

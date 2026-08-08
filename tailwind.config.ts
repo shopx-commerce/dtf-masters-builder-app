@@ -107,6 +107,19 @@ export default {
       ({ addVariant }: { addVariant: (name: string, definition: string) => void }) => {
         addVariant("coarse", "@media (any-pointer: coarse)");
         /**
+         * `touchonly:` — touch screen and nothing that can hover.
+         *
+         * Narrower than `coarse:`, for the things that are not merely sized
+         * wrong on a touch device but meaningless there: keyboard shortcut
+         * hints, hover-reveal affordances. `coarse:` alone would also hide them
+         * on a touchscreen laptop, which does have a keyboard.
+         *
+         * `hover`, not `any-hover`: it describes the primary input, so an iPad
+         * with a Magic Keyboard attached reports `hover: hover` and keeps its
+         * hints — which is right, that iPad has the keys the hints describe.
+         */
+        addVariant("touchonly", "@media (any-pointer: coarse) and (hover: none)");
+        /**
          * `layersheet:` — inside the phone's summoned layers sheet.
          *
          * `LayerRow` is shared with the desktop sidebar, and an iPad renders

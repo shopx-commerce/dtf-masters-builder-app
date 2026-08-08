@@ -1003,25 +1003,38 @@ export default function ImageEditorView() {
                           touch target, so the fields are what flexes; see `fluid`
                           in `SizeInput`. `overflow-x-auto` stays as the floor for
                           a viewport too narrow even for that, but no phone in
-                          normal use should reach it now. */}
-                      <div className="flex w-full flex-nowrap items-center gap-0.5 overflow-x-auto rounded-lg border-2 border-cyan-500 bg-cyan-100 px-1 py-1 shadow-sm">
-                        <div className="flex min-w-0 flex-1 items-center gap-0.5">
+                          normal use should reach it now.
+
+                          Flexing has a ceiling as well as a floor: this sheet is
+                          also the tablet's sizing control, and a 1024px iPad gave
+                          each field 372px of width to hold four characters. Past
+                          about 200px per field the extra width is not legibility,
+                          it just makes the number look lost, so the leftover goes
+                          to the margins instead. */}
+                      <div className="mx-auto flex w-full max-w-[480px] flex-nowrap items-center justify-center gap-0.5 overflow-x-auto rounded-lg border-2 border-cyan-500 bg-cyan-100 px-1 py-1 shadow-sm">
+                        <div className="flex min-w-0 max-w-[200px] flex-1 items-center gap-0.5">
                           <span className="flex-shrink-0 text-[12px] font-bold leading-none text-cyan-900">W</span>
                           <SizeInput fluid value={activeResizeSettings.widthInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("width", v)} title={useMetric(lang) ? t("editor.widthTitleCm") : t("editor.widthTitle")} max={artboardWidth} lang={lang} />
-                          <span className="flex-shrink-0 text-[11px] font-semibold text-cyan-900">{getUnitSuffix(activeResizeSettings.widthInches * activeDesignTransform.s, lang)}</span>
+                          {/* The unit label is the first thing to drop when the row
+                              runs out of room. `cm` is two characters where the inch
+                              mark is one, and carrying it below ~430px squeezed the
+                              field under the width its own digits need: a customer
+                              in Spanish saw 18.06 render as 18.0. The sheet's
+                              dimension label still states the unit. */}
+                          <span className={`flex-shrink-0 text-[11px] font-semibold text-cyan-900 ${useMetric(lang) ? "max-[430px]:hidden" : ""}`}>{getUnitSuffix(activeResizeSettings.widthInches * activeDesignTransform.s, lang)}</span>
                         </div>
                         <button
                           type="button"
                           onClick={() => setProportionalLock((v) => !v)}
-                          className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded transition-colors coarse:h-11 coarse:w-9 ${proportionalLock ? "bg-white text-cyan-600 shadow-sm" : "text-cyan-700/70 hover:bg-white/70"}`}
+                          className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded transition-colors coarse:h-11 coarse:w-9 max-[380px]:coarse:!w-8 ${proportionalLock ? "bg-white text-cyan-600 shadow-sm" : "text-cyan-700/70 hover:bg-white/70"}`}
                           title={proportionalLock ? t("editor.proportionsLocked") : t("editor.proportionsUnlocked")}
                         >
                           {proportionalLock ? <Link className="h-3.5 w-3.5 coarse:h-4 coarse:w-4" /> : <Unlink className="h-3.5 w-3.5 coarse:h-4 coarse:w-4" />}
                         </button>
-                        <div className="flex min-w-0 flex-1 items-center gap-0.5">
+                        <div className="flex min-w-0 max-w-[200px] flex-1 items-center gap-0.5">
                           <span className="flex-shrink-0 text-[12px] font-bold leading-none text-cyan-900">H</span>
                           <SizeInput fluid value={activeResizeSettings.heightInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("height", v)} title={useMetric(lang) ? t("editor.heightTitleCm") : t("editor.heightTitle")} max={artboardHeight} lang={lang} />
-                          <span className="flex-shrink-0 text-[11px] font-semibold text-cyan-900">{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>
+                          <span className={`flex-shrink-0 text-[11px] font-semibold text-cyan-900 ${useMetric(lang) ? "max-[430px]:hidden" : ""}`}>{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>
                         </div>
                       </div>
 
@@ -1183,7 +1196,7 @@ export default function ImageEditorView() {
                       title={t("editor.closeLayers")}
                       aria-label={t("editor.closeLayers")}
                     >
-                      <X className="h-4 w-4" />
+                      <X className="h-6 w-6" />
                     </button>
                   }
                 >
@@ -1299,6 +1312,12 @@ export default function ImageEditorView() {
                 <MobileToolSheet
                   open={designToolsOpen}
                   testId="mobile-design-tools-sheet"
+                  /* A fixed grid of tools, not a list, so it has a real height
+                     to be measured against. Without this the sheet takes its
+                     60% whatever is in it, which on a tablet — where the eight
+                     tools reflow from four rows into two — is most of a screen
+                     of white sitting on top of the artwork. */
+                  fitContent
                   initialDetent={shortViewport ? "full" : "half"}
                   collapseSignal={toolsCollapseSignal}
                   minCanvasStripPx={16}
@@ -1312,7 +1331,7 @@ export default function ImageEditorView() {
                       aria-label={t("editor.closeDesignTools")}
                       title={t("editor.closeDesignTools")}
                     >
-                      <X className="h-4 w-4" />
+                      <X className="h-6 w-6" />
                     </button>
                   }
                 >

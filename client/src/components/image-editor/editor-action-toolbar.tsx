@@ -204,7 +204,10 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
           {activeImageInfo.file.name}
         </p>
       )}
-      <div className="flex flex-col gap-1 lg:flex-row lg:gap-1 flex-shrink-0 ml-auto lg:ml-0">
+      {/* Wraps at lg because a narrow landscape tablet (1024px) leaves this row
+          about 30px short of holding both button groups, and the toolbar clips
+          rather than scrolls — "Duplicate & Arrange" was being cut in half. */}
+      <div className="flex flex-col gap-1 lg:flex-row lg:flex-wrap lg:gap-1 flex-shrink-0 lg:shrink lg:min-w-0 ml-auto lg:ml-0">
         <div className="flex items-center gap-1">
           <button
             onClick={handleThresholdAlpha}
@@ -283,8 +286,12 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
             {/* `coarse:` sizing, not `lg:`, because a tablet renders this desktop
                 arm on a touch screen. 16px is the threshold below which iOS
                 Safari zooms the page in on focus, and the widget has to widen to
-                hold three digits at that size without clipping. */}
-            <div className="relative w-10 coarse:w-16 h-[28px] lg:h-[24px] coarse:h-8 rounded border border-gray-300 bg-white overflow-hidden focus-within:border-cyan-500">
+                hold three digits at that size without clipping.
+
+                The height needs `!`: Tailwind emits custom variants ahead of the
+                responsive ones, so `lg:h-[24px]` would otherwise win on a tablet
+                and leave a 24px target under a 16px input. */}
+            <div className="relative w-10 coarse:w-16 h-[28px] lg:h-[24px] coarse:!h-8 rounded border border-gray-300 bg-white overflow-hidden focus-within:border-cyan-500">
               <input
                 type="text"
                 inputMode="numeric"

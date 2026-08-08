@@ -23,6 +23,20 @@ const HIGH_QUALITY_DETAIL_MAX_EDGE = 4096;
 const PREVIEW_CANVAS_INSET = 3;
 const PREVIEW_CANVAS_BORDER = 3;
 const PREVIEW_SURFACE_ORIGIN = PREVIEW_CANVAS_INSET + PREVIEW_CANVAS_BORDER;
+/** Thickness of the inch-ruler strips pinned to the top and left of the canvas area. */
+const RULER_GUTTER_PX = 18;
+/**
+ * Breathing room between a ruler and the sheet. The sheet must never sit under
+ * a ruler: the strip hides the sheet's own edge, and customers read that as
+ * their artwork being cropped.
+ */
+const SHEET_RULER_GAP_PX = 4;
+/** Left offset the paper box already carries on mobile, via `containerRef`. */
+const MOBILE_CONTAINER_MARGIN_LEFT = 6;
+const MOBILE_CANVAS_PAD_TOP = RULER_GUTTER_PX + SHEET_RULER_GAP_PX;
+const MOBILE_CANVAS_PAD_LEFT = MOBILE_CANVAS_PAD_TOP - MOBILE_CONTAINER_MARGIN_LEFT;
+const MOBILE_CANVAS_PAD_BOTTOM = 12;
+const DESKTOP_CANVAS_PAD = 12;
 /**
  * The full drawn width of a selection resize handle, in screen CSS px, before
  * it is capped against the size of the artwork it decorates. A single-selection
@@ -178,6 +192,7 @@ function computePreviewDimensions(
   availH: number,
   artboardWidth: number,
   artboardHeight: number,
+  fitWidthOnly = false,
 ): { w: number; h: number } | null {
   if (availW <= 0 || availH <= 0 || artboardHeight <= 0) return null;
   const artboardAspect = artboardWidth / artboardHeight;
@@ -185,7 +200,13 @@ function computePreviewDimensions(
   const minEdge = isNarrowViewport() ? 120 : 200;
   let w: number;
   let h: number;
-  if (availW / availH > artboardAspect) {
+  if (fitWidthOnly) {
+    // The paper is allowed to run past the bottom of the viewport so a longer
+    // sheet grows downward into scrollable space instead of being squeezed
+    // into the visible height. See `topAlignRef`.
+    w = Math.round(Math.max(minEdge, availW));
+    h = Math.round(w / artboardAspect);
+  } else if (availW / availH > artboardAspect) {
     h = Math.round(Math.max(minEdge, availH));
     w = Math.round(h * artboardAspect);
   } else {
@@ -261,6 +282,23 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const { toast } = useToast();
     const { t, lang } = useLanguage();
     const isMobile = useIsMobile();
+    /**
+     * Phones anchor the gangsheet to the top of the viewport and scroll it,
+     * rather than centring it and shrinking it to fit.
+     *
+     * Centring strands a band of empty grey above a short sheet, and on a phone
+     * — where the layers sheet already covers the lower half — that band is
+     * most of the usable canvas. Fitting a long sheet to the viewport height is
+     * just as wasteful the other way: a 120 inch sheet becomes a thin strip.
+     * Anchored to the top the sheet takes the full width, starts just under the
+     * ruler, and extends downward into scrollable space as it grows.
+     *
+     * Held in a ref because the camera callbacks below are deliberately
+     * dependency-free; reading it live avoids rebuilding them, and avoids the
+     * stale closures that adding a dependency here would risk.
+     */
+    const topAlignRef = useRef(isMobile);
+    topAlignRef.current = isMobile;
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const detailCanvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -363,28 +401,45 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const spotOverlayCacheRef = useRef<{ key: string; canvas: HTMLCanvasElement } | null>(null);
     const createSpotOverlayCanvasRef = useRef<((source?: HTMLImageElement | HTMLCanvasElement) => HTMLCanvasElement | null) | null>(null);
 
-    /** Minimum zoom = fit entire sheet in the gray preview viewport (canvas area), never using the paper box (same as previewDims — that wrongly kept zoom ~1 and looked “zoomed in”). */
-    const getMinZoom = useCallback(() => {
+    /**
+     * The two fit zooms for the current viewport.
+     *
+     * `minZoom` shows the whole sheet and is the floor the user may zoom out
+     * to. `initialZoom` is where a fresh or reset view starts. They differ only
+     * on the top-anchored mobile view, which starts at full width and lets a
+     * long sheet run below the fold — shrinking a 120 inch gangsheet to fit a
+     * phone's height would leave an unreadable strip. Zooming out to see the
+     * whole thing is still available there, it just isn't the starting point.
+     */
+    const computeFitZooms = useCallback((): { minZoom: number; initialZoom: number } | null => {
       const area = canvasAreaRef.current;
       const dims = previewDimsRef.current;
-      if (!area || dims.width <= 0 || dims.height <= 0) return ZOOM_MIN_ABSOLUTE;
+      if (!area || dims.width <= 0 || dims.height <= 0) return null;
       const padFraction = 0.03;
       const padX = Math.max(4, Math.round(dims.width * padFraction));
       const padY = Math.max(4, Math.round(dims.height * padFraction));
       const availW = area.clientWidth - padX * 2;
       const availH = area.clientHeight - padY * 2;
-      if (availW <= 0 || availH <= 0) return ZOOM_MIN_ABSOLUTE;
-      const raw = Math.min(availW / dims.width, availH / dims.height);
-      const fitScale = Math.min(1, raw);
-      return Math.max(ZOOM_MIN_ABSOLUTE, Math.round(fitScale * 20) / 20);
+      if (availW <= 0 || availH <= 0) return null;
+      const snap = (v: number) =>
+        Math.max(ZOOM_MIN_ABSOLUTE, Math.min(zoomMaxRef.current, Math.round(v * 20) / 20));
+      const minZoom = snap(Math.min(1, availW / dims.width, availH / dims.height));
+      const initialZoom = topAlignRef.current ? snap(Math.min(1, availW / dims.width)) : minZoom;
+      return { minZoom, initialZoom };
     }, []);
+
+    /** Minimum zoom = fit entire sheet in the gray preview viewport (canvas area), never using the paper box (same as previewDims — that wrongly kept zoom ~1 and looked “zoomed in”). */
+    const getMinZoom = useCallback(
+      () => computeFitZooms()?.minZoom ?? ZOOM_MIN_ABSOLUTE,
+      [computeFitZooms],
+    );
 
     const syncPreviewSizeFromWrapper = useCallback(() => {
       const wrapper = canvasAreaRef.current;
       if (!wrapper) return;
       const availW = wrapper.clientWidth - 48;
       const availH = wrapper.clientHeight - 48;
-      const computed = computePreviewDimensions(availW, availH, artboardWidth, artboardHeight);
+      const computed = computePreviewDimensions(availW, availH, artboardWidth, artboardHeight, topAlignRef.current);
       if (!computed) return;
       const { w, h } = computed;
       const prev = lastStablePreviewDimsRef.current;
@@ -440,34 +495,51 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       return Math.min(120, Math.max(48, v * 0.3));
     }, []);
 
-    const clampPanValue = useCallback((px: number, py: number, z: number) => {
-      const dims = previewDimsRef.current;
-      const el = canvasAreaRef.current;
-      const vw = el ? el.clientWidth : dims.width;
-      const vh = el ? el.clientHeight : dims.height;
-      const overflowX = dims.width / 2 - vw / (2 * z);
-      const overflowY = dims.height / 2 - vh / (2 * z);
-      const maxPanX = overflowX > 0 ? overflowX + getOverscrollPx('x') / z : 0;
-      const maxPanY = overflowY > 0 ? overflowY + getOverscrollPx('y') / z : 0;
-      return {
-        x: Math.max(-maxPanX, Math.min(maxPanX, px)),
-        y: Math.max(-maxPanY, Math.min(maxPanY, py)),
-      };
-    }, [getOverscrollPx]);
-
-    const getMaxPan = useCallback((axis: 'x' | 'y', z: number) => {
+    /**
+     * The range `panX`/`panY` may occupy, in pre-scale CSS pixels.
+     *
+     * Centred axes are symmetric: pan 0 puts the middle of the sheet in the
+     * middle of the viewport, so the sheet can travel equally far either way.
+     * The top-anchored vertical axis is not: pan 0 already has the sheet's top
+     * edge against the top of the viewport, so the whole usable range runs
+     * negative, far enough to bring the bottom edge into view. That asymmetry
+     * is why this returns a pair rather than a single maximum.
+     */
+    const getPanBounds = useCallback((axis: 'x' | 'y', z: number) => {
       const dims = previewDimsRef.current;
       const el = canvasAreaRef.current;
       if (axis === 'x') {
         const vw = el ? el.clientWidth : dims.width;
         const overflow = dims.width / 2 - vw / (2 * z);
-        return overflow > 0 ? overflow + getOverscrollPx('x') / z : 0;
-      } else {
-        const vh = el ? el.clientHeight : dims.height;
-        const overflow = dims.height / 2 - vh / (2 * z);
-        return overflow > 0 ? overflow + getOverscrollPx('y') / z : 0;
+        const max = overflow > 0 ? overflow + getOverscrollPx('x') / z : 0;
+        return { min: -max, max };
       }
+      const vh = el ? el.clientHeight : dims.height;
+      if (!topAlignRef.current) {
+        const overflow = dims.height / 2 - vh / (2 * z);
+        const max = overflow > 0 ? overflow + getOverscrollPx('y') / z : 0;
+        return { min: -max, max };
+      }
+      // Only the band below the top ruler is usable, so that — not the whole
+      // area — is what has to be filled before there is anything to scroll to.
+      const usable = vh - MOBILE_CANVAS_PAD_TOP - MOBILE_CANVAS_PAD_BOTTOM;
+      const hidden = dims.height - usable / z;
+      if (hidden <= 0) return { min: 0, max: 0 };
+      // Hard stop at the top rather than the usual overscroll slack. Nothing
+      // springs a rubber-banded pan back here, so any slack above the sheet is
+      // slack the user can leave behind — which is the empty band this view
+      // exists to get rid of. Scrolling down still gets the usual give.
+      return { min: -hidden - getOverscrollPx('y') / z, max: 0 };
     }, [getOverscrollPx]);
+
+    const clampPanValue = useCallback((px: number, py: number, z: number) => {
+      const bx = getPanBounds('x', z);
+      const by = getPanBounds('y', z);
+      return {
+        x: Math.max(bx.min, Math.min(bx.max, px)),
+        y: Math.max(by.min, Math.min(by.max, py)),
+      };
+    }, [getPanBounds]);
 
     const getScrollMetrics = useCallback((axis: 'x' | 'y', z: number) => {
       const dims = previewDimsRef.current;
@@ -482,20 +554,22 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     }, []);
 
     const panToScroll = useCallback((axis: 'x' | 'y', panVal: number, z: number) => {
-      const maxPan = getMaxPan(axis, z);
+      const { min, max } = getPanBounds(axis, z);
       const { maxScroll } = getScrollMetrics(axis, z);
-      if (maxPan <= 0 || maxScroll <= 0) return 0;
-      const t = Math.max(0, Math.min(1, (maxPan - panVal) / (2 * maxPan)));
+      const span = max - min;
+      if (span <= 0 || maxScroll <= 0) return 0;
+      const t = Math.max(0, Math.min(1, (max - panVal) / span));
       return t * maxScroll;
-    }, [getMaxPan, getScrollMetrics]);
+    }, [getPanBounds, getScrollMetrics]);
 
     const scrollToPan = useCallback((axis: 'x' | 'y', scrollVal: number, z: number) => {
-      const maxPan = getMaxPan(axis, z);
+      const { min, max } = getPanBounds(axis, z);
       const { maxScroll } = getScrollMetrics(axis, z);
-      if (maxPan <= 0 || maxScroll <= 0) return 0;
+      const span = max - min;
+      if (span <= 0 || maxScroll <= 0) return 0;
       const t = Math.max(0, Math.min(1, scrollVal / maxScroll));
-      return maxPan * (1 - 2 * t);
-    }, [getMaxPan, getScrollMetrics]);
+      return max - t * span;
+    }, [getPanBounds, getScrollMetrics]);
 
     const [scrollbarHover, setScrollbarHover] = useState<'x' | 'y' | null>(null);
     const [activeScrollAxis, setActiveScrollAxis] = useState<'x' | 'y' | null>(null);
@@ -2561,23 +2635,14 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     
     // Fit entire sheet in the gray preview viewport (same behavior as changing sheet size — not the old paper-box math).
     const fitToView = useCallback((forceReset = false) => {
-      const area = canvasAreaRef.current;
-      if (!area) return;
-      const dims = previewDimsRef.current;
-      if (dims.width <= 0 || dims.height <= 0) return;
       suppressTransitionRef.current = true;
-      const padX = Math.max(4, Math.round(dims.width * 0.03));
-      const padY = Math.max(4, Math.round(dims.height * 0.03));
-      const availW = area.clientWidth - padX * 2;
-      const availH = area.clientHeight - padY * 2;
-      if (availW <= 0 || availH <= 0) {
+      const fit = computeFitZooms();
+      if (!fit) {
         suppressTransitionRef.current = false;
         return;
       }
-      const raw = Math.min(availW / dims.width, availH / dims.height);
-      const fitZoom = Math.min(1, raw);
-      const z = Math.max(ZOOM_MIN_ABSOLUTE, Math.min(zoomMaxRef.current, Math.round(fitZoom * 20) / 20));
-      minZoomRef.current = z;
+      minZoomRef.current = fit.minZoom;
+      const z = fit.initialZoom;
       const shouldInitialFit = !hasInitialViewportFitRef.current;
       hasInitialViewportFitRef.current = true;
       if (forceReset || shouldInitialFit) {
@@ -2634,10 +2699,14 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const fitZoom = Math.min(viewW / Math.max(1, designCssW), viewH / Math.max(1, designCssH));
       const newZoom = Math.max(minZoomRef.current, Math.min(zoomMaxRef.current, fitZoom));
 
-      const designCenterX = (t.nx - 0.5) * dims.width;
-      const designCenterY = (t.ny - 0.5) * dims.height;
-      const rawPx = -designCenterX;
-      const rawPy = -designCenterY;
+      // Pan 0 means different things on the two vertical models — the
+      // artboard's middle at the viewport's middle when centred, its top edge
+      // at the viewport's top when anchored — so bringing the design's centre
+      // to the middle of the viewport takes a different offset for each.
+      const rawPx = -(t.nx - 0.5) * dims.width;
+      const rawPy = topAlignRef.current
+        ? el.clientHeight / (2 * newZoom) - t.ny * dims.height
+        : -(t.ny - 0.5) * dims.height;
       const clamped = clampPanValue(rawPx, rawPy, newZoom);
       commitZoomNow(newZoom);
       queuePanStateCommit(clamped.x, clamped.y);
@@ -2689,9 +2758,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         const isInsideThumb = pointerPos >= (thumbStart - edgeTol) && pointerPos <= (thumbEnd + edgeTol);
         if (!isInsideThumb) {
           const jumpScroll = Math.max(0, Math.min(maxScroll, ((pointerPos - thumbPx / 2) / scrollable) * maxScroll));
-          const mp = getMaxPan(axis, zoom);
-          const t = maxScroll > 0 ? Math.max(0, Math.min(1, jumpScroll / maxScroll)) : 0;
-          const jumpPan = mp > 0 ? mp * (1 - 2 * t) : 0;
+          const jumpPan = scrollToPan(axis, jumpScroll, zoom);
           if (axis === 'x') { panXRef.current = jumpPan; setPanX(jumpPan); }
           else { panYRef.current = jumpPan; setPanY(jumpPan); }
         }
@@ -2709,13 +2776,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         const raw = drag.startScroll + (delta / drag.scrollable) * drag.maxScroll;
         const nextScroll = Math.max(0, Math.min(drag.maxScroll, raw));
         const z = zoomRef.current;
-        const mp = getMaxPan(drag.axis, z);
-        const ms = drag.maxScroll;
-        let nextPan = 0;
-        if (mp > 0 && ms > 0) {
-          const t = Math.max(0, Math.min(1, nextScroll / ms));
-          nextPan = mp * (1 - 2 * t);
-        }
+        const nextPan = scrollToPan(drag.axis, nextScroll, z);
         const nextX = drag.axis === 'x' ? nextPan : panXRef.current;
         const nextY = drag.axis === 'y' ? nextPan : panYRef.current;
         // Sync native scroll element
@@ -2745,7 +2806,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       target.addEventListener('pointermove', onPointerMove);
       target.addEventListener('pointerup', onPointerUp);
       target.addEventListener('lostpointercapture', onPointerUp);
-    }, [zoom, getScrollMetrics, panToScroll, getMaxPan, queuePanStateCommit]);
+    }, [zoom, getScrollMetrics, panToScroll, scrollToPan, queuePanStateCommit]);
 
     // Keep native scroll element in sync with pan state
     useEffect(() => {
@@ -2936,19 +2997,13 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const area = canvasAreaRef.current;
       if (!area) return;
       suppressTransitionRef.current = true;
-      const dims = previewDimsRef.current;
-      const padX = Math.max(4, Math.round(dims.width * 0.03));
-      const padY = Math.max(4, Math.round(dims.height * 0.03));
-      const availW = area.clientWidth - padX * 2;
-      const availH = area.clientHeight - padY * 2;
-      if (availW <= 0 || availH <= 0) {
+      const fit = computeFitZooms();
+      if (!fit) {
         suppressTransitionRef.current = false;
         return;
       }
-      const raw = Math.min(availW / dims.width, availH / dims.height);
-      const fitZoom = Math.min(1, raw);
-      const z = Math.max(ZOOM_MIN_ABSOLUTE, Math.min(zoomMaxRef.current, Math.round(fitZoom * 20) / 20));
-      minZoomRef.current = z;
+      minZoomRef.current = fit.minZoom;
+      const z = fit.initialZoom;
       const shouldInitialViewportFit = !hasInitialViewportFitRef.current;
       hasInitialViewportFitRef.current = true;
       if (shouldInitialViewportFit) {
@@ -2958,7 +3013,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         // Selecting a design can resize the surrounding controls by a few
         // pixels. That measurement change must not undo a user's zoomed view.
         // Preserve zoom and only clamp it/pan if the new viewport is smaller.
-        const preservedZoom = Math.max(z, Math.min(zoomMaxRef.current, zoomRef.current));
+        // The floor is the whole-sheet zoom, not the starting zoom: on mobile
+        // the two differ, and using the starting zoom here would yank a user
+        // who had deliberately zoomed out back to full width.
+        const preservedZoom = Math.max(fit.minZoom, Math.min(zoomMaxRef.current, zoomRef.current));
         const clamped = clampPanValue(panXRef.current, panYRef.current, preservedZoom);
         commitZoomNow(preservedZoom);
         queuePanStateCommit(clamped.x, clamped.y);
@@ -2975,7 +3033,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       } else {
         clearSuppress();
       }
-    }, [previewDims.width, previewDims.height, artboardWidth, artboardHeight, clampPanValue]);
+    }, [previewDims.width, previewDims.height, artboardWidth, artboardHeight, clampPanValue, computeFitZooms]);
 
     useEffect(() => {
       const wrapper = canvasAreaRef.current;
@@ -3057,8 +3115,12 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         const z = zoomRef.current;
         const px = panXRef.current;
         const py = panYRef.current;
+        const el = canvasAreaRef.current;
+        const vh = el ? el.clientHeight : dims.height;
         const nx = 0.5 - px / Math.max(1, dims.width);
-        const ny = 0.5 - py / Math.max(1, dims.height);
+        const ny = topAlignRef.current
+          ? (vh / (2 * z) - py) / Math.max(1, dims.height)
+          : 0.5 - py / Math.max(1, dims.height);
         return { nx: Math.max(0.05, Math.min(0.95, nx)), ny: Math.max(0.05, Math.min(0.95, ny)) };
       };
       return canvas;
@@ -4128,15 +4190,29 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
           data-wand-active={wandDeleteActive ? "true" : "false"}
-          className="preview-canvas-area flex-1 min-h-0 flex items-center justify-center bg-gray-100 p-3 relative overflow-hidden cursor-default"
-          style={{ userSelect: 'none', touchAction: 'none', overscrollBehavior: 'none' }}
+          className={`preview-canvas-area flex-1 min-h-0 flex ${isMobile ? 'items-start justify-start' : 'items-center justify-center'} bg-gray-100 relative overflow-hidden cursor-default`}
+          style={{
+            userSelect: 'none',
+            touchAction: 'none',
+            overscrollBehavior: 'none',
+            // The rulers are absolutely positioned against the border box, so
+            // padding here is what keeps the sheet clear of them.
+            ...(isMobile
+              ? {
+                  paddingTop: MOBILE_CANVAS_PAD_TOP,
+                  paddingLeft: MOBILE_CANVAS_PAD_LEFT,
+                  paddingRight: 0,
+                  paddingBottom: MOBILE_CANVAS_PAD_BOTTOM,
+                }
+              : { padding: DESKTOP_CANVAS_PAD }),
+          }}
         >
           {previewDims.width > 0 && previewDims.height > 0 ? (
           <>
           {/* Inch rulers pinned to the top/left edges (overlay only) */}
-          <canvas ref={topRulerRef} className="absolute z-30 pointer-events-none" style={{ left: 18, top: 0 }} />
-          <canvas ref={leftRulerRef} className="absolute z-30 pointer-events-none" style={{ left: 0, top: 18 }} />
-          <div className="absolute z-30 pointer-events-none border-b border-r border-gray-300" style={{ left: 0, top: 0, width: 18, height: 18, background: 'rgba(249,250,251,0.94)' }} />
+          <canvas ref={topRulerRef} className="absolute z-30 pointer-events-none" style={{ left: RULER_GUTTER_PX, top: 0 }} />
+          <canvas ref={leftRulerRef} className="absolute z-30 pointer-events-none" style={{ left: 0, top: RULER_GUTTER_PX }} />
+          <div className="absolute z-30 pointer-events-none border-b border-r border-gray-300" style={{ left: 0, top: 0, width: RULER_GUTTER_PX, height: RULER_GUTTER_PX, background: 'rgba(249,250,251,0.94)' }} />
           <div className="relative" style={{ paddingBottom: 16, paddingRight: 24 }}>
             <div 
               ref={containerRef}
@@ -4154,7 +4230,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                   width: previewDims.width + 6,
                   height: previewDims.height + 6,
                   transform: `scale(${zoom}) translate(${panX}px, ${panY}px)`,
-                  transformOrigin: 'center',
+                  // Anchored views scale away from the top edge so the sheet
+                  // stays pinned there and grows downward; centred views scale
+                  // about the middle as before.
+                  transformOrigin: isMobile ? 'top center' : 'center',
                   willChange: 'transform',
                   transition: isMobile || isWheelZoomingRef.current || isPanningRef.current || suppressTransitionRef.current || activeScrollAxis ? 'none' : 'transform 0.15s ease-out',
                 }}
@@ -4743,7 +4822,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         {backdropSwatchContainer ? createPortal(backdropSwatchCompact, backdropSwatchContainer) : null}
 
         {/* Keyboard shortcut hints */}
-        <div className="hidden lg:flex flex-shrink-0 items-center justify-center gap-4 bg-gray-100/90 border-t border-gray-200/80 px-3 py-0.5 text-[9px] text-gray-600">
+        <div className="hidden lg:flex touchonly:!hidden flex-shrink-0 flex-wrap items-center justify-center gap-x-4 bg-gray-100/90 border-t border-gray-200/80 px-3 py-0.5 text-[9px] text-gray-600">
           {[
             ['Ctrl+Z', 'Undo'], ['Ctrl+C/V', 'Copy/Paste'],
             ['Alt+Drag', 'Duplicate'], ['Drag Empty', 'Select'],

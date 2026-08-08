@@ -71,9 +71,21 @@ export default function SizeInput({
   // both buttons become direct children of the outer flex row, where `order-first` puts the
   // decrement to the left of the field. On a fine pointer the wrapper stays a flex column
   // after the input and desktop is untouched.
+  // 36px wide everywhere except the smallest phones, where the row is already at
+  // its minimum and the field is the thing starving: at 360px it holds 38px of
+  // text, and `24.50` needs 47px, so a common size lost its last digit. Four
+  // steppers giving up 4px each buys the two fields 8px apiece. 32px stays a
+  // comfortable target because the height is untouched at 44px, and the hazard
+  // these were widened against — mis-tapping + for − — is handled by the field
+  // sitting between them, not by their width.
+  //
+  // 380px, where hiding the unit label uses 430px: a 390px iPhone already holds
+  // `24.50` comfortably, so it keeps the full-width steppers. Only 375px and
+  // below have to make the trade.
+  const narrowOnTinyPhone = "max-[380px]:coarse:!w-8";
   const bezel =
-    "flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors group-hover:bg-cyan-100 group-hover:text-cyan-600 group-active:bg-cyan-200 coarse:h-10 coarse:w-9 coarse:rounded-md";
-  const hit = "group flex h-3.5 w-4 items-center justify-center coarse:h-11 coarse:w-9";
+    `flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors group-hover:bg-cyan-100 group-hover:text-cyan-600 group-active:bg-cyan-200 coarse:h-10 coarse:w-9 coarse:rounded-md ${narrowOnTinyPhone}`;
+  const hit = `group flex h-3.5 w-4 items-center justify-center coarse:h-11 coarse:w-9 ${narrowOnTinyPhone}`;
 
   const arrows = (
     <div className="flex flex-col gap-[3px] coarse:contents">
