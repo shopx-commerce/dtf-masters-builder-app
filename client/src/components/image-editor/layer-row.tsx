@@ -1,9 +1,10 @@
 import { memo, useCallback, type Dispatch, type SetStateAction } from "react";
-import { ChevronDown, ChevronUp, Copy, Trash2 } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Copy, Trash2 } from "lucide-react";
 import { formatDimensions } from "@/lib/format-length";
 import { useLanguage } from "@/lib/i18n";
 import type { DesignItem } from "@/lib/types";
 import {
+  getSelectionSnapshot,
   useIsRowSelected,
   useSelectionActions,
 } from "@/state/selection-store";
@@ -97,26 +98,56 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
     endCountEdit,
   } = useEditingActions();
 
+  // The one place membership of `selectedDesignIds` is toggled from this
+  // panel, shared by ctrl+click and by the touch checkbox so the two routes
+  // cannot drift into producing different states.
+  //
+  // Folding `selectedDesignId` into the set first mirrors the ctrl+click
+  // branch of `preview-section.tsx`'s `handleInteractionStart`. Anything that
+  // writes `selectedDesignId` without also writing the set — the keyboard
+  // nudge path, `handleRemoveOneCopy` — leaves a design that every bulk
+  // action still treats as selected but that the set does not contain; the
+  // first toggle would then silently drop it from the selection.
+  //
+  // Reading the store imperatively rather than subscribing keeps this row out
+  // of the re-render set for selection changes it does not participate in,
+  // which is the whole point of the Zustand split described above.
+  const toggleRowInSelection = useCallback(() => {
+    const { selectedDesignId: activeId, selectedDesignIds: current } = getSelectionSnapshot();
+    const next = new Set(current);
+    if (activeId && !next.has(activeId)) next.add(activeId);
+    const allSelected = row.designs.every((d) => next.has(d.id));
+    for (const d of row.designs) {
+      if (allSelected) next.delete(d.id);
+      else next.add(d.id);
+    }
+    setSelectedDesignIds(next);
+    setSelectedDesignId(
+      allSelected
+        ? (next.size > 0 ? Array.from(next)[next.size - 1] : null)
+        : first.id,
+    );
+  }, [row.designs, first.id, setSelectedDesignId, setSelectedDesignIds]);
+
   const handleRowClick = useCallback(
     (e: React.MouseEvent) => {
       if (e.ctrlKey || e.metaKey) {
-        setSelectedDesignIds((prev) => {
-          const next = new Set(prev);
-          const allSelected = row.designs.every((d) => next.has(d.id));
-          if (allSelected) {
-            for (const d of row.designs) next.delete(d.id);
-            setSelectedDesignId(next.size > 0 ? Array.from(next)[next.size - 1] : null);
-          } else {
-            for (const d of row.designs) next.add(d.id);
-            setSelectedDesignId(first.id);
-          }
-          return next;
-        });
+        toggleRowInSelection();
       } else {
         handlers.handleSelectDesign(first.id);
       }
     },
-    [row.designs, first.id, handlers, setSelectedDesignId, setSelectedDesignIds],
+    [first.id, handlers, toggleRowInSelection],
+  );
+
+  const handleSelectionToggle = useCallback(
+    (e: React.MouseEvent) => {
+      // Without this the row's own handler also fires and collapses the
+      // multi-selection back down to this one row.
+      e.stopPropagation();
+      toggleRowInSelection();
+    },
+    [toggleRowInSelection],
   );
 
   const commitNameChange = useCallback(() => {
@@ -185,13 +216,56 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
 
   return (
     <div
-      className={`relative grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1 px-2.5 py-2.5 cursor-pointer transition-colors ${
+      className={`relative grid grid-cols-[auto_minmax(0,1fr)] coarse:grid-cols-[auto_auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1 px-2.5 py-2.5 cursor-pointer transition-colors ${
         isSelected
           ? "bg-cyan-50 border-l-2 border-cyan-400"
           : "hover:bg-gray-100/70 border-l-2 border-transparent"
       }`}
       onClick={handleRowClick}
     >
+      {/*
+        Multi-select is otherwise unreachable without a keyboard: the canvas'
+        ctrl+click has no touch equivalent, and an empty-canvas drag is taken
+        by the pan branch whenever the sheet overflows horizontally, which on
+        a phone it always does. Tapping the row still selects this design
+        alone — that behaviour is load-bearing and unchanged — so the toggle
+        is a separate target rather than a mode.
+
+        `coarse:`, not a width breakpoint: a tablet renders the desktop layout
+        on a touch screen and needs this; a mouse never does. On a fine
+        pointer the button is `display: none`, so it is not a grid item at all
+        and the row keeps its original two columns.
+
+        Hit area and glyph are separate boxes, as in `size-input.tsx` — a bare
+        44×44 button with the 20px bezel centred inside it. Non-overlap is
+        structural: the button owns grid column 1 for both rows, so it cannot
+        intersect the copies stepper or the delete button whatever their size.
+      */}
+      <button
+        type="button"
+        role="checkbox"
+        aria-checked={isSelected}
+        onClick={handleSelectionToggle}
+        className="hidden row-span-2 h-11 w-11 shrink-0 items-center justify-center coarse:flex"
+        aria-label={t(
+          isSelected ? "editor.removeFromSelection" : "editor.addToSelection",
+          { name: row.baseName },
+        )}
+        title={t(
+          isSelected ? "editor.removeFromSelection" : "editor.addToSelection",
+          { name: row.baseName },
+        )}
+      >
+        <span
+          className={`flex h-5 w-5 items-center justify-center rounded border-2 transition-colors ${
+            isSelected
+              ? "border-cyan-500 bg-cyan-500 text-white"
+              : "border-gray-400 bg-white text-transparent"
+          }`}
+        >
+          <Check className="h-3.5 w-3.5" strokeWidth={3} />
+        </span>
+      </button>
       <div className="row-span-2 h-9 w-9 rounded bg-gray-100 border border-gray-300 flex-shrink-0 overflow-hidden flex items-center justify-center">
         <img
           src={handlers.getLayerThumbnail(first)}
@@ -261,7 +335,7 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
           )}
         </p>
       </div>
-      <div className="col-start-2 flex min-w-0 items-center gap-1.5">
+      <div className="col-start-2 coarse:col-start-3 flex min-w-0 items-center gap-1.5">
         <div
           className="flex items-center gap-px shrink-0"
           onClick={(e) => e.stopPropagation()}

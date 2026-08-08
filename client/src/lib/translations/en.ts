@@ -104,6 +104,8 @@ export const en: Record<string, string> = {
   "editor.flipV": "Flip Vertical",
   "editor.selectAll": "Select All",
   "editor.deselect": "Deselect",
+  "editor.addToSelection": "Add {name} to selection",
+  "editor.removeFromSelection": "Remove {name} from selection",
   "editor.groupSelected": "Group Selected",
   "editor.ungroupSelected": "Ungroup",
   "editor.removeOne": "Remove one copy",

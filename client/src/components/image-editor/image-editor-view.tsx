@@ -559,8 +559,12 @@ export default function ImageEditorView() {
                 />
               </div>
               {showDesignInfo && (
+                /* The short cap exists so a one- or two-layer list does not
+                   reserve empty space. A touch row is 152px against 87px for a
+                   mouse, so 180px shows barely one of them; the coarse cap is
+                   sized to fit two. */
                 <div
-                  className={`layers-scroll border-t border-gray-200 overflow-y-scroll ${layerRows.length > 2 ? 'max-h-[400px]' : 'max-h-[180px]'}`}
+                  className={`layers-scroll border-t border-gray-200 overflow-y-scroll ${layerRows.length > 2 ? 'max-h-[400px]' : 'max-h-[180px] coarse:max-h-[320px]'}`}
                   style={{
                     scrollbarWidth: 'thin',
                     scrollbarColor: '#9ca3af transparent',
