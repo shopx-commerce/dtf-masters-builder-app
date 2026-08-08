@@ -46,6 +46,7 @@ integrations = ["github:1.0.0"]
 [userenv]
 
 [userenv.shared]
+TRUST_PROXY = "1"
 R2_PUBLIC_BASE_URL = "https://media.anynest.app"
 VITE_R2_PUBLIC_BASE_URL = "https://media.anynest.app"
 REAL_ESRGAN_BIN = "vendor/realesrgan-ncnn-vulkan/realesrgan-ncnn-vulkan"
