@@ -1,5 +1,5 @@
 import { memo, useCallback, useMemo, type Dispatch, type SetStateAction } from "react";
-import { Check, ChevronDown, ChevronUp, Copy, Minus, Plus, Trash2 } from "lucide-react";
+import { Check, Copy, Minus, Plus, Trash2 } from "lucide-react";
 import { formatDimensions } from "@/lib/format-length";
 import { useLanguage } from "@/lib/i18n";
 import type { DesignItem } from "@/lib/types";
@@ -440,11 +440,11 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
                   pixels off every row on screen. It stays well clear of the
                   24px WCAG floor, and the row itself is a tap target too. */}
               <span className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors group-hover:bg-cyan-100 group-hover:text-cyan-600 group-active:bg-cyan-200 layersheet:h-7 layersheet:w-7 layersheet:border-gray-400 layersheet:text-gray-700">
-                {/* Up/down reads as a stack; plus/minus reads as a stepper. The pair
-                    swaps with the orientation so the glyph always matches the layout,
-                    which is the same rule the size steppers follow. */}
-                <ChevronUp className="h-3 w-3 layersheet:hidden" strokeWidth={3} />
-                <Plus className="hidden h-4 w-4 layersheet:block" strokeWidth={3} />
+                {/* −/+ on every pointer rather than chevrons on a mouse, matching the
+                    size steppers: the mark describes what happens to the count instead
+                    of where the button sits, so it still reads once the pair goes from
+                    stacked to flat on the phone sheet. */}
+                <Plus className="h-3 w-3 layersheet:h-4 layersheet:w-4" strokeWidth={3} />
               </span>
             </button>
             <button
@@ -458,8 +458,7 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
               title={t("editor.decreaseCopies")}
             >
               <span className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors group-hover:bg-cyan-100 group-hover:text-cyan-600 group-active:bg-cyan-200 layersheet:h-7 layersheet:w-7 layersheet:border-gray-400 layersheet:text-gray-700">
-                <ChevronDown className="h-3 w-3 layersheet:hidden" strokeWidth={3} />
-                <Minus className="hidden h-4 w-4 layersheet:block" strokeWidth={3} />
+                <Minus className="h-3 w-3 layersheet:h-4 layersheet:w-4" strokeWidth={3} />
               </span>
             </button>
           </div>

@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Minus, Plus } from "lucide-react";
+import { Minus, Plus } from "lucide-react";
 import { cmToInches, useMetric } from "@/lib/format-length";
 
 export default function SizeInput({
@@ -54,7 +54,7 @@ export default function SizeInput({
     onCommit(Math.max(min, Math.min(max, value + delta)));
   };
 
-  // A stacked pair of arrows on a mouse; a −/+ stepper flanking the field on touch.
+  // A −/+ stepper: stacked next to the field on a mouse, flanking it on touch.
   //
   // These two controls set a physical print dimension, so a mis-tap leaves the customer with
   // a plausible-looking wrong number in the field they are about to trust. The stacked
@@ -87,10 +87,13 @@ export default function SizeInput({
         title="Increase size"
       >
         <span className={bezel}>
-          {/* Up/down reads as a stack; plus/minus reads as a stepper. The pair
-              swaps with the orientation so the glyph always matches the layout. */}
-          <ChevronUp className="h-3 w-3 coarse:hidden" strokeWidth={3} />
-          <Plus className="hidden h-5 w-5 coarse:block" strokeWidth={3} />
+          {/* One glyph pair on every pointer, where this used to show chevrons on a
+              mouse and −/+ only on touch. An arrow describes where the button sits;
+              −/+ describes what it does to the number, and only the second of those
+              survives a control that is stacked on desktop and laid out flat on a
+              phone. It is also the same mark as the copies stepper in the layers
+              list, so one explanation now covers both. */}
+          <Plus className="h-3 w-3 coarse:h-5 coarse:w-5" strokeWidth={3} />
         </span>
       </button>
       <button
@@ -103,8 +106,7 @@ export default function SizeInput({
         title="Decrease size"
       >
         <span className={bezel}>
-          <ChevronDown className="h-3 w-3 coarse:hidden" strokeWidth={3} />
-          <Minus className="hidden h-5 w-5 coarse:block" strokeWidth={3} />
+          <Minus className="h-3 w-3 coarse:h-5 coarse:w-5" strokeWidth={3} />
         </span>
       </button>
     </div>

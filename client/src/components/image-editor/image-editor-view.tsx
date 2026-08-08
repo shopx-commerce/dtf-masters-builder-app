@@ -15,7 +15,7 @@ import { formatDimensions, formatLength, useMetric, getUnitSuffix } from "@/lib/
 import { formatVariantPriceForDisplay } from "@/lib/variant-price";
 import { useWandTolerance, useToolActions } from "@/state/tool-store";
 import {
-  ArrowDownLeft, ArrowDownRight, ArrowUpLeft, ArrowUpRight, Copy, ChevronDown, ChevronUp,
+  ArrowDownLeft, ArrowDownRight, ArrowUpLeft, ArrowUpRight, Copy,
   Droplets, Eraser, FlipHorizontal2, FlipVertical2, Group, Layers, LayoutGrid, Link, Loader2, Minus, Plus, RotateCw,
   SlidersHorizontal, Sparkles, Trash2, Ungroup, Unlink, WandSparkles, X, XCircle,
 } from "lucide-react";
@@ -1085,8 +1085,11 @@ export default function ImageEditorView() {
                                   title={t("editor.increaseCopies")}
                                   aria-label={t("editor.increaseCopies")}
                                 >
+                                  {/* Same bezel and same −/+ as the layers and size
+                                      steppers — this one kept chevrons on both pointers
+                                      and was the odd one out of the three. */}
                                   <span className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-50 text-gray-600 group-hover:bg-gray-100">
-                                    <ChevronUp className="w-2.5 h-2.5" />
+                                    <Plus className="h-3 w-3" strokeWidth={3} />
                                   </span>
                                 </button>
                                 <button
@@ -1098,7 +1101,7 @@ export default function ImageEditorView() {
                                   aria-label={t("editor.decreaseCopies")}
                                 >
                                   <span className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-50 text-gray-600 group-hover:bg-gray-100">
-                                    <ChevronDown className="w-2.5 h-2.5" />
+                                    <Minus className="h-3 w-3" strokeWidth={3} />
                                   </span>
                                 </button>
                               </div>
