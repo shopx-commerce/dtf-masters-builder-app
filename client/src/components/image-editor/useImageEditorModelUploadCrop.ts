@@ -1214,11 +1214,27 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
     let skipReason: string | null = null;
     let appliedScale = 0;
 
+    /**
+     * The size the design actually prints at.
+     *
+     * `widthInches` is the size it had at upload and stays there: resizing with
+     * proportional lock on writes `transform.s` instead. Export, the cart and
+     * the size field all read `widthInches * transform.s`, and measuring
+     * against `widthInches` alone made this refuse every design that had been
+     * scaled up — precisely the ones printing soft. The canvas being measured
+     * is itself capped at `widthInches * 300`, so for any source with at least
+     * 300 px per original inch the old figure pinned to exactly 300 and the
+     * design was always rejected as already sharp, whatever it was scaled to.
+     */
+    const placedScale = Math.max(0.01, design.transform.s || 1);
+    const placedWidthInches = Math.max(0.01, design.widthInches * placedScale);
+    const placedHeightInches = Math.max(0.01, design.heightInches * placedScale);
+
     /** Runs the model over one full-resolution canvas and returns its replacement. */
     const upscaleCanvas = async (canvas: HTMLCanvasElement): Promise<HTMLCanvasElement> => {
       const currentDpi = Math.min(
-        canvas.width / Math.max(0.01, design.widthInches),
-        canvas.height / Math.max(0.01, design.heightInches),
+        canvas.width / placedWidthInches,
+        canvas.height / placedHeightInches,
       );
       if (currentDpi >= VECTOR_TARGET_DPI) {
         skipReason = "toast.upscaleAlreadySharpDesc";
@@ -1263,8 +1279,8 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
     try {
       const edited = await applyEditAtPrintResolution(
         sourceInfo,
-        design.widthInches,
-        design.heightInches,
+        placedWidthInches,
+        placedHeightInches,
         upscaleCanvas,
       );
       // No separate print source means the preview *is* the print source, so
@@ -1274,8 +1290,8 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
       if (!applied) throw new Error(t("toast.upscaleFailedDesc"));
 
       const nextDpi = Math.round(Math.min(
-        applied.sourceWidth / Math.max(0.01, design.widthInches),
-        applied.sourceHeight / Math.max(0.01, design.heightInches),
+        applied.sourceWidth / placedWidthInches,
+        applied.sourceHeight / placedHeightInches,
       ));
       const nextInfo: ImageInfo = {
         ...sourceInfo,
