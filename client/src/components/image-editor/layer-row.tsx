@@ -216,7 +216,7 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
 
   return (
     <div
-      className={`relative grid grid-cols-[auto_minmax(0,1fr)] coarse:grid-cols-[auto_auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1 px-2.5 py-2.5 cursor-pointer transition-colors ${
+      className={`relative grid grid-cols-[auto_minmax(0,1fr)] coarse:grid-cols-[auto_auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1 px-2.5 py-2.5 layersheet:gap-x-1.5 layersheet:gap-y-0.5 layersheet:px-1.5 layersheet:py-1 cursor-pointer transition-colors ${
         isSelected
           ? "bg-cyan-50 border-l-2 border-cyan-400"
           : "hover:bg-gray-100/70 border-l-2 border-transparent"
@@ -281,7 +281,10 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
       </div>
       {/* `layersheet:pr-12` clears the delete button's enlarged hit box on the
           phone, so a tap meant for the name is not swallowed by it. */}
-      <div className="min-w-0 overflow-hidden pr-7 layersheet:pr-12">
+      {/* One line on the phone rather than two. The name truncates and the
+          measurement holds its width, so the pair costs 17px instead of 32 —
+          per row, in the list you scroll. */}
+      <div className="min-w-0 overflow-hidden pr-7 layersheet:flex layersheet:items-baseline layersheet:gap-1.5 layersheet:pr-12">
         {isEditingName ? (
           <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
             <input
@@ -305,7 +308,7 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
           </div>
         ) : (
           <p
-            className="text-[11px] text-gray-900 truncate cursor-text hover:text-cyan-600 transition-colors"
+            className="text-[11px] text-gray-900 truncate cursor-text hover:text-cyan-600 transition-colors layersheet:min-w-0"
             title={t("editor.renameDesign")}
             onClick={(e) => {
               e.stopPropagation();
@@ -321,7 +324,7 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
           </p>
         )}
         <p
-          className={`text-gray-600 truncate tabular-nums ${
+          className={`text-gray-600 truncate tabular-nums layersheet:shrink-0 ${
             lang !== "en" ? "text-[9px]" : "text-[10px]"
           }`}
           title={formatDimensions(
@@ -362,7 +365,7 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
               keyboard and no mouse — is covered too. A mouse keeps 11px / 24px.
               44px tall on touch so the field matches the stepper beside it.
             */
-            className={`h-6 w-14 rounded border-2 bg-white text-center text-[11px] font-semibold tabular-nums text-gray-800 outline-none shadow-sm transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none coarse:h-11 coarse:text-[16px] ${
+            className={`h-6 w-14 rounded border-2 bg-white text-center text-[11px] font-semibold tabular-nums text-gray-800 outline-none shadow-sm transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none coarse:h-11 coarse:text-[16px] layersheet:w-11 ${
               isEditingCount
                 ? "border-cyan-500"
                 : "cursor-pointer border-gray-300 hover:border-cyan-400 hover:bg-cyan-50"
@@ -397,8 +400,18 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
             original 16×14 bezel centred inside it; the two cannot overlap
             because they are siblings in a flex column, and `coarse:gap-2` puts
             8px of dead space between them.
+
+            Stacked, those two targets plus their gap are 96px — 63% of a 152px
+            row, and the single largest reason the phone's layers list read as
+            enormous. In the layers sheet they flank the number instead, so the
+            targets keep every one of their 44px while costing one row of height
+            rather than two. `contents` drops this wrapper out of the box tree so
+            all three become flex items of the stepper itself, and `order` seats
+            the number between them without reordering the DOM — the tab order
+            stays field-then-controls. Nothing separates the two buttons there
+            because the field already does.
           */}
-          <div className="flex flex-col gap-[3px] coarse:gap-2">
+          <div className="flex flex-col gap-[3px] coarse:gap-2 layersheet:contents">
             <button
               type="button"
               tabIndex={-1}
@@ -406,11 +419,15 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
               onClick={() => handlers.handleSetGroupCount(row, count + 1)}
               disabled={count >= 200}
               aria-label="Increase copies"
-              className="group flex h-3.5 w-4 items-center justify-center disabled:opacity-30 coarse:h-11 coarse:w-11"
+              className="group flex h-3.5 w-4 items-center justify-center disabled:opacity-30 coarse:h-11 coarse:w-11 layersheet:order-last"
               title="Increase copies"
             >
-              <span className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors group-hover:bg-cyan-100 group-hover:text-cyan-600 group-active:bg-cyan-200">
-                <ChevronUp className="h-3 w-3" strokeWidth={3} />
+              {/* The bezel grows on the phone while the 44px box around it does
+                  not. Laid out flat, a 16x14 mark adrift in a 44px target reads
+                  as decoration and gets tapped tentatively; copy count is the
+                  control most worth aiming at confidently here. */}
+              <span className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors group-hover:bg-cyan-100 group-hover:text-cyan-600 group-active:bg-cyan-200 layersheet:h-8 layersheet:w-8 layersheet:border-gray-400 layersheet:text-gray-700">
+                <ChevronUp className="h-3 w-3 layersheet:h-5 layersheet:w-5" strokeWidth={3} />
               </span>
             </button>
             <button
@@ -420,11 +437,11 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
               onClick={() => handlers.handleSetGroupCount(row, count - 1)}
               disabled={count <= 1}
               aria-label="Decrease copies"
-              className="group flex h-3.5 w-4 items-center justify-center disabled:opacity-30 coarse:h-11 coarse:w-11"
+              className="group flex h-3.5 w-4 items-center justify-center disabled:opacity-30 coarse:h-11 coarse:w-11 layersheet:order-first"
               title="Decrease copies"
             >
-              <span className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors group-hover:bg-cyan-100 group-hover:text-cyan-600 group-active:bg-cyan-200">
-                <ChevronDown className="h-3 w-3" strokeWidth={3} />
+              <span className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors group-hover:bg-cyan-100 group-hover:text-cyan-600 group-active:bg-cyan-200 layersheet:h-8 layersheet:w-8 layersheet:border-gray-400 layersheet:text-gray-700">
+                <ChevronDown className="h-3 w-3 layersheet:h-5 layersheet:w-5" strokeWidth={3} />
               </span>
             </button>
           </div>

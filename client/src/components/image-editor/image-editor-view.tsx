@@ -932,13 +932,19 @@ export default function ImageEditorView() {
                 <MobileToolSheet
                   open={layersOpen}
                   testId="mobile-layers-sheet"
-                  sizing="fill"
-                  /* A list is worth summoning only if it shows a row. On a phone
-                     held sideways the canvas box is ~184px and a touch layer row
-                     is 152 of them, so at the half detent — and with the tool
-                     sheet's 56px canvas reservation, which a list does not need
-                     — this opened to 57px of visible list and no layer in it. */
-                  initialDetent="full"
+                  /* Content-sized, not fill. A fill-sized sheet picks its height
+                     from the space available rather than the list in it, so one
+                     layer got a 610px sheet holding 193px of content and 373px
+                     of white — the panel read as enormous because it was. Sized
+                     to content it is as tall as the rows it has, and a list long
+                     enough to exceed the ceiling scrolls, which is the only case
+                     fill was protecting against.
+
+                     The 56px of canvas the tool sheet reserves is also dropped
+                     to 16: that reservation keeps artwork visible while you
+                     resize it, and a list has no such tie. Landscape leaves this
+                     box ~228px, so those 40px are the difference between showing
+                     a row and showing none. */
                   minCanvasStripPx={16}
                   handleLabel={t("editor.layersSheetHandle")}
                   handleLeading={
@@ -1044,7 +1050,11 @@ export default function ImageEditorView() {
                           that grows `LayerRow`'s targets to 44px here without
                           moving the same rows in the desktop sidebar, which an
                           iPad also renders on a touch screen. */}
-                      <div data-mobile-layers className="rounded-lg border border-gray-200">{layerListItems}</div>
+                      {/* `divide-y` replaces separation the desktop row gets for
+                          free from its 20px of vertical padding. With that
+                          padding cut to 8 here, two unselected rows would
+                          otherwise run together into one block of text. */}
+                      <div data-mobile-layers className="divide-y divide-gray-200 rounded-lg border border-gray-200">{layerListItems}</div>
 
                       {/* Fluorescent spot-colour panels portal here on this
                           arm; on desktop they go to the sidebar. */}
