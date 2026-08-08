@@ -344,18 +344,25 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     onWandDeactivateRef.current = onWandDeactivate;
     moveModeRef.current = moveMode;
     const wandFollowerRef = useRef<HTMLDivElement>(null);
+    const lastTouchAtRef = useRef(0);
     /**
      * Seat the drawn wand on the mouse for as long as the tool is armed.
      *
-     * Gated on a fine pointer: a touchscreen has no cursor to replace, and a tap there
-     * synthesises a `mousemove` that would strand the glyph wherever the finger last was.
+     * Whether to show it is decided by what the pointer actually does, not by what the device
+     * claims to be. An earlier version gated on `any-pointer: fine`, which reads as false on a
+     * hybrid machine and in Chrome's device toolbar — both of which still have a mouse and a
+     * visible cursor — and silently dropped those users back onto the image cursor this exists
+     * to replace. A real mouse move is the only evidence that matters.
+     *
+     * The touch guard is what the media query was there for: a tap synthesises a `mousemove`
+     * at the finger, which would otherwise strand the glyph there after the finger has gone.
      */
     useEffect(() => {
       const area = canvasAreaRef.current;
       const follower = wandFollowerRef.current;
       if (!area || !follower || !wandDeleteActive) return;
-      if (!window.matchMedia('(any-pointer: fine)').matches) return;
       const show = (e: MouseEvent) => {
+        if (Date.now() - lastTouchAtRef.current < 600) return;
         const r = area.getBoundingClientRect();
         follower.style.transform =
           `translate3d(${e.clientX - r.left - WAND_GLYPH_TIP.x}px, ${e.clientY - r.top - WAND_GLYPH_TIP.y}px, 0)`;
@@ -368,11 +375,14 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         delete area.dataset.wandFollow;
         follower.style.opacity = '0';
       };
+      const onTouch = () => { lastTouchAtRef.current = Date.now(); hide(); };
       area.addEventListener('mousemove', show);
       area.addEventListener('mouseleave', hide);
+      area.addEventListener('touchstart', onTouch, { passive: true });
       return () => {
         area.removeEventListener('mousemove', show);
         area.removeEventListener('mouseleave', hide);
+        area.removeEventListener('touchstart', onTouch);
         hide();
       };
     }, [wandDeleteActive]);
