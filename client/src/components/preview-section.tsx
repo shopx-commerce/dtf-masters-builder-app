@@ -63,6 +63,18 @@ const HANDLE_ROTATE_RING = 3.0;
 const TOUCH_RESIZE_HIT_R_CSS_PX = 22;
 const TOUCH_ROTATE_OUTER_R_CSS_PX = 34;
 /**
+ * Lucide's `wand-sparkles`, the same drawing as the button that arms the tool. Rendered
+ * mirrored so the tip points up-left at the pixel the wand samples, which is both the cursor
+ * convention and the only orientation that does not cover what you are aiming at.
+ */
+const WAND_GLYPH_PATHS = [
+  'm21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72',
+  'm14 7 3 3', 'M5 6v4', 'M19 14v4', 'M10 2v2', 'M7 8H3', 'M21 16h-4', 'M11 3H9',
+];
+/** Where the tip sits inside the 32px glyph, so it can be seated on the pointer. */
+const WAND_GLYPH_TIP = { x: 6, y: 8 };
+
+/**
  * Garment colours the sheet can be previewed against — the answer to "how will this look
  * on a black shirt". Shared by the desktop row and the phone's compact picker so the two
  * cannot drift apart.
@@ -331,6 +343,40 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const onWandDeactivateRef = useRef(onWandDeactivate);
     onWandDeactivateRef.current = onWandDeactivate;
     moveModeRef.current = moveMode;
+    const wandFollowerRef = useRef<HTMLDivElement>(null);
+    /**
+     * Seat the drawn wand on the mouse for as long as the tool is armed.
+     *
+     * Gated on a fine pointer: a touchscreen has no cursor to replace, and a tap there
+     * synthesises a `mousemove` that would strand the glyph wherever the finger last was.
+     */
+    useEffect(() => {
+      const area = canvasAreaRef.current;
+      const follower = wandFollowerRef.current;
+      if (!area || !follower || !wandDeleteActive) return;
+      if (!window.matchMedia('(any-pointer: fine)').matches) return;
+      const show = (e: MouseEvent) => {
+        const r = area.getBoundingClientRect();
+        follower.style.transform =
+          `translate3d(${e.clientX - r.left - WAND_GLYPH_TIP.x}px, ${e.clientY - r.top - WAND_GLYPH_TIP.y}px, 0)`;
+        if (area.dataset.wandFollow !== 'true') {
+          area.dataset.wandFollow = 'true';
+          follower.style.opacity = '1';
+        }
+      };
+      const hide = () => {
+        delete area.dataset.wandFollow;
+        follower.style.opacity = '0';
+      };
+      area.addEventListener('mousemove', show);
+      area.addEventListener('mouseleave', hide);
+      return () => {
+        area.removeEventListener('mousemove', show);
+        area.removeEventListener('mouseleave', hide);
+        hide();
+      };
+    }, [wandDeleteActive]);
+
     function setPreviewCursor(cursor: string) {
       const area = canvasAreaRef.current;
       if (!area) return;
@@ -4131,6 +4177,45 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           className="preview-canvas-area flex-1 min-h-0 flex items-center justify-center bg-gray-100 p-3 relative overflow-hidden cursor-default"
           style={{ userSelect: 'none', touchAction: 'none', overscrollBehavior: 'none' }}
         >
+          {/* The wand pointer, drawn by us rather than handed to the OS.
+              
+              An image `cursor` is advisory: the browser is free to decline it —
+              Chrome drops custom cursors it considers oversized for the display
+              scaling, and silently falls back to the next entry in the list. A
+              thin `crosshair` fallback is near enough to the four-arrow `move`
+              cursor to be indistinguishable, which is the exact failure this was
+              supposed to fix, and it cannot be told apart from the real thing by
+              reading `getComputedStyle` — that reports what was asked for, not
+              what was painted. Drawing the glyph ourselves removes the browser's
+              say in it.
+              
+              Only mounted while the wand is armed, and only revealed once a real
+              mouse has moved over the canvas: `data-wand-follow` is what swaps
+              the OS cursor off, so a device with no pointer keeps whatever it
+              had and a pointer device never sees a gap. Positioned straight from
+              the event rather than through state, because this moves with the
+              mouse and a re-render per pointer move is the one thing this canvas
+              cannot afford. */}
+          {wandDeleteActive && (
+            <div
+              ref={wandFollowerRef}
+              aria-hidden="true"
+              className="pointer-events-none absolute left-0 top-0 z-40 opacity-0"
+              style={{ willChange: 'transform' }}
+              data-testid="wand-pointer"
+            >
+              <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                <g transform="translate(28,4) scale(-1,1)" strokeLinecap="round" strokeLinejoin="round">
+                  <g stroke="#ffffff" strokeWidth="4.5">
+                    {WAND_GLYPH_PATHS.map((d) => <path key={d} d={d} />)}
+                  </g>
+                  <g stroke="#c026d3" strokeWidth="2.2">
+                    {WAND_GLYPH_PATHS.map((d) => <path key={d} d={d} />)}
+                  </g>
+                </g>
+              </svg>
+            </div>
+          )}
           {previewDims.width > 0 && previewDims.height > 0 ? (
           <>
           {/* Inch rulers pinned to the top/left edges (overlay only) */}
