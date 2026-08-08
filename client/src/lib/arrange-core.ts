@@ -794,6 +794,27 @@ export function runArrange(input: ArrangeInput) {
   const toNestItems = (order: typeof items): NestItem[] =>
     order.map(d => ({ id: d.id, w: d.w, h: d.h, mask: d.mask, noRotate: d.noRotate }));
 
+  /**
+   * What the customer actually pays for: the next purchasable sheet length at or above `h`.
+   * Shaving an inch off a layout that still bills at the same rung has bought nothing.
+   */
+  const billable = (h: number): number =>
+    heightSteps?.find(step => step >= h - EPS) ?? h;
+
+  /**
+   * The shortest sheet any arrangement of this artwork could possibly use, expressed as the
+   * rung it would bill at.
+   *
+   * This is the stopping condition for the whole search. `packingHeightLowerBound` is a
+   * genuine lower bound — no packer, however clever, returns a layout shorter than it — so a
+   * candidate that already bills at this rung has won outright, and every further pack can
+   * only tie. Searching past that point is spending hundreds of milliseconds to re-derive a
+   * number that is already known to be optimal.
+   */
+  const billableFloor = billable(packingHeightLowerBound(items, usableW));
+  const billsAtFloor = (c: Candidate): boolean =>
+    c.overflows === 0 && billable(c.filmHeight) <= billableFloor + EPS;
+
   const runNestCandidates = (): Candidate[] => {
     if (!hasMasks || items.length > NEST_ITEM_LIMIT) return [];
     const obstacles: NestObstacle[] | undefined = fixedRects;
@@ -802,13 +823,21 @@ export function runArrange(input: ArrangeInput) {
     const orders: Array<[string, typeof items]> = [
       ['longestSide', byLongestSide], ['area', byArea], ['perimeter', byPerimeter],
     ];
-    return orders.map(([name, order]) => {
+    // Run them one at a time and stop early, rather than mapping the lot. Each ordering is
+    // a full grid-scanning nest and they cost the same as each other — measured at roughly
+    // 210ms apiece for 100 designs on a 160" sheet, which is 86% of the whole arrange. The
+    // first ordering usually lands on the floor, and when it does the other two are being
+    // asked to beat a number that cannot be beaten.
+    const out: Candidate[] = [];
+    for (const [name, order] of orders) {
       const c = evaluate(nestPack(
         toNestItems(order), usableW, usableH, artboardWidth, artboardHeight, GAP, obstacles,
       ));
       (c as any)._algo = `nest_${name}`;
-      return c;
-    });
+      out.push(c);
+      if (billsAtFloor(c)) break;
+    }
+    return out;
   };
 
   const runCandidatesWithObstacles = (gapOverride?: number): Candidate[] => {
@@ -856,8 +885,49 @@ export function runArrange(input: ArrangeInput) {
     return cands;
   };
 
-  const candidates: Candidate[] = [
-    ...(fixedRects && fixedRects.length > 0
+  /**
+   * The layout that leaves everything settled where it already is, seating only whatever is
+   * new. Computed before the from-scratch sweep rather than after it, because when the
+   * caller asked for stability and this layout is already optimal there is nothing the
+   * sweep could return that would be preferred — see the early return below.
+   */
+  const stable: Candidate | null = current && current.length > 0
+    // With silhouettes in play, settled designs routinely have overlapping bounding boxes —
+    // that is what nesting means — so the rectangle-based version of this would demote
+    // almost all of them as clashing and stability would evaporate.
+    ? (hasMasks
+      ? evaluate(keepPositionsNest(
+          toNestItems(items), current, usableW, usableH, artboardWidth, artboardHeight, GAP,
+          fixedRects))
+      : evaluate(keepPositionsPack(
+          items, current, usableW, usableH, artboardWidth, artboardHeight, GAP, fixedRects)))
+    : null;
+
+  /**
+   * What the caller needs to size the sheet, bolted onto whichever candidate wins.
+   *
+   * `packedExtent` is how far down the film this layout actually ran, overflowing items
+   * included — the placements themselves cannot say, because their `ny` is clamped to the
+   * sheet. It is a description of one layout, not a requirement: an overflowing pack piles
+   * everything it could not place into its own full-width row, so the extent routinely
+   * overstates what a taller sheet would really need. Sizing off it directly is what would
+   * buy the customer film they do not need, which is why the expansion path sizes off
+   * `minRequiredHeight` and treats this as diagnostic.
+   */
+  const describe = (chosen: Candidate) => ({
+    ...chosen,
+    packedExtent: Math.max(chosen.maxHeight, chosen.filmHeight),
+    minRequiredHeight: packingHeightLowerBound(items, usableW),
+  });
+
+  // Adding a copy asked for the sheet to absorb it, not to be rebuilt. When the settled
+  // layout already bills at the floor, the sweep below is guaranteed to tie at best, and
+  // `preferStable` would then discard every one of its results anyway. Skipping it takes a
+  // copy-count change from a full 76-pack sweep to a single incremental nest.
+  if (preferStable && stable && billsAtFloor(stable)) return describe(stable);
+
+  const rectCandidates: Candidate[] =
+    fixedRects && fixedRects.length > 0
       ? (hasCustomGap ? runCandidatesWithObstacles() : [...runCandidatesWithObstacles(), ...runCandidatesWithObstacles(0.125), ...runCandidatesWithObstacles(0.0625)])
       : (hasCustomGap
         ? [...runCandidates()]
@@ -865,9 +935,14 @@ export function runArrange(input: ArrangeInput) {
             ...runCandidates(),
             ...runCandidates(0.125),
             ...runCandidates(0.0625),
-          ])),
-    ...runNestCandidates(),
-  ];
+          ]);
+
+  // The rectangle packers are the cheap half of the search — all 73 of them come in around
+  // 20ms at 100 designs, against 630ms for the nester. So they go first, and the nester is
+  // only worth waking if they left room to improve on.
+  const nestCandidates = rectCandidates.some(billsAtFloor) ? [] : runNestCandidates();
+
+  const candidates: Candidate[] = [...rectCandidates, ...nestCandidates];
 
   // Fewer overflows, then fit within the artboard, then the shortest film, then the most
   // compact arrangement of everything that ties on film length.
@@ -910,40 +985,7 @@ export function runArrange(input: ArrangeInput) {
     console.debug('[arrange] winner with rotation', (winner as any)._algo, winner.result.length, winner.result.map(r => ({ id: r.id.slice(0, 8), nx: r.nx.toFixed(4), ny: r.ny.toFixed(4), rot: r.rotation })));
   }
 
-  /**
-   * What the caller needs to size the sheet, bolted onto whichever candidate wins.
-   *
-   * `packedExtent` is how far down the film this layout actually ran, overflowing items
-   * included — the placements themselves cannot say, because their `ny` is clamped to the
-   * sheet. It is a description of one layout, not a requirement: an overflowing pack piles
-   * everything it could not place into its own full-width row, so the extent routinely
-   * overstates what a taller sheet would really need. Sizing off it directly is what would
-   * buy the customer film they do not need, which is why the expansion path sizes off
-   * `minRequiredHeight` and treats this as diagnostic.
-   */
-  const describe = (chosen: Candidate) => ({
-    ...chosen,
-    packedExtent: Math.max(chosen.maxHeight, chosen.filmHeight),
-    minRequiredHeight: packingHeightLowerBound(items, usableW),
-  });
-
-  if (!current || current.length === 0) return describe(winner);
-
-  // With silhouettes in play, settled designs routinely have overlapping bounding boxes —
-  // that is what nesting means — so the rectangle-based version of this would demote almost
-  // all of them as clashing and stability would evaporate.
-  const stable = hasMasks
-    ? evaluate(keepPositionsNest(
-        toNestItems(items), current, usableW, usableH, artboardWidth, artboardHeight, GAP,
-        fixedRects))
-    : evaluate(keepPositionsPack(
-        items, current, usableW, usableH, artboardWidth, artboardHeight, GAP, fixedRects));
-
-  // What the customer actually pays for is the next sheet length up, so a repack that
-  // shaves an inch off but lands on the same purchasable height has bought nothing and
-  // is not worth relocating settled designs for.
-  const billable = (h: number): number =>
-    heightSteps?.find(step => step >= h - EPS) ?? h;
+  if (!stable) return describe(winner);
 
   if (stable.overflows > winner.overflows) return describe(winner);
 

@@ -18,4 +18,5 @@ __pycache__/
 # Scratch directories and files from debugging and verification harnesses.
 tmp-*
 tmp_*
+scratch-perf/
 .cursor/*.log
