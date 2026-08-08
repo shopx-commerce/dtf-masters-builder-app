@@ -360,8 +360,9 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     useEffect(() => {
       const area = canvasAreaRef.current;
       const follower = wandFollowerRef.current;
-      if (!area || !follower || !wandDeleteActive) return;
+      if (!area || !follower) return;
       const show = (e: MouseEvent) => {
+        if (!wandDeleteActiveRef.current) return;
         if (Date.now() - lastTouchAtRef.current < 600) return;
         const r = area.getBoundingClientRect();
         follower.style.transform =
@@ -385,6 +386,20 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         area.removeEventListener('touchstart', onTouch);
         hide();
       };
+      // Deliberately mount-only. Every previous version of this attached when the tool was
+      // armed, and every one of them had a way to miss: the ref not yet populated, the effect
+      // having already run under a stale reading of the device. Attaching once and asking the
+      // handler whether the tool is on removes the timing from the problem entirely.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Put it away when the tool is switched off, since the handler above no longer re-runs.
+    useEffect(() => {
+      if (wandDeleteActive) return;
+      const area = canvasAreaRef.current;
+      const follower = wandFollowerRef.current;
+      if (area) delete area.dataset.wandFollow;
+      if (follower) follower.style.opacity = '0';
     }, [wandDeleteActive]);
 
     function setPreviewCursor(cursor: string) {
@@ -4199,33 +4214,33 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
               what was painted. Drawing the glyph ourselves removes the browser's
               say in it.
               
-              Only mounted while the wand is armed, and only revealed once a real
-              mouse has moved over the canvas: `data-wand-follow` is what swaps
-              the OS cursor off, so a device with no pointer keeps whatever it
-              had and a pointer device never sees a gap. Positioned straight from
-              the event rather than through state, because this moves with the
-              mouse and a re-render per pointer move is the one thing this canvas
-              cannot afford. */}
-          {wandDeleteActive && (
-            <div
-              ref={wandFollowerRef}
-              aria-hidden="true"
-              className="pointer-events-none absolute left-0 top-0 z-40 opacity-0"
-              style={{ willChange: 'transform' }}
-              data-testid="wand-pointer"
-            >
-              <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-                <g transform="translate(28,4) scale(-1,1)" strokeLinecap="round" strokeLinejoin="round">
-                  <g stroke="#ffffff" strokeWidth="4.5">
-                    {WAND_GLYPH_PATHS.map((d) => <path key={d} d={d} />)}
-                  </g>
-                  <g stroke="#c026d3" strokeWidth="2.2">
-                    {WAND_GLYPH_PATHS.map((d) => <path key={d} d={d} />)}
-                  </g>
+              Always in the DOM, revealed only once a real mouse has moved over
+              the canvas with the tool armed: `data-wand-follow` is what swaps the
+              OS cursor off, so a device with no pointer keeps whatever it had.
+              Permanent rather than conditional so the mount-only listener above
+              can never find it missing — an earlier version rendered it with the
+              tool and spent two rounds failing for exactly that reason.
+              Positioned straight from the event rather than through state,
+              because this moves with the mouse and a re-render per pointer move
+              is the one thing this canvas cannot afford. */}
+          <div
+            ref={wandFollowerRef}
+            aria-hidden="true"
+            className="pointer-events-none absolute left-0 top-0 z-40 opacity-0"
+            style={{ willChange: 'transform' }}
+            data-testid="wand-pointer"
+          >
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+              <g transform="translate(28,4) scale(-1,1)" strokeLinecap="round" strokeLinejoin="round">
+                <g stroke="#ffffff" strokeWidth="4.5">
+                  {WAND_GLYPH_PATHS.map((d) => <path key={d} d={d} />)}
                 </g>
-              </svg>
-            </div>
-          )}
+                <g stroke="#c026d3" strokeWidth="2.2">
+                  {WAND_GLYPH_PATHS.map((d) => <path key={d} d={d} />)}
+                </g>
+              </g>
+            </svg>
+          </div>
           {previewDims.width > 0 && previewDims.height > 0 ? (
           <>
           {/* Inch rulers pinned to the top/left edges (overlay only) */}
