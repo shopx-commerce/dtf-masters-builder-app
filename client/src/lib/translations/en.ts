@@ -92,6 +92,10 @@ export const en: Record<string, string> = {
   "editor.effectiveRes": "Effective resolution: {dpi} DPI",
   "editor.undo": "Undo (Ctrl+Z)",
   "editor.redo": "Redo (Ctrl+Y)",
+  // Without the shortcut, for the phone's view bar. A touch device has no
+  // Ctrl key, and the parenthetical is half the width of the button.
+  "editor.undoShort": "Undo",
+  "editor.redoShort": "Redo",
   "editor.rotate": "Rotate 90° (Shift+R)",
   "editor.alignTL": "Align Top Left",
   "editor.alignTR": "Align Top Right",
@@ -101,6 +105,7 @@ export const en: Record<string, string> = {
   "editor.alignCenterY": "Center top to bottom",
   "editor.duplicate": "Duplicate (Ctrl+D)",
   "editor.duplicateArrange": "Duplicate & Arrange",
+  "editor.apply": "Apply",
   "editor.delete": "Delete (Del)",
   "editor.cleanAlpha": "Pixel Clean",
   "editor.cleanAlphaTitle": "Remove Semi Transparencies from selected design(s)",
@@ -137,6 +142,7 @@ export const en: Record<string, string> = {
   "editor.designToolsExpand": "Tap to show design tools",
   "editor.wandActiveHint": "Tap the design to erase",
   "editor.wandTurnOff": "Turn off",
+  "editor.applyAgain": "Apply {tool} again",
   "editor.halftone": "Halftone",
   "editor.halftoneTitle": "Convert design colours to halftone dots for dark-garment DTF",
   "editor.halftoneStrength": "Strength",

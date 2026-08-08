@@ -1,5 +1,5 @@
-import { memo, useCallback, type Dispatch, type SetStateAction } from "react";
-import { Check, ChevronDown, ChevronUp, Copy, Trash2 } from "lucide-react";
+import { memo, useCallback, useMemo, type Dispatch, type SetStateAction } from "react";
+import { Check, ChevronDown, ChevronUp, Copy, Minus, Plus, Trash2 } from "lucide-react";
 import { formatDimensions } from "@/lib/format-length";
 import { useLanguage } from "@/lib/i18n";
 import type { DesignItem } from "@/lib/types";
@@ -78,7 +78,10 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
   // boolean flips (a click on any design in the row moves it in or out of
   // the selection). Other rows' selection changes do not trigger a
   // re-render here.
-  const rowIds = row.designs.map((d) => d.id);
+  // Memoised because `useIsRowSelected` builds its Zustand subscription selector from this
+  // array: a fresh array every render means a fresh selector every render, on a path that
+  // runs once per row per drag frame.
+  const rowIds = useMemo(() => row.designs.map((d) => d.id), [row.designs]);
   const isSelected = useIsRowSelected(rowIds);
 
   const { setSelectedDesignId, setSelectedDesignIds } = useSelectionActions();
@@ -216,7 +219,7 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
 
   return (
     <div
-      className={`relative grid grid-cols-[auto_minmax(0,1fr)] coarse:grid-cols-[auto_auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1 px-2.5 py-2.5 layersheet:gap-x-1.5 layersheet:gap-y-0.5 layersheet:px-1.5 layersheet:py-1 cursor-pointer transition-colors ${
+      className={`relative grid grid-cols-[auto_minmax(0,1fr)] coarse:grid-cols-[auto_auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1 px-2.5 py-2.5 layersheet:gap-x-1.5 layersheet:gap-y-0.5 layersheet:px-1.5 layersheet:py-0.5 cursor-pointer transition-colors ${
         isSelected
           ? "bg-cyan-50 border-l-2 border-cyan-400"
           : "hover:bg-gray-100/70 border-l-2 border-transparent"
@@ -266,7 +269,7 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
           <Check className="h-3.5 w-3.5" strokeWidth={3} />
         </span>
       </button>
-      <div className="row-span-2 h-9 w-9 rounded bg-gray-100 border border-gray-300 flex-shrink-0 overflow-hidden flex items-center justify-center">
+      <div className="row-span-2 h-9 w-9 layersheet:h-8 layersheet:w-8 rounded bg-gray-100 border border-gray-300 flex-shrink-0 overflow-hidden flex items-center justify-center">
         <img
           src={handlers.getLayerThumbnail(first)}
           alt=""
@@ -284,7 +287,7 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
       {/* One line on the phone rather than two. The name truncates and the
           measurement holds its width, so the pair costs 17px instead of 32 —
           per row, in the list you scroll. */}
-      <div className="min-w-0 overflow-hidden pr-7 layersheet:flex layersheet:items-baseline layersheet:gap-1.5 layersheet:pr-12">
+      <div className="min-w-0 overflow-hidden pr-7 layersheet:flex layersheet:items-baseline layersheet:gap-1.5 layersheet:pr-10">
         {isEditingName ? (
           <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
             <input
@@ -340,7 +343,11 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
           )}
         </p>
       </div>
-      <div className="col-start-2 coarse:col-start-3 flex min-w-0 items-center gap-1.5">
+      {/* `layersheet:pr-10` reserves the delete gutter on this row too. Without
+          it the Apply button, being `flex-1`, ran to the row's right edge and
+          straight under the delete target — so the right end of a routine
+          action was a tap on a destructive one. */}
+      <div className="col-start-2 coarse:col-start-3 flex min-w-0 items-center gap-1.5 layersheet:pr-10">
         <div
           className="flex items-center gap-px shrink-0"
           onClick={(e) => e.stopPropagation()}
@@ -365,7 +372,7 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
               keyboard and no mouse — is covered too. A mouse keeps 11px / 24px.
               44px tall on touch so the field matches the stepper beside it.
             */
-            className={`h-6 w-14 rounded border-2 bg-white text-center text-[11px] font-semibold tabular-nums text-gray-800 outline-none shadow-sm transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none coarse:h-11 coarse:text-[16px] layersheet:w-11 ${
+            className={`h-6 w-14 rounded border-2 bg-white text-center text-[11px] font-semibold tabular-nums text-gray-800 outline-none shadow-sm transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none coarse:h-11 coarse:text-[16px] layersheet:h-10 layersheet:w-11 ${
               isEditingCount
                 ? "border-cyan-500"
                 : "cursor-pointer border-gray-300 hover:border-cyan-400 hover:bg-cyan-50"
@@ -419,15 +426,25 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
               onClick={() => handlers.handleSetGroupCount(row, count + 1)}
               disabled={count >= 200}
               aria-label={t("editor.increaseCopies")}
-              className="group flex h-3.5 w-4 items-center justify-center disabled:opacity-30 coarse:h-11 coarse:w-11 layersheet:order-last"
+              className="group flex h-3.5 w-4 items-center justify-center disabled:opacity-30 coarse:h-11 coarse:w-11 layersheet:h-10 layersheet:w-10 layersheet:order-last"
               title={t("editor.increaseCopies")}
             >
-              {/* The bezel grows on the phone while the 44px box around it does
-                  not. Laid out flat, a 16x14 mark adrift in a 44px target reads
-                  as decoration and gets tapped tentatively; copy count is the
-                  control most worth aiming at confidently here. */}
-              <span className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors group-hover:bg-cyan-100 group-hover:text-cyan-600 group-active:bg-cyan-200 layersheet:h-8 layersheet:w-8 layersheet:border-gray-400 layersheet:text-gray-700">
-                <ChevronUp className="h-3 w-3 layersheet:h-5 layersheet:w-5" strokeWidth={3} />
+              {/* The bezel grows on the phone while the box around it does not.
+                  Laid out flat, a 16x14 mark adrift in a 40px target reads as
+                  decoration and gets tapped tentatively; copy count is the
+                  control most worth aiming at confidently here.
+
+                  40 rather than the 44 the rest of the touch UI uses. This
+                  control is what sets the height of the whole layers row, and
+                  the list is the thing you scroll: four pixels here is four
+                  pixels off every row on screen. It stays well clear of the
+                  24px WCAG floor, and the row itself is a tap target too. */}
+              <span className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors group-hover:bg-cyan-100 group-hover:text-cyan-600 group-active:bg-cyan-200 layersheet:h-7 layersheet:w-7 layersheet:border-gray-400 layersheet:text-gray-700">
+                {/* Up/down reads as a stack; plus/minus reads as a stepper. The pair
+                    swaps with the orientation so the glyph always matches the layout,
+                    which is the same rule the size steppers follow. */}
+                <ChevronUp className="h-3 w-3 layersheet:hidden" strokeWidth={3} />
+                <Plus className="hidden h-4 w-4 layersheet:block" strokeWidth={3} />
               </span>
             </button>
             <button
@@ -437,38 +454,43 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
               onClick={() => handlers.handleSetGroupCount(row, count - 1)}
               disabled={count <= 1}
               aria-label={t("editor.decreaseCopies")}
-              className="group flex h-3.5 w-4 items-center justify-center disabled:opacity-30 coarse:h-11 coarse:w-11 layersheet:order-first"
+              className="group flex h-3.5 w-4 items-center justify-center disabled:opacity-30 coarse:h-11 coarse:w-11 layersheet:h-10 layersheet:w-10 layersheet:order-first"
               title={t("editor.decreaseCopies")}
             >
-              <span className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors group-hover:bg-cyan-100 group-hover:text-cyan-600 group-active:bg-cyan-200 layersheet:h-8 layersheet:w-8 layersheet:border-gray-400 layersheet:text-gray-700">
-                <ChevronDown className="h-3 w-3 layersheet:h-5 layersheet:w-5" strokeWidth={3} />
+              <span className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors group-hover:bg-cyan-100 group-hover:text-cyan-600 group-active:bg-cyan-200 layersheet:h-7 layersheet:w-7 layersheet:border-gray-400 layersheet:text-gray-700">
+                <ChevronDown className="h-3 w-3 layersheet:hidden" strokeWidth={3} />
+                <Minus className="hidden h-4 w-4 layersheet:block" strokeWidth={3} />
               </span>
             </button>
           </div>
         </div>
         <button
           onClick={handleDuplicateAndArrange}
-          className="inline-flex h-7 min-w-0 flex-1 items-center justify-center gap-1 rounded-md border border-fuchsia-400 bg-fuchsia-100 px-1.5 text-[9px] font-bold text-fuchsia-800 shadow-sm shadow-fuchsia-500/20 transition-colors hover:bg-fuchsia-200 layersheet:h-11"
+          className="inline-flex h-7 min-w-0 flex-1 items-center justify-center gap-1 rounded-md border border-fuchsia-400 bg-fuchsia-100 px-1.5 text-[9px] font-bold text-fuchsia-800 shadow-sm shadow-fuchsia-500/20 transition-colors hover:bg-fuchsia-200 layersheet:h-10 layersheet:text-[11px]"
           title={t("editor.duplicateArrange")}
         >
-          {/* Hidden on the phone, where the 16px it occupies is the difference
-              between the French label fitting and being cut to "Dupliquer et
-              Organi…". A written label does not need an icon to repeat it. */}
-          <Copy className="h-3 w-3 flex-shrink-0 layersheet:hidden" />
-          {/* Truncates rather than wrapping or overflowing, so a language with
-              a longer string than the English this row was sized against
-              degrades to an ellipsis instead of breaking the layout. */}
-          <span className="truncate">{t("editor.duplicateArrange")}</span>
+          <Copy className="h-3 w-3 flex-shrink-0" />
+          {/* "Apply" rather than the full "Duplicate & Arrange" the tooltip
+              still spells out. The long version was the widest thing in the
+              row, it truncated to "Duplicate & Arra…" on the phone and to
+              "Dupliquer et Organi…" in French, and a truncated label teaches
+              nobody what the button does. The short one fits at every width in
+              all three languages, and the icon can come back now that it is not
+              competing for the space. */}
+          <span className="truncate">{t("editor.apply")}</span>
         </button>
       </div>
       {/* Hit area and glyph are separate boxes on the phone, as everywhere else
-          in this row: the 12px bezel keeps its size and the box around it grows
-          to 44. */}
+          in this row: the 12px bezel keeps its size and the box around it grows.
+          `inset-y-0` rather than a fixed height so it is a full-height gutter
+          down the right edge — that makes the target taller than the 40px the
+          rest of the row gets, and, paired with the `pr-10` on both grid rows,
+          means it can never sit on top of another control. */}
       <button
         onClick={handleDelete}
         aria-label={t("editor.deleteLayer", { name: row.baseName })}
         title={t("editor.deleteLayer", { name: row.baseName })}
-        className="absolute right-2.5 top-2.5 p-0.5 rounded hover:bg-gray-200 text-red-500 hover:text-red-600 transition-colors flex-shrink-0 layersheet:right-0 layersheet:top-0 layersheet:flex layersheet:h-11 layersheet:w-11 layersheet:items-center layersheet:justify-center layersheet:rounded-none layersheet:hover:bg-transparent"
+        className="absolute right-2.5 top-2.5 p-0.5 rounded hover:bg-gray-200 text-red-500 hover:text-red-600 transition-colors flex-shrink-0 layersheet:bottom-0 layersheet:right-0 layersheet:top-0 layersheet:flex layersheet:h-auto layersheet:w-10 layersheet:items-center layersheet:justify-center layersheet:rounded-none layersheet:hover:bg-transparent"
       >
         <Trash2 className="w-3 h-3" />
       </button>

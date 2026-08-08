@@ -17,7 +17,7 @@ import { useWandTolerance, useToolActions } from "@/state/tool-store";
 import {
   ArrowDownLeft, ArrowDownRight, ArrowUpLeft, ArrowUpRight, Copy, ChevronDown, ChevronUp,
   Droplets, Eraser, FlipHorizontal2, FlipVertical2, Group, Layers, LayoutGrid, Link, Loader2, Minus, Plus, RotateCw,
-  SlidersHorizontal, Sparkles, Trash2, Undo2, Redo2, Ungroup, Unlink, WandSparkles, X, XCircle,
+  SlidersHorizontal, Sparkles, Trash2, Ungroup, Unlink, WandSparkles, X, XCircle,
 } from "lucide-react";
 import { useImageEditorContext } from "./image-editor-context";
 import {
@@ -49,6 +49,34 @@ const HalftoneIcon = ({ className }: { className?: string }) => (
 );
 
 
+/**
+ * The tools in the phone's Design tools sheet, and the thing the bar offers to repeat.
+ *
+ * Naming them lets one list drive the grid, the "run it again" pill, and which tool is
+ * remembered, so a tool cannot appear in the sheet and be missing from the pill.
+ */
+type DesignToolId =
+  | "whiteBg"
+  | "wand"
+  | "cleanAlpha"
+  | "cleanAlphaAll"
+  | "flipH"
+  | "flipV"
+  | "upscale"
+  | "halftone"
+  | "autoArrange";
+
+interface DesignTool {
+  id: DesignToolId;
+  label: string;
+  title: string;
+  Icon: React.ComponentType<{ className?: string }>;
+  /** Grid button colours. The pill borrows the same palette so the two read as one control. */
+  tone: string;
+  pillTone: string;
+  disabled: boolean;
+  run: () => void;
+}
 
 export default function ImageEditorView() {
   const {
@@ -114,6 +142,11 @@ export default function ImageEditorView() {
   const [designToolsOpen, setDesignToolsOpen] = useState(false);
   const [toolsCollapseSignal, setToolsCollapseSignal] = useState(0);
   /**
+   * Where the canvas's backdrop-colour swatches land on the phone: the right-hand end of the
+   * view bar, which is on screen for the whole session.
+   */
+  const [backdropSwatchHost, setBackdropSwatchHost] = useState<HTMLDivElement | null>(null);
+  /**
    * Get out of the way and show what just happened.
    *
    * Every tool in the sheet changes the artwork, and the artwork is behind the
@@ -129,6 +162,15 @@ export default function ImageEditorView() {
     setToolsCollapseSignal((n) => n + 1);
     focusSelectedRef.current?.();
   }, []);
+  /**
+   * The tool the customer reached for last, kept so the bar can offer it again.
+   *
+   * Most of these apply once and finish — there is no mode to display afterwards — but
+   * running the same tool over several designs in a row is the common way a sheet gets
+   * cleaned up, and doing that meant reopening the sheet each time. The one exception is the
+   * wand, which is a real mode; when it is armed it takes the slot regardless of this.
+   */
+  const [lastToolId, setLastToolId] = useState<DesignToolId | null>(null);
   /**
    * The halftone options open below the six tool buttons, which on a phone puts
    * them past the bottom of the sheet's own scroll — the customer taps Halftone
@@ -306,11 +348,159 @@ export default function ImageEditorView() {
     [handleAutoArrangeRef],
   );
 
-  /** Shared by the desktop sidebar's layers card and the phone's layers sheet. */
-  const layerListItems = layerRows.map((row) => {
-    const rowKey = `${row.baseName}::${row.sizeKey}`;
-    return <LayerRow key={rowKey} rowKey={rowKey} row={row} handlers={layerHandlers} />;
-  });
+  /**
+   * Shared by the desktop sidebar's layers card and the phone's layers sheet.
+   *
+   * Built only when one of those two is actually showing it, and memoised on the rows
+   * themselves. Hoisting this out of the sidebar's `showDesignInfo` conditional so both arms
+   * could share it quietly made it unconditional: the phone, which does not render the
+   * sidebar at all, went from paying nothing for these elements to rebuilding all of them on
+   * every view render, including every frame of a drag and with the layers sheet shut.
+   */
+  const layerListVisible = showDesignInfo || layersOpen;
+  const layerListItems = useMemo(
+    () =>
+      layerListVisible
+        ? layerRows.map((row) => {
+            const rowKey = `${row.baseName}::${row.sizeKey}`;
+            return <LayerRow key={rowKey} rowKey={rowKey} row={row} handlers={layerHandlers} />;
+          })
+        : null,
+    [layerListVisible, layerRows, layerHandlers],
+  );
+
+  /**
+   * Built only for the phone, which is the only layout with a Design tools sheet — the
+   * desktop toolbar spells these out across the top of the editor instead.
+   *
+   * Every entry closes over the handler it runs, so the grid below is a `.map` and the bar's
+   * pill is a lookup. `runTool` is what both go through, so using a tool from either place
+   * records it the same way.
+   */
+  const designTools: DesignTool[] = !mobileLayout ? [] : [
+    {
+      id: "whiteBg",
+      label: t("editor.whiteBg"),
+      title: t("editor.whiteBgTitle"),
+      Icon: Eraser,
+      tone: "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100",
+      pillTone: "border-amber-300 bg-amber-50 text-amber-700",
+      disabled: !selectedDesignId,
+      run: handleRemoveWhiteBackground,
+    },
+    {
+      id: "wand",
+      label: t("editor.magicWand"),
+      title: t("editor.magicWandTitle"),
+      Icon: WandSparkles,
+      tone: "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-600 hover:bg-fuchsia-100",
+      pillTone: "border-fuchsia-300 bg-fuchsia-50 text-fuchsia-700",
+      disabled: !selectedDesignId,
+      run: handleWandDeleteToggle,
+    },
+    {
+      id: "cleanAlpha",
+      label: t("editor.cleanAlpha"),
+      title: t("editor.cleanAlphaTitle"),
+      Icon: Droplets,
+      tone: "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]",
+      pillTone: "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]",
+      disabled: !selectedDesignId && selectedDesignIds.size === 0,
+      run: handleThresholdAlpha,
+    },
+    {
+      id: "cleanAlphaAll",
+      label: t("editor.cleanAlphaAll"),
+      title: t("editor.cleanAlphaAllTitle"),
+      Icon: Droplets,
+      tone: "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]",
+      pillTone: "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]",
+      disabled: designs.length === 0,
+      run: handleThresholdAlphaAll,
+    },
+    {
+      id: "flipH",
+      label: t("editor.flipH"),
+      title: t("editor.flipH"),
+      Icon: FlipHorizontal2,
+      tone: "border-gray-300 bg-white text-gray-700 hover:bg-gray-100",
+      pillTone: "border-gray-300 bg-white text-gray-700",
+      disabled: !selectedDesignId,
+      run: handleFlipX,
+    },
+    {
+      id: "flipV",
+      label: t("editor.flipV"),
+      title: t("editor.flipV"),
+      Icon: FlipVertical2,
+      tone: "border-gray-300 bg-white text-gray-700 hover:bg-gray-100",
+      pillTone: "border-gray-300 bg-white text-gray-700",
+      disabled: !selectedDesignId,
+      run: handleFlipY,
+    },
+    /* Auto-Arrange sits with the tools now rather than in the bar. Imports and copy-count
+       changes already arrange as they land, so pressing it is the exception rather than the
+       routine, and it was holding the only labelled slot on the row. */
+    {
+      id: "autoArrange",
+      label: t("editor.autoArrange"),
+      title: selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll"),
+      Icon: LayoutGrid,
+      tone: "border-pink-600 bg-pink-500 text-black hover:bg-pink-600",
+      pillTone: "border-pink-600 bg-pink-500 text-black",
+      disabled: designs.length < 2 && selectedDesignIds.size < 2,
+      run: () => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2, fullRepack: true }),
+    },
+    ...(canIncreaseQuality
+      ? [{
+          id: "upscale" as const,
+          label: isUpscaling && upscaleProgress !== null
+            ? `${Math.round(upscaleProgress * 100)}%`
+            : t("editor.increaseQuality"),
+          title: t("editor.increaseQuality"),
+          Icon: Sparkles,
+          tone: "border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100",
+          pillTone: "border-violet-300 bg-violet-50 text-violet-700",
+          disabled: !selectedDesignId || isUpscaling,
+          run: () => { void handleIncreaseQuality(2); },
+        }]
+      : []),
+    ...(halftoneEnabled
+      ? [{
+          id: "halftone" as const,
+          label: t("editor.halftone"),
+          title: t("editor.halftoneTitle"),
+          Icon: HalftoneIcon,
+          tone: halftoneMenuOpen
+            ? "border-amber-600 bg-amber-500 text-white"
+            : "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100",
+          pillTone: "border-amber-300 bg-amber-50 text-amber-700",
+          disabled: !selectedDesignId && selectedDesignIds.size === 0,
+          /* Its options render inside the sheet, so repeating it from the pill has to bring
+             the sheet back up or the menu would open somewhere nobody can see. */
+          run: () => { setDesignToolsOpen(true); setLayersOpen(false); handleOpenHalftoneMenu(); },
+        }]
+      : []),
+  ];
+
+  /**
+   * Halftone is the one tool that opens options instead of applying, so it must not collapse
+   * the sheet it just drew them into.
+   */
+  const runTool = (tool: DesignTool) => {
+    setLastToolId(tool.id);
+    tool.run();
+    if (tool.id !== "halftone") minimiseToolsAndFocus();
+  };
+
+  const lastTool = lastToolId ? designTools.find((tool) => tool.id === lastToolId) ?? null : null;
+
+  /**
+   * Whether the phone's action bar is showing a tool in its right-hand slot, and so whether
+   * the Design tools button has to give up its label to make room. Mirrors the condition the
+   * slot itself renders under, so the two can never disagree.
+   */
+  const activeToolShown = wandDeleteModeActive || !!lastTool;
 
   /**
    * One element, rendered into exactly one of the two arms.
@@ -663,6 +853,70 @@ export default function ImageEditorView() {
               {/* Portal host. Renders nothing itself — see the note on
                   `controlsSection`. */}
               <div className="hidden" aria-hidden="true">{controlsSection}</div>
+
+              {/* View bar.
+                  Undo and Redo carry their names here rather than riding the
+                  action bar as bare glyphs. The undo glyph is a curved arrow
+                  and so is the rotate handle, and customers were reading the
+                  first as the second — a labelled button is the only fix that
+                  survives someone who has never used the editor before. The
+                  glyphs are gone rather than merely accompanied by the word,
+                  which both settles the question and is what makes the row fit
+                  in Spanish: "Deshacer" and "Rehacer" with icons overran the
+                  390px edge by 75px even after everything else was trimmed.
+
+                  They sit up here because two labels cost ~126px and the
+                  action bar below had none spare. This row did, once the five
+                  backdrop swatches moved into the design tools sheet, and it
+                  moved up with them so the labels have somewhere to be. Net
+                  effect on canvas height is a wash: one row left the bottom,
+                  one arrived at the top.
+
+                  Above the canvas rather than floating over it because the
+                  empty band this appears to occupy is only empty for a short
+                  sheet at default zoom — pick a 36in gangsheet, or zoom in,
+                  and anything floating there is sitting on the artwork. */}
+              <div
+                className="flex flex-shrink-0 items-center gap-1 overflow-x-auto border-b border-gray-200 bg-gray-100 py-1 pl-2 pr-1 [scrollbar-width:thin]"
+                data-testid="mobile-view-bar"
+              >
+                <button
+                  type="button"
+                  onClick={handleUndo}
+                  disabled={!canUndo()}
+                  className="flex h-9 flex-shrink-0 items-center gap-1 whitespace-nowrap rounded border border-gray-300 bg-white px-1.5 text-[12px] font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:pointer-events-none disabled:opacity-30 coarse:h-11"
+                  title={t("editor.undo")}
+                >
+                  {t("editor.undoShort")}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRedo}
+                  disabled={!canRedo()}
+                  className="flex h-9 flex-shrink-0 items-center gap-1 whitespace-nowrap rounded border border-gray-300 bg-white px-1.5 text-[12px] font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:pointer-events-none disabled:opacity-30 coarse:h-11"
+                  title={t("editor.redo")}
+                >
+                  {t("editor.redoShort")}
+                </button>
+                <div className="h-5 w-px flex-shrink-0 bg-gray-300" />
+                {/* Reset / zoom / focus portal in here from the canvas. */}
+                <div ref={setMobileToolbarContainer} className="flex min-w-0 flex-1 items-center" data-testid="mobile-canvas-toolbar" />
+                {/* The backdrop the canvas draws behind the artwork.
+                    
+                    Back at the right-hand end of this bar, where the zoom
+                    controls leave about 150px unused. It spent a while in the
+                    Design tools sheet, which put a viewing preference two taps
+                    deep behind a panel about editing the artwork — and hid it
+                    entirely unless that panel happened to be open. Everything
+                    else in this bar changes how you are looking at the sheet
+                    rather than what is on it, which is exactly what choosing a
+                    garment colour to preview against does.
+
+                    `PreviewSection` owns the colour and portals the swatches
+                    into this box. */}
+                <div ref={setBackdropSwatchHost} className="flex flex-shrink-0 items-center pl-1" />
+              </div>
+
               {/* Full-bleed canvas. The sheet below overlays it rather than
                   sitting beside it, because `PreviewSection` sizes the
                   gangsheet from this box and anything that takes width or
@@ -695,6 +949,7 @@ export default function ImageEditorView() {
                   selectionZoomActive={selectionZoomActive}
                   onSelectionZoomChange={handleSelectionZoomChange}
                   bottomToolbarContainer={mobileToolbarContainer}
+                  backdropSwatchContainer={backdropSwatchHost}
                    wandDeleteActive={wandDeleteModeActive}
                    onWandDeleteTap={handleWandDelete}
                    onWandDeactivate={handleWandDeactivate}
@@ -713,34 +968,60 @@ export default function ImageEditorView() {
                   open={!!selectedDesignId && !layersOpen && !designToolsOpen}
                   handleLabel={t("editor.toolSheetHandle")}
                   handleAccessory={
-                    <span
-                      className={`inline-flex rounded px-1.5 py-0.5 text-[11px] font-bold leading-none ${effectiveDPI < 277 ? "border border-amber-400 bg-amber-100 text-amber-700" : "border border-emerald-700 bg-emerald-100 text-emerald-700"}`}
-                      title={t("editor.effectiveRes", { dpi: effectiveDPI })}
-                    >
-                      {effectiveDPI} DPI
-                    </span>
+                    <>
+                      {/* Lives here rather than inside the size panel below, where
+                          desktop puts it. The panel has to fit two fields and four
+                          stepper buttons across 374px and this badge was the 34px
+                          that pushed the height stepper off the edge. The handle
+                          strip is already where the sheet's status goes. */}
+                      {selectedDesignIds.size > 1 && (
+                        <span
+                          className="inline-flex rounded-full border border-cyan-500 bg-cyan-50 px-1.5 py-0.5 text-[11px] font-bold leading-none tabular-nums text-cyan-700"
+                          title={t("editor.resizeAppliesToAll", { count: selectedDesignIds.size })}
+                        >
+                          ×{selectedDesignIds.size}
+                        </span>
+                      )}
+                      <span
+                        className={`inline-flex rounded px-1.5 py-0.5 text-[11px] font-bold leading-none ${effectiveDPI < 277 ? "border border-amber-400 bg-amber-100 text-amber-700" : "border border-emerald-700 bg-emerald-100 text-emerald-700"}`}
+                        title={t("editor.effectiveRes", { dpi: effectiveDPI })}
+                      >
+                        {effectiveDPI} DPI
+                      </span>
+                    </>
                   }
                 >
                   {(level) => (
                     <>
-                      <div className="flex flex-nowrap items-center justify-start gap-1 overflow-x-auto rounded-md border border-gray-200 bg-white px-1 py-1">
-                        <div className="inline-flex flex-shrink-0 items-center gap-0.5">
-                          <span className="text-[12px] font-bold text-gray-800">W</span>
-                          <SizeInput value={activeResizeSettings.widthInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("width", v)} title={useMetric(lang) ? t("editor.widthTitleCm") : t("editor.widthTitle")} max={artboardWidth} lang={lang} />
-                          <span className="text-[11px] font-medium text-gray-700">{getUnitSuffix(activeResizeSettings.widthInches * activeDesignTransform.s, lang)}</span>
+                      {/* The same tinted panel the desktop toolbar uses, for the
+                          same reason: it makes the white fields the highest-contrast
+                          thing on the sheet, so the size control is findable without
+                          any explanatory copy. The phone needs it more than desktop
+                          does — this sheet is the only place a size can be typed. */}
+                      {/* Sized to the device rather than to its contents. Every
+                          part of this row except the two number fields is a fixed
+                          touch target, so the fields are what flexes; see `fluid`
+                          in `SizeInput`. `overflow-x-auto` stays as the floor for
+                          a viewport too narrow even for that, but no phone in
+                          normal use should reach it now. */}
+                      <div className="flex w-full flex-nowrap items-center gap-0.5 overflow-x-auto rounded-lg border-2 border-cyan-500 bg-cyan-100 px-1 py-1 shadow-sm">
+                        <div className="flex min-w-0 flex-1 items-center gap-0.5">
+                          <span className="flex-shrink-0 text-[12px] font-bold leading-none text-cyan-900">W</span>
+                          <SizeInput fluid value={activeResizeSettings.widthInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("width", v)} title={useMetric(lang) ? t("editor.widthTitleCm") : t("editor.widthTitle")} max={artboardWidth} lang={lang} />
+                          <span className="flex-shrink-0 text-[11px] font-semibold text-cyan-900">{getUnitSuffix(activeResizeSettings.widthInches * activeDesignTransform.s, lang)}</span>
                         </div>
                         <button
                           type="button"
                           onClick={() => setProportionalLock((v) => !v)}
-                          className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded text-cyan-500 hover:bg-cyan-50 coarse:h-11 coarse:w-11"
+                          className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded transition-colors coarse:h-11 coarse:w-9 ${proportionalLock ? "bg-white text-cyan-600 shadow-sm" : "text-cyan-700/70 hover:bg-white/70"}`}
                           title={proportionalLock ? t("editor.proportionsLocked") : t("editor.proportionsUnlocked")}
                         >
-                          {proportionalLock ? <Link className="h-3.5 w-3.5" /> : <Unlink className="h-3.5 w-3.5" />}
+                          {proportionalLock ? <Link className="h-3.5 w-3.5 coarse:h-4 coarse:w-4" /> : <Unlink className="h-3.5 w-3.5 coarse:h-4 coarse:w-4" />}
                         </button>
-                        <div className="inline-flex flex-shrink-0 items-center gap-0.5">
-                          <span className="text-[12px] font-bold text-gray-800">H</span>
-                          <SizeInput value={activeResizeSettings.heightInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("height", v)} title={useMetric(lang) ? t("editor.heightTitleCm") : t("editor.heightTitle")} max={artboardHeight} lang={lang} />
-                          <span className="text-[11px] font-medium text-gray-700">{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>
+                        <div className="flex min-w-0 flex-1 items-center gap-0.5">
+                          <span className="flex-shrink-0 text-[12px] font-bold leading-none text-cyan-900">H</span>
+                          <SizeInput fluid value={activeResizeSettings.heightInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("height", v)} title={useMetric(lang) ? t("editor.heightTitleCm") : t("editor.heightTitle")} max={artboardHeight} lang={lang} />
+                          <span className="flex-shrink-0 text-[11px] font-semibold text-cyan-900">{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>
                         </div>
                       </div>
 
@@ -1034,46 +1315,20 @@ export default function ImageEditorView() {
                 >
                   {(level) => (
                     <>
-                      {/* The strip. Magic wand is the one tool that stays on
-                          after you press it and needs its tolerance while you
-                          work, so at this height the sheet becomes that tool's
-                          control panel. With nothing running it is just the way
-                          back up. */}
-                      {wandDeleteModeActive ? (
-                        <div className="flex flex-nowrap items-center justify-start gap-2 rounded-md border border-fuchsia-300 bg-fuchsia-50 px-2 py-1.5">
-                          <WandSparkles className="h-4 w-4 flex-shrink-0 text-fuchsia-600" aria-hidden="true" />
-                          <span className="flex-shrink-0 text-[11px] font-semibold text-fuchsia-800">
-                            {t("editor.wandActiveHint")}
-                          </span>
-                          <input
-                            type="range"
-                            min="1"
-                            max="100"
-                            value={wandTolerance}
-                            onChange={(e) => setWandTolerance(Number(e.target.value))}
-                            className="min-w-0 flex-1 accent-fuchsia-600 coarse:h-11"
-                            aria-label={t("editor.wandTolerance")}
-                          />
-                          <span className="w-6 flex-shrink-0 text-right text-[11px] tabular-nums text-fuchsia-800">{wandTolerance}</span>
-                          <button
-                            type="button"
-                            onClick={handleWandDeleteToggle}
-                            className="flex-shrink-0 whitespace-nowrap rounded-md border border-fuchsia-600 bg-fuchsia-600 px-2 py-1 text-[11px] font-bold text-white coarse:min-h-[44px]"
-                          >
-                            {t("editor.wandTurnOff")}
-                          </button>
-                        </div>
-                      ) : (
-                        level === "peek" && (
-                          /* Not a button: the handle strip above is already the
-                             control that expands the sheet, and a second target
-                             for the same job in the same 44px band is how you
-                             get a tap that does nothing. This only says which
-                             sheet is sitting there. */
-                          <p className="px-1 py-0.5 text-center text-[11px] font-medium text-gray-500">
-                            {t("editor.designToolsExpand")}
-                          </p>
-                        )
+                      {/* The strip used to become the magic wand's control panel
+                          whenever the wand was armed. The action bar carries the
+                          tolerance and the off switch now, permanently and whether
+                          this sheet is open or shut, so all that is left to say
+                          here is what to do next — and arming the wand collapses
+                          the sheet to exactly this height, which is the moment
+                          that sentence is worth reading. It is text rather than a
+                          button because the handle strip above already expands the
+                          sheet, and a second target for that job in the same 44px
+                          band is how you get a tap that does nothing. */}
+                      {level === "peek" && (
+                        <p className={`px-1 py-0.5 text-center text-[11px] font-medium ${wandDeleteModeActive ? "text-fuchsia-700" : "text-gray-500"}`}>
+                          {wandDeleteModeActive ? t("editor.wandActiveHint") : t("editor.designToolsExpand")}
+                        </p>
                       )}
 
                       {level !== "peek" && (
@@ -1092,99 +1347,20 @@ export default function ImageEditorView() {
                               Horizontalement"; four cells of 207 fit it, and
                               eight buttons still come to two rows either way. */}
                           <div className="grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => { handleRemoveWhiteBackground(); minimiseToolsAndFocus(); }}
-                              disabled={!selectedDesignId}
-                              className="flex items-center justify-center gap-1 whitespace-nowrap rounded-md border border-amber-200 bg-amber-50 px-2 py-2 text-[11px] font-medium text-amber-700 transition-all hover:bg-amber-100 disabled:pointer-events-none disabled:opacity-30 coarse:min-h-[44px]"
-                              title={t("editor.whiteBgTitle")}
-                            >
-                              <Eraser className="h-3.5 w-3.5 flex-shrink-0" />
-                              <span className="truncate">{t("editor.whiteBg")}</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => { handleWandDeleteToggle(); minimiseToolsAndFocus(); }}
-                              disabled={!selectedDesignId}
-                              className="flex items-center justify-center gap-1 whitespace-nowrap rounded-md border border-fuchsia-200 bg-fuchsia-50 px-2 py-2 text-[11px] font-medium text-fuchsia-600 transition-all hover:bg-fuchsia-100 disabled:pointer-events-none disabled:opacity-30 coarse:min-h-[44px]"
-                              title={t("editor.magicWandTitle")}
-                            >
-                              <WandSparkles className="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
-                              <span className="truncate">{t("editor.magicWand")}</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => { handleThresholdAlpha(); minimiseToolsAndFocus(); }}
-                              disabled={!selectedDesignId && selectedDesignIds.size === 0}
-                              className="flex items-center justify-center gap-1 whitespace-nowrap rounded-md border border-[#CBD5E1] bg-[#F1F5F9] px-2 py-2 text-[11px] font-medium text-[#2563EB] transition-all disabled:pointer-events-none disabled:opacity-30 coarse:min-h-[44px]"
-                              title={t("editor.cleanAlphaTitle")}
-                            >
-                              <Droplets className="h-3.5 w-3.5 flex-shrink-0" />
-                              <span className="truncate">{t("editor.cleanAlpha")}</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => { handleThresholdAlphaAll(); minimiseToolsAndFocus(); }}
-                              disabled={designs.length === 0}
-                              className="flex items-center justify-center gap-1 whitespace-nowrap rounded-md border border-[#CBD5E1] bg-[#F1F5F9] px-2 py-2 text-[11px] font-medium text-[#2563EB] transition-all disabled:pointer-events-none disabled:opacity-30 coarse:min-h-[44px]"
-                              title={t("editor.cleanAlphaAllTitle")}
-                            >
-                              <Droplets className="h-3.5 w-3.5 flex-shrink-0" />
-                              <span className="truncate">{t("editor.cleanAlphaAll")}</span>
-                            </button>
-                            {/* Right-click only until now, which on a touch
-                                screen is no route at all. */}
-                            <button
-                              type="button"
-                              onClick={() => { handleFlipX(); minimiseToolsAndFocus(); }}
-                              disabled={!selectedDesignId}
-                              className="flex items-center justify-center gap-1 whitespace-nowrap rounded-md border border-gray-300 bg-white px-2 py-2 text-[11px] font-medium text-gray-700 transition-all hover:bg-gray-100 disabled:pointer-events-none disabled:opacity-30 coarse:min-h-[44px]"
-                              title={t("editor.flipH")}
-                            >
-                              <FlipHorizontal2 className="h-3.5 w-3.5 flex-shrink-0" />
-                              <span className="truncate">{t("editor.flipH")}</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => { handleFlipY(); minimiseToolsAndFocus(); }}
-                              disabled={!selectedDesignId}
-                              className="flex items-center justify-center gap-1 whitespace-nowrap rounded-md border border-gray-300 bg-white px-2 py-2 text-[11px] font-medium text-gray-700 transition-all hover:bg-gray-100 disabled:pointer-events-none disabled:opacity-30 coarse:min-h-[44px]"
-                              title={t("editor.flipV")}
-                            >
-                              <FlipVertical2 className="h-3.5 w-3.5 flex-shrink-0" />
-                              <span className="truncate">{t("editor.flipV")}</span>
-                            </button>
-                            {/* Hidden rather than disabled where the device
-                                cannot run it — see `upscale-support.ts`. */}
-                            {canIncreaseQuality && (
+                            {designTools.map((tool) => (
                               <button
+                                key={tool.id}
                                 type="button"
-                                onClick={() => { void handleIncreaseQuality(2); minimiseToolsAndFocus(); }}
-                                disabled={!selectedDesignId || isUpscaling}
-                                className="flex items-center justify-center gap-1 whitespace-nowrap rounded-md border border-violet-300 bg-violet-50 px-2 py-2 text-[11px] font-semibold text-violet-700 transition-all hover:bg-violet-100 disabled:pointer-events-none disabled:opacity-30 coarse:min-h-[44px]"
-                                title={t("editor.increaseQuality")}
+                                onClick={() => runTool(tool)}
+                                disabled={tool.disabled}
+                                className={`flex items-center justify-center gap-1 whitespace-nowrap rounded-md border px-2 py-2 text-[11px] font-medium transition-all disabled:pointer-events-none disabled:opacity-30 coarse:min-h-[44px] ${tool.tone}`}
+                                title={tool.title}
+                                aria-expanded={tool.id === "halftone" ? halftoneMenuOpen : undefined}
                               >
-                                <Sparkles className="h-3.5 w-3.5 flex-shrink-0" />
-                                <span className="truncate">
-                                  {isUpscaling && upscaleProgress !== null
-                                    ? `${Math.round(upscaleProgress * 100)}%`
-                                    : t("editor.increaseQuality")}
-                                </span>
+                                <tool.Icon className="h-3.5 w-3.5 flex-shrink-0" />
+                                <span className="truncate">{tool.label}</span>
                               </button>
-                            )}
-                            {halftoneEnabled && (
-                              <button
-                                type="button"
-                                onClick={handleOpenHalftoneMenu}
-                                disabled={!selectedDesignId && selectedDesignIds.size === 0}
-                                className={`flex items-center justify-center gap-1 whitespace-nowrap rounded-md border px-2 py-2 text-[11px] font-semibold transition-all disabled:pointer-events-none disabled:opacity-30 coarse:min-h-[44px] ${halftoneMenuOpen ? "border-amber-600 bg-amber-500 text-white" : "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100"}`}
-                                title={t("editor.halftoneTitle")}
-                                aria-expanded={halftoneMenuOpen}
-                              >
-                                <HalftoneIcon className="h-3.5 w-3.5 flex-shrink-0" />
-                                <span className="truncate">{t("editor.halftone")}</span>
-                              </button>
-                            )}
+                            ))}
                           </div>
 
                           {/* Inline below the grid, not the popover the desktop
@@ -1247,6 +1423,7 @@ export default function ImageEditorView() {
                                   ))}
                             </div>
                           )}
+
                         </>
                       )}
                     </>
@@ -1254,11 +1431,11 @@ export default function ImageEditorView() {
                 </MobileToolSheet>
               </div>
 
-            {/* Undo/redo are the most-used controls in a touch editor, so they
-                stay in the flow and out of the sheet — two taps deep is a
-                regression no amount of sheet polish pays for. Delete rides with
-                them because it is already selection-gated and belongs beside
-                the action that reverses it. */}
+            {/* Action bar. Everything here changes the sheet; the view bar at
+                the top changes only how you are looking at it. Undo and Redo
+                were here until they were given labels and moved up there, which
+                is also what left this row the width for Auto-Arrange to keep
+                its name. */}
             <div className="flex flex-shrink-0 flex-nowrap items-center justify-start gap-1.5 overflow-x-auto border-t border-gray-200 bg-white px-2 py-0" data-testid="mobile-persistent-bar">
               {/* Leftmost because it is the only route to the layers list, the
                   gangsheet size and Add Designs; if a longer translation makes
@@ -1281,46 +1458,95 @@ export default function ImageEditorView() {
                   </span>
                 )}
               </button>
-              <button onClick={handleUndo} disabled={!canUndo()} className="h-8 w-8 flex-shrink-0 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.undo")}><Undo2 className="mx-auto h-4 w-4" /></button>
-              <button onClick={handleRedo} disabled={!canRedo()} className="h-8 w-8 flex-shrink-0 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.redo")}><Redo2 className="mx-auto h-4 w-4" /></button>
               <button onClick={() => { if (selectedDesignIds.size > 1) handleDeleteMulti(selectedDesignIds); else if (selectedDesignId) handleDeleteDesign(selectedDesignId); }} disabled={!selectedDesignId} className="h-8 w-8 flex-shrink-0 rounded border border-red-200 bg-white text-red-500 transition-colors hover:bg-red-50 hover:text-red-600 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.delete")}><Trash2 className="mx-auto h-4 w-4" /></button>
-              {/* Icon-only for the same reason as its neighbours: a labelled
-                  button here and a labelled Auto-Arrange beside it do not both
-                  fit on a 390px phone, and Auto-Arrange is the one customers
-                  hunt for by name. The dot marks a tool still running, which is
-                  the state worth noticing from across the screen — the tool's
-                  own off switch is in the sheet's strip, not here, because this
-                  button opens and closes a panel and should not also be an
-                  off switch for whatever the panel started. */}
+              {/* Labelled, and holding the slot Auto-Arrange used to. Everything
+                  that changes how a design looks is behind this one button, so
+                  an icon alone asked the customer to guess; Auto-Arrange gave up
+                  the name because imports and copy-count changes already arrange
+                  as they land, which makes pressing it the exception. It moved
+                  into the list this opens.
+
+                  The name is only there while the slot to its right is empty.
+                  Once a tool is in play that slot holds the wand's tolerance,
+                  readout and off switch, and the two together do not fit a
+                  360px phone — the off switch was the part that fell off the
+                  end, which is the worst possible thing to lose. Dropping to an
+                  icon buys back ~60px, and it is only ever the second label on
+                  the row: whatever took the slot is named there instead. */}
               <button
                 type="button"
                 onClick={() => { setDesignToolsOpen((v) => !v); setLayersOpen(false); }}
-                className={`relative h-8 w-8 flex-shrink-0 rounded border transition-colors coarse:h-11 coarse:w-11 ${designToolsOpen ? "border-cyan-600 bg-cyan-500 text-white" : "border-gray-300 bg-white text-gray-600 hover:bg-gray-100 hover:text-gray-900"}`}
+                className={`flex flex-shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-md border text-[12px] font-semibold transition-colors ${activeToolShown ? "h-8 w-8 coarse:h-11 coarse:w-11" : "min-h-[36px] px-2 py-1 coarse:min-h-[44px]"} ${designToolsOpen ? "border-cyan-600 bg-cyan-500 text-white" : "border-gray-300 bg-white text-gray-700 hover:bg-gray-100"}`}
                 title={t("editor.designTools")}
+                /* Carried explicitly because the visible name goes away above. */
                 aria-label={t("editor.designTools")}
                 aria-expanded={designToolsOpen}
                 data-testid="mobile-design-tools-toggle"
               >
-                <SlidersHorizontal className="mx-auto h-4 w-4" />
-                {wandDeleteModeActive && (
-                  <span className="pointer-events-none absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border border-white bg-fuchsia-500" />
-                )}
+                <SlidersHorizontal className={activeToolShown ? "h-4 w-4 flex-shrink-0" : "h-3.5 w-3.5 flex-shrink-0"} />
+                {!activeToolShown && t("editor.designTools")}
               </button>
-              <button
-                onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2, fullRepack: true })}
-                disabled={designs.length < 2 && selectedDesignIds.size < 2}
-                 className={`flex min-h-[36px] flex-shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-[12px] font-semibold transition-colors coarse:min-h-[44px] ${
-                  designs.length >= 2 || selectedDesignIds.size >= 2
-                    ? "border border-pink-600 bg-pink-500 text-black shadow-md shadow-pink-500/25 hover:bg-pink-600"
-                    : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"
-                }`}
-                title={selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll")}
-              >
-                <LayoutGrid className="h-3.5 w-3.5 flex-shrink-0" />
-                {t("editor.autoArrange")}
-              </button>
+
+              {/* Whatever tool the customer is in the middle of.
+                  
+                  The wand takes it whenever it is armed, because it is a mode
+                  rather than an edit: it stays on until switched off, and its
+                  tolerance is the thing you adjust between taps. Otherwise the
+                  slot offers the last tool again, which is how a sheet actually
+                  gets cleaned up — the same tool over one design after another,
+                  which used to mean reopening the sheet every time. Switching the
+                  wand off leaves it here too, so re-arming it on the next design
+                  is one tap.
+
+                  This is the only off switch for the wand outside the sheet, and
+                  deliberately not on the Design tools button itself: that button
+                  opens and closes a panel and should not also cancel what the
+                  panel started. */}
+              {wandDeleteModeActive ? (
+                <div className="flex min-h-[36px] flex-shrink-0 items-center gap-1 rounded-md border border-fuchsia-400 bg-fuchsia-50 pl-1.5 pr-1 coarse:min-h-[44px]" data-testid="mobile-active-tool">
+                  <WandSparkles className="h-3.5 w-3.5 flex-shrink-0 text-fuchsia-600" aria-hidden="true" />
+                  {/* Deliberately stubby. Four controls plus a label have to share
+                      what is left of 390px after Layers, Delete and Design tools,
+                      and of the four this is the one that degrades gracefully:
+                      tolerance is a coarse setting with a live readout beside it
+                      and the full-width slider still in the sheet. Letting it have
+                      the room it wants pushed Turn off past the right edge, and
+                      the way out of a mode is the last thing that should need a
+                      sideways scroll to reach. */}
+                  <input
+                    type="range"
+                    min="1"
+                    max="100"
+                    value={wandTolerance}
+                    onChange={(e) => setWandTolerance(Number(e.target.value))}
+                    className="w-12 flex-shrink-0 accent-fuchsia-600"
+                    aria-label={t("editor.wandTolerance")}
+                    title={t("editor.wandTolerance")}
+                  />
+                  <span className="w-5 flex-shrink-0 text-right text-[11px] font-semibold tabular-nums text-fuchsia-800">{wandTolerance}</span>
+                  <button
+                    type="button"
+                    onClick={handleWandDeleteToggle}
+                    className="flex-shrink-0 rounded bg-fuchsia-600 px-1.5 py-1 text-[11px] font-bold text-white transition-colors hover:bg-fuchsia-700 coarse:min-h-[36px]"
+                    title={t("editor.wandTurnOff")}
+                  >
+                    {t("editor.wandTurnOff")}
+                  </button>
+                </div>
+              ) : lastTool ? (
+                <button
+                  type="button"
+                  onClick={() => runTool(lastTool)}
+                  disabled={lastTool.disabled}
+                  className={`flex min-h-[36px] flex-shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-md border px-2 py-1 text-[12px] font-semibold transition-colors disabled:pointer-events-none disabled:opacity-30 coarse:min-h-[44px] ${lastTool.pillTone}`}
+                  title={t("editor.applyAgain", { tool: lastTool.label })}
+                  data-testid="mobile-active-tool"
+                >
+                  <lastTool.Icon className="h-3.5 w-3.5 flex-shrink-0" />
+                  {lastTool.label}
+                </button>
+              ) : null}
             </div>
-            <div ref={setMobileToolbarContainer} className="flex-shrink-0" data-testid="mobile-canvas-toolbar" />
           </div>
         ) : (
           <div className="flex-1 min-h-0 relative">
