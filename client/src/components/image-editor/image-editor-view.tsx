@@ -422,11 +422,15 @@ export default function ImageEditorView() {
           </div>
         )}
         <div
-          className={mobileLayout ? "flex min-h-0 flex-1 flex-row transition-transform duration-300 ease-out" : "flex-1 min-h-0 flex flex-col lg:flex-row"}
+          className={mobileLayout ? "flex min-h-0 flex-1 flex-row transition-transform duration-300 ease-out" : "flex-1 min-h-0 flex flex-row"}
           style={mobileLayout ? { transform: mobilePanel === "preview" ? "translateX(-100%)" : "translateX(0)" } : undefined}
         >
-      {/* Left sidebar - Layers + Settings */}
-      <div className={`flex-shrink-0 w-full lg:w-[320px] xl:w-[340px] border-r border-gray-200 bg-white overflow-x-hidden ${mobileLayout ? "" : "overflow-y-auto"}`}>
+      {/* Left sidebar - Layers + Settings
+          Width is keyed off `mobileLayout`, not a media query: inside an iframe a
+          media query sees the frame while `mobileLayout` sees the device, and the
+          two disagreeing is what stacked a 320px sidebar above the canvas on an
+          iPad held upright. */}
+      <div className={`flex-shrink-0 border-r border-gray-200 bg-white overflow-x-hidden ${mobileLayout ? "w-full" : "w-[320px] xl:w-[340px] overflow-y-auto"}`}>
         <div className="p-2.5 space-y-2">
           <ControlsSection
             resizeSettings={activeResizeSettings}
