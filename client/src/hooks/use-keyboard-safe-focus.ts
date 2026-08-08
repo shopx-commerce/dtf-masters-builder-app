@@ -145,8 +145,9 @@ export function useKeyboardSafeFocus(): void {
         const box = container.getBoundingClientRect();
         const room = visibleBottom - CLEARANCE_PX - box.top;
         // `room >= box.height` means this container already ends above the
-        // keyboard and shrinking it buys nothing; `room` too small means it
-        // starts under the keyboard. Either way, try a larger ancestor.
+        // keyboard and shrinking it buys nothing; below `minContainer` it
+        // begins too close to the keyboard to reveal the field at all. Either
+        // way, try a larger ancestor.
         if (room < minContainer || room >= box.height) continue;
 
         next.push({
