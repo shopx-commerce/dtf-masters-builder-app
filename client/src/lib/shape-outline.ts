@@ -18,7 +18,7 @@ async function createClippedShapeImage(
   const clipCanvas = document.createElement('canvas');
   clipCanvas.width = clipW;
   clipCanvas.height = clipH;
-  const clipCtx = clipCanvas.getContext('2d')!;
+  const clipCtx = clipCanvas.getContext('2d', { willReadFrequently: true })!;
   
   clipCtx.save();
   clipCtx.beginPath();
@@ -264,7 +264,7 @@ export async function downloadShapePDF(
     imageCanvas = document.createElement('canvas');
     imageCanvas.width = image.width;
     imageCanvas.height = image.height;
-    const ctx = imageCanvas.getContext('2d');
+    const ctx = imageCanvas.getContext('2d', { willReadFrequently: true });
     if (ctx) ctx.drawImage(image, 0, 0);
   }
   
@@ -604,7 +604,7 @@ export async function generateShapePDFBase64(
     imageCanvas = document.createElement('canvas');
     imageCanvas.width = image.width;
     imageCanvas.height = image.height;
-    const ctx = imageCanvas.getContext('2d');
+    const ctx = imageCanvas.getContext('2d', { willReadFrequently: true });
     if (ctx) ctx.drawImage(image, 0, 0);
   }
   

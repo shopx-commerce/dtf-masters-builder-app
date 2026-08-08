@@ -90,6 +90,12 @@ self.onmessage = (e: MessageEvent<OverlapRequest>) => {
 
   for (const [i, j] of aabbPairs) {
     const a = designs[i], b = designs[j];
+    // Both already flagged, so the pixel test cannot change the answer — the result
+    // is a set of ids, and re-adding either is a no-op. On a crowded sheet, where most
+    // designs touch something, this skips the bulk of the rasterisation: each test
+    // costs two OffscreenCanvas draws plus two getImageData reads.
+    if (overlapping.has(a.id) && overlapping.has(b.id)) continue;
+
     // Compute the intersection rectangle of the two AABBs
     const ix = Math.max(a.left, b.left);
     const iy = Math.max(a.top, b.top);

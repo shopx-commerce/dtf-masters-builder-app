@@ -135,15 +135,15 @@ function useImageEditorModel(props: ImageEditorProps) {
 
   // Center-align the current selection along one axis.
   //
-  // Axis naming follows the Lucide / Illustrator / Figma convention that
-  // matches the icons the user sees:
+  // Axis naming follows the Illustrator / Figma convention:
   //   `axis === "vertical"`   → items share a *vertical* center axis
-  //                              → all get the same X coordinate (`nx`).
-  //                              Icon: `AlignCenterVertical` (dots on a
-  //                              vertical center line).
+  //                              → all get the same X coordinate (`nx`), so
+  //                              they move left/right. Button: "Center left
+  //                              to right" (`CenterHorizontalIcon`).
   //   `axis === "horizontal"` → items share a *horizontal* center axis
-  //                              → all get the same Y coordinate (`ny`).
-  //                              Icon: `AlignCenterHorizontal`.
+  //                              → all get the same Y coordinate (`ny`), so
+  //                              they move up/down. Button: "Center top to
+  //                              bottom" (`CenterVerticalIcon`).
   //
   // Previous implementation wrote the *other* axis (see git history);
   // that is why "align vertically" collapsed everything onto one Y line
@@ -282,6 +282,8 @@ function useImageEditorModel(props: ImageEditorProps) {
     exportProgressLabel: bag.exportProgressLabel,
     handleIncreaseQuality: bag.handleIncreaseQuality,
     isUpscaling: bag.isUpscaling,
+    upscaleProgress: bag.upscaleProgress,
+    canIncreaseQuality: bag.canIncreaseQuality,
   };
 
   return { ...bag, handleSetGroupCount, actionToolbarProps };

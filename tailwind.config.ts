@@ -86,5 +86,27 @@ export default {
       },
     },
   },
-  plugins: [require("tailwindcss-animate"), require("@tailwindcss/typography")],
+  plugins: [
+    require("tailwindcss-animate"),
+    require("@tailwindcss/typography"),
+    /**
+     * `coarse:` — the device has a touch screen, whatever its width.
+     *
+     * Touch density used to be keyed to the `md:` width breakpoint, which gets
+     * an iPad wrong in both directions: at 834px it takes the desktop arm and
+     * ends up with 11px inputs and 14px steppers on a device with no mouse.
+     *
+     * `any-pointer`, not `pointer`: `pointer` describes the *primary* pointing
+     * device and flips to `fine` the moment a Magic Keyboard trackpad is
+     * attached to an iPad, which would shrink every control mid-session while
+     * the customer is still touching the screen. `any-pointer: coarse` stays
+     * true while a coarse input exists at all — size for the coarsest input the
+     * device can produce.
+     */
+    require("tailwindcss/plugin")(
+      ({ addVariant }: { addVariant: (name: string, definition: string) => void }) => {
+        addVariant("coarse", "@media (any-pointer: coarse)");
+      },
+    ),
+  ],
 } satisfies Config;

@@ -142,7 +142,7 @@ export function getImageBounds(image: HTMLImageElement): { x: number; y: number;
     return { x: 0, y: 0, width: image.width, height: image.height };
   }
   const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return { x: 0, y: 0, width: image.width, height: image.height };
 
   canvas.width = image.width;
@@ -176,6 +176,13 @@ export function getImageBounds(image: HTMLImageElement): { x: number; y: number;
   return { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
 }
 
+/**
+ * Longest edge of the scratch canvas `isOpaqueRasterUpload` samples. 200px gives up to
+ * 40k alpha samples, more than the ~10k the previous full-resolution scan looked at, for
+ * roughly 1/100th of the pixels read back off the GPU.
+ */
+const OPACITY_SAMPLE_MAX_EDGE = 200;
+
 export function isOpaqueRasterUpload(image: HTMLImageElement): boolean {
   try {
     const w = image.naturalWidth || image.width;
@@ -183,25 +190,37 @@ export function isOpaqueRasterUpload(image: HTMLImageElement): boolean {
     if (w <= 0 || h <= 0) return false;
     if (w * h > 25_000_000) return false;
 
+    // Draw into a small canvas and read that back instead of the whole image. The old code
+    // read every pixel and then stepped through only ~10k of them, so ~99% of the readback
+    // was discarded — and the readback is the expensive part, not the arithmetic.
+    const scale = Math.min(1, OPACITY_SAMPLE_MAX_EDGE / Math.max(w, h));
+    const sw = Math.max(1, Math.round(w * scale));
+    const sh = Math.max(1, Math.round(h * scale));
+
     const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
+    // Read-back canvas: without the hint Chrome keeps it GPU-backed and the
+    // getImageData below blocks until the GPU flushes everything queued ahead
+    // of it, which during a multi-file upload is seconds rather than millis.
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return false;
 
-    canvas.width = w;
-    canvas.height = h;
-    ctx.drawImage(image, 0, 0);
-    const data = ctx.getImageData(0, 0, w, h).data;
+    canvas.width = sw;
+    canvas.height = sh;
+    // Point sampling, not bilinear. Smoothing would AVERAGE alpha, so a hard-edged cutout's
+    // transparent pixels would blend with opaque neighbours and a fully opaque image could
+    // come back slightly transparent (or a lightly-cut one fully opaque). With nearest
+    // neighbour every sampled alpha is a real alpha from the source, which makes the sample
+    // an unbiased estimate of the true transparent-area fraction — exactly what this ratio
+    // test needs, and the same quantity the old full-resolution stepped scan estimated.
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(image, 0, 0, sw, sh);
+    const data = ctx.getImageData(0, 0, sw, sh).data;
 
     let transparentCount = 0;
-    let opaqueCount = 0;
-    const sampleStep = Math.max(1, Math.floor((w * h) / 10000));
-    for (let i = 3; i < data.length; i += sampleStep * 4) {
-      const alpha = data[i];
-      if (alpha > 240) opaqueCount++;
-      else if (alpha < 50) transparentCount++;
+    for (let i = 3; i < data.length; i += 4) {
+      if (data[i] < 50) transparentCount++;
     }
-    const totalSampled = Math.ceil((w * h) / sampleStep);
-    const transparentRatio = transparentCount / totalSampled;
+    const transparentRatio = transparentCount / (sw * sh);
     return transparentRatio <= 0.05;
   } catch {
     return false;
@@ -211,7 +230,7 @@ export function isOpaqueRasterUpload(image: HTMLImageElement): boolean {
 export function cropImageToContent(image: HTMLImageElement): HTMLCanvasElement | null {
   try {
     const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return null;
 
     canvas.width = image.width;
@@ -275,7 +294,9 @@ export function cropImageToContent(image: HTMLImageElement): HTMLCanvasElement |
     const out = document.createElement('canvas');
     out.width = bw;
     out.height = bh;
-    const outCtx = out.getContext('2d');
+    // Callers encode this canvas (`canvasToBlob` in the upload path), so it is a
+    // read-back target even though nothing in this file reads it.
+    const outCtx = out.getContext('2d', { willReadFrequently: true });
     if (!outCtx) return null;
     outCtx.drawImage(canvas, minX, minY, bw, bh, 0, 0, bw, bh);
     return out;
@@ -302,7 +323,7 @@ export function cropImageToContentAsync(image: HTMLImageElement): Promise<HTMLCa
   return new Promise((resolve) => {
     try {
       const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
       if (!ctx) { resolve(cropImageToContent(image)); return; }
 
       canvas.width = image.width;
@@ -314,7 +335,11 @@ export function cropImageToContentAsync(image: HTMLImageElement): Promise<HTMLCa
       if (!worker) { resolve(cropImageToContent(image)); return; }
 
       const requestId = ++_cropRequestCounter;
-      const buffer = imageData.data.buffer.slice(0);
+      // Transferred rather than copied. `slice(0)` here duplicated the whole upload
+      // — 67 MB for a 4096px preview — on every single import. Nothing needs it: the
+      // crop below reads `canvas`, which getImageData already copied out of, and the
+      // timeout path re-decodes from `image`.
+      const buffer = imageData.data.buffer;
       const timeout = setTimeout(() => {
         worker.removeEventListener('message', handler);
         resolve(cropImageToContent(image));
@@ -338,7 +363,7 @@ export function cropImageToContentAsync(image: HTMLImageElement): Promise<HTMLCa
           const out = document.createElement('canvas');
           out.width = bw;
           out.height = bh;
-          const outCtx = out.getContext('2d');
+          const outCtx = out.getContext('2d', { willReadFrequently: true });
           if (!outCtx) { resolve(null); return; }
           outCtx.drawImage(canvas, minX, minY, bw, bh, 0, 0, bw, bh);
           resolve(out);

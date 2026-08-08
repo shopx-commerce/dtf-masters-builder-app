@@ -3,17 +3,92 @@ import { formatDimensions } from "@/lib/format-length";
 import {
   clampDesignToArtboard,
   getArrangeWorker,
+  getDesignNestSilhouette,
   getEffectiveHeight,
   getDesignSelectionBounds,
   getDesignSelectionUnits,
+  fitGangsheetHeight,
+  getContentInkBandY,
   getRotatedBounds,
   getStampExtra,
   nextArrangeRequestId,
+  sanitizeDesignInches,
 } from "./utils";
 import { DEFAULT_LAYER_CENTER_NX, DEFAULT_LAYER_CENTER_NY } from "./constants";
+import { runArrange } from "@/lib/arrange-core";
+import { DEFAULT_SHEET_MARGIN, planBandReseat, planLadderJump, planSheetShrink } from "@/lib/sheet-fit";
+import { isUploadBatchActive } from "@/lib/upload-queue";
+import { keepPositionsNest, type NestMask } from "@/lib/nest-core";
+import { getDesignNestMask } from "@/lib/nest-mask";
 import type { ImageInfo, DesignItem } from "@/lib/types";
 import type { ImageEditorBagAfterDesign } from "./image-editor-hook-bag.types";
 import { useSelectionActions } from "@/state/selection-store";
+
+/**
+ * Id prefix for the synthetic item that stands in for a user-defined group while packing.
+ * Both auto-arrange and import placement collapse a group's members into one rectangle
+ * under this id, so the group is packed and avoided as a single entity.
+ */
+const GROUP_PREFIX = "group:";
+
+/**
+ * How often a pending import re-seat re-checks whether the upload batch has drained.
+ *
+ * Polling rather than a plain debounce because the thing being waited for is not "the user
+ * stopped typing" but "the queue emptied", and a single large file can take seconds to
+ * decode — long enough that any debounce short enough to feel immediate would fire in the
+ * middle of a twenty-file drop and re-seat the sheet twenty times.
+ */
+const IMPORT_RESEAT_POLL_MS = 150;
+
+/**
+ * Collapses designs into the rectangles the packer should reason about: one per ungrouped
+ * design, and one covering the whole bounding box of each user-defined group.
+ *
+ * `usableW`/`usableH` are the dimensions the designs' normalised transforms are relative to.
+ */
+function toPackRects(
+  designs: DesignItem[],
+  usableW: number,
+  usableH: number,
+  maskFor: (d: DesignItem) => NestMask | undefined,
+): Array<{ id: string; x: number; y: number; w: number; h: number; rotation: number; mask?: NestMask; isGroup: boolean }> {
+  const solo: Array<{ id: string; x: number; y: number; w: number; h: number; rotation: number; mask?: NestMask; isGroup: boolean }> = [];
+  const groups = new Map<string, { minX: number; minY: number; maxX: number; maxY: number }>();
+  for (const d of designs) {
+    const bounds = getRotatedBounds(d);
+    const cx = d.transform.nx * usableW;
+    const cy = d.transform.ny * usableH;
+    const minX = cx + bounds.minX, maxX = cx + bounds.maxX;
+    const minY = cy + bounds.minY, maxY = cy + bounds.maxY;
+    if (!d.groupId) {
+      solo.push({
+        id: d.id, x: minX, y: minY, w: maxX - minX, h: maxY - minY,
+        rotation: d.transform.rotation, mask: maskFor(d), isGroup: false,
+      });
+      continue;
+    }
+    const g = groups.get(d.groupId);
+    if (g) {
+      if (minX < g.minX) g.minX = minX;
+      if (minY < g.minY) g.minY = minY;
+      if (maxX > g.maxX) g.maxX = maxX;
+      if (maxY > g.maxY) g.maxY = maxY;
+    } else {
+      groups.set(d.groupId, { minX, minY, maxX, maxY });
+    }
+  }
+  return [
+    ...solo,
+    // No mask, so the group reserves its whole bounding box. The gaps a customer left
+    // between members are part of the arrangement they built, not room to fill.
+    ...Array.from(groups.entries()).map(([gid, g]) => ({
+      id: `${GROUP_PREFIX}${gid}`,
+      x: g.minX, y: g.minY, w: g.maxX - g.minX, h: g.maxY - g.minY,
+      rotation: 0, mask: undefined, isGroup: true,
+    })),
+  ];
+}
 
 export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesign) {
   // Only the bag fields this hook's arrange/keyboard/artboard logic actually uses are
@@ -23,6 +98,9 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     profile,
     initialHeight,
     initialGangsheetHeights,
+    isEditMode,
+    shrinkSheetToFitRef,
+    manualHeightFloorRef,
     toast,
     t,
     lang,
@@ -71,7 +149,11 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
   // the newly-created design and stomp any stale ids from a prior
   // group selection.
   const { selectOne } = useSelectionActions();
-  const handleArtboardResizeRef = useRef<(newWidth: number, newHeight: number) => void>(() => {});
+  const handleArtboardResizeRef = useRef<(newWidth: number, newHeight: number, opts?: { skipSnapshot?: boolean }) => void>(() => {});
+  /** How many rungs the arrange currently in flight has already climbed. */
+  const ladderStepRef = useRef(0);
+  /** Armed by an expansion so the next arrange knows it is a continuation, not a new one. */
+  const ladderChainRef = useRef(false);
 
   const getAlignDelta = useCallback((corner: 'tl' | 'tr' | 'bl' | 'br') => {
     const ids = selectedDesignIds.size > 0
@@ -155,6 +237,13 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     preserveSelection?: boolean;
     /** Ignore multi-selection and pack every design on the sheet. */
     arrangeAll?: boolean;
+    /**
+     * Pack from scratch and accept the best layout even if that relocates settled designs.
+     * Set this only when the user explicitly asked to re-arrange; leave it off for the
+     * arranges that happen as a side effect of adding or duplicating a design, where
+     * moving everything else is the behaviour users complain about.
+     */
+    fullRepack?: boolean;
   }) => {
     const currentDesigns = designsRef.current;
     if (currentDesigns.length === 0) { console.warn('[autoArrange] no designs'); return; }
@@ -190,6 +279,14 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       });
       return;
     }
+    // Claim this entry's place in the expansion chain. The step count cannot ride in `opts`
+    // because the type of `handleAutoArrangeRef` is declared with the rest of the editor
+    // state, so it travels in a ref that the recursion arms and the next entry consumes.
+    // Anything the user starts themselves finds the flag clear and begins a fresh chain.
+    const ladderStep = ladderChainRef.current ? ladderStepRef.current : 0;
+    ladderChainRef.current = false;
+    ladderStepRef.current = ladderStep;
+
     if (!opts?.skipSnapshot) saveSnapshot();
 
     const usableW = artboardWidthRef.current;
@@ -207,18 +304,40 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         setSelectedDesignId(null);
         setSelectedDesignIds(new Set());
       }
+      // One design left on a sheet sized for many is the clearest case of paying for blank film.
+      setTimeout(() => shrinkSheetToFitRef.current(), 0);
       return;
     }
 
     if (designsToArrange.length < 2) return;
 
     const fillCache = contentFillCacheRef.current;
+    /**
+     * Ink coverage, taken from the design's nesting silhouette so the artwork is only
+     * rasterised once per design rather than separately for packing and for sorting. The
+     * coarse 64x64 sample is kept as a fallback for artwork the silhouette pass cannot read,
+     * such as a cross-origin image that taints a canvas.
+     */
     const getContentFill = (d: DesignItem): number => {
       const key = d.imageInfo.image.src;
       const cached = fillCache.get(key);
       if (cached !== undefined) return cached;
       const img = d.imageInfo.image;
       let fill = 1.0;
+      const silhouette = getDesignNestMask({
+        image: img,
+        artW: d.widthInches * d.transform.s,
+        artH: d.heightInches * d.transform.s,
+        stampExtra: getStampExtra(d),
+        stampText: d.printFileName ? d.name : undefined,
+        flipX: d.transform.flipX,
+        flipY: d.transform.flipY,
+        sourceKey: img.src,
+      });
+      if (silhouette) {
+        fillCache.set(key, silhouette.inkRatio);
+        return silhouette.inkRatio;
+      }
       try {
         const sampleSize = 64;
         const c = document.createElement('canvas');
@@ -250,15 +369,12 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     // off this prefix to map the returned placement back to every group
     // member and apply the same translation delta.
     //
-    // Design decision: super-items are passed with rotation 0 and the
-    // arrange worker is *not* prevented from rotating them (the worker
-    // API doesn't currently expose a per-item no-rotate flag). To keep
-    // group semantics predictable, we ignore rotation from the worker
-    // for super-items in `applyResult` — the group's members retain
-    // their individual rotations and only translate. This is the same
-    // guarantee the multi-drag path already gives users, so it feels
-    // consistent.
-    const GROUP_PREFIX = "group:";
+    // Super-items are passed with rotation 0 and marked `noRotate`, because the only thing
+    // `applyResult` can do with a group's placement is translate its members — their
+    // individual rotations are preserved, matching what multi-drag already does. Letting the
+    // packer turn a super-item and then dropping that rotation, which is what used to
+    // happen, reserved an h-by-w slot for a group that arrived w-by-h: any group whose
+    // bounding box was not square overflowed its slot and overlapped its neighbour.
     type GroupBBox = {
       minX: number; minY: number; maxX: number; maxY: number;
       members: DesignItem[];
@@ -294,6 +410,9 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         w: d.widthInches * d.transform.s,
         h: getEffectiveHeight(d),
         fill: getContentFill(d),
+        // Lets the bitmap nester compete with the rectangle packers for this design. A
+        // group has no single silhouette, so super-items below stay rectangles.
+        mask: getDesignNestSilhouette(d),
       })),
       ...Array.from(groups.entries()).map(([gid, g]) => ({
         id: `${GROUP_PREFIX}${gid}`,
@@ -303,25 +422,87 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         // between group members are intentional and shouldn't invite the
         // packer to slot other items in.
         fill: 1.0,
+        // The group is put back on its members as a translation, so a rotation chosen here
+        // could not be carried out — see the note above `GROUP_PREFIX`.
+        noRotate: true,
       })),
     ];
 
-    const fixedRects: Array<{ x: number; y: number; w: number; h: number }> | undefined = arrangeSelection
+    const fixedRects = arrangeSelection
       ? currentDesigns.filter(d => !selectedDesignIds.has(d.id)).map(d => {
           const t = d.transform;
           const bounds = getRotatedBounds(d);
           const cx = t.nx * usableW;
           const cy = t.ny * usableH;
-          return { x: cx + bounds.minX, y: cy + bounds.minY, w: bounds.maxX - bounds.minX, h: bounds.maxY - bounds.minY };
+          return {
+            x: cx + bounds.minX,
+            y: cy + bounds.minY,
+            w: bounds.maxX - bounds.minX,
+            h: bounds.maxY - bounds.minY,
+            mask: getDesignNestSilhouette(d),
+            rotation: t.rotation,
+          };
         })
       : undefined;
 
-    type PlacedItem = { id: string; nx: number; ny: number; rotation: number; overflows: boolean };
+    // Where everything sits right now, in the same top-left inch space the packer uses, so
+    // it can offer a layout that leaves already-settled designs where they are.
+    const currentRects = [
+      ...nonGrouped.map(d => {
+        const bounds = getRotatedBounds(d);
+        const cx = d.transform.nx * usableW;
+        const cy = d.transform.ny * usableH;
+        return {
+          id: d.id,
+          x: cx + bounds.minX,
+          y: cy + bounds.minY,
+          w: bounds.maxX - bounds.minX,
+          h: bounds.maxY - bounds.minY,
+          rotation: d.transform.rotation,
+        };
+      }),
+      ...Array.from(groups.entries()).map(([gid, g]) => ({
+        id: `${GROUP_PREFIX}${gid}`,
+        x: g.minX,
+        y: g.minY,
+        w: g.maxX - g.minX,
+        h: g.maxY - g.minY,
+        rotation: 0,
+      })),
+    ];
+    const preferStable = !opts?.fullRepack;
 
-    const applyResult = (bestResult: PlacedItem[], anyRotated: boolean, hasOverflow: boolean) => {
-      if (hasOverflow && artboardHeightRef.current < MAX_ARTBOARD_HEIGHT) {
-        const nextHeight = GANGSHEET_HEIGHTS.find(h => h > artboardHeightRef.current) ?? MAX_ARTBOARD_HEIGHT;
-        handleArtboardResizeRef.current(artboardWidthRef.current, nextHeight);
+    type PlacedItem = { id: string; nx: number; ny: number; rotation: number; overflows: boolean; anchored?: boolean };
+
+    /**
+     * What the pack cost, as reported by whichever of the worker or the fallback ran it.
+     * `minRequiredHeight` is the load-bearing one: a height below which no arrangement of
+     * this artwork exists, which is what lets the expansion below skip rungs.
+     */
+    type PackSizing = { packedExtent?: number; minRequiredHeight?: number };
+
+    // Each step strictly increases the height and the ladder is finite, so the expansion
+    // terminates on its own. The cap is here because the loop reads the height back through
+    // a ref, and a render that never lands would leave that ref stale and the recursion
+    // spinning. One step per rung, plus slack for the initial pack.
+    const maxLadderSteps = GANGSHEET_HEIGHTS.length + 2;
+
+    const applyResult = (bestResult: PlacedItem[], anyRotated: boolean, hasOverflow: boolean, sizing?: PackSizing) => {
+      if (hasOverflow && artboardHeightRef.current < MAX_ARTBOARD_HEIGHT && ladderStep < maxLadderSteps) {
+        // Jump to the shortest rung the artwork could possibly fit on rather than the next
+        // one up. `planLadderJump` only skips rungs a lower bound rules out, so it lands on
+        // the same rung the one-at-a-time walk would have reached — and when the bound says
+        // nothing useful it returns exactly that next rung, so this degrades into the old
+        // behaviour instead of failing.
+        const nextHeight = planLadderJump({
+          currentHeight: artboardHeightRef.current,
+          minRequiredHeight: sizing?.minRequiredHeight ?? 0,
+          heights: GANGSHEET_HEIGHTS,
+        }) ?? MAX_ARTBOARD_HEIGHT;
+        // Only the first growth of an arrange records an undo point. The rest are steps of
+        // one operation as far as the customer is concerned, and each one snapshotting is
+        // what made a single Auto-Arrange take nine presses of Ctrl+Z to undo.
+        handleArtboardResizeRef.current(artboardWidthRef.current, nextHeight, { skipSnapshot: ladderStep > 0 });
         // Forward the caller's `arrangeAll` flag on the expansion recursion.
         //
         // Without this, the caller's `arrangeAll: true` (set by
@@ -344,10 +525,13 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         // whole-sheet mode when the caller asked for it, so the
         // expansion loop converges as soon as everything fits (or hits
         // MAX with a real, non-phantom overflow).
+        ladderStepRef.current = ladderStep + 1;
+        ladderChainRef.current = true;
         setTimeout(() => handleAutoArrangeRef.current({
           skipSnapshot: true,
           preserveSelection: true,
           arrangeAll: opts?.arrangeAll,
+          fullRepack: opts?.fullRepack,
         }), 0);
         return;
       }
@@ -368,9 +552,18 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         ny: number;
         rotation: number | null; // null → keep the design's current rotation
         overflows: boolean;
+        /** The packer kept this where it was; leave the design object alone entirely. */
+        anchored?: boolean;
       };
       const deltas = new Map<string, DesignDelta>();
       for (const placed of bestResult) {
+        if (placed.anchored) {
+          // Deliberately not re-deriving nx/ny from the packer's rounded normalised
+          // values, and not applying the stamp offset below: an anchored design must come
+          // out of an arrange bit-for-bit unmoved, or repeated arranges walk it across the
+          // sheet a hundredth of an inch at a time.
+          continue;
+        }
         if (placed.id.startsWith(GROUP_PREFIX)) {
           const gid = placed.id.slice(GROUP_PREFIX.length);
           const g = groups.get(gid);
@@ -378,7 +571,9 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
           // Worker returns the *center* of the super-item's bounding box
           // in normalised coords. Compute the delta between the group's
           // old and new bbox centers in normalised space, then shift
-          // every member by that delta.
+          // every member by that delta. `noRotate` on the super-item means the returned
+          // placement is always rotation 0, so a pure translation reproduces exactly the
+          // footprint the packer reserved.
           const oldCx = (g.minX + g.maxX) / 2;
           const oldCy = (g.minY + g.maxY) / 2;
           const newCx = placed.nx * abW;
@@ -428,6 +623,11 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         setSelectedDesignId(null);
         setSelectedDesignIds(new Set());
       }
+      // Packing tighter — a smaller margin, fewer copies, a deleted design — can free up
+      // whole sizes worth of film. Deferred so it measures the layout we just committed
+      // rather than the one it replaced. Never snapshots: whatever asked for this arrange
+      // already did, so one undo takes the arrange and the resize back together.
+      if (!hasOverflow) setTimeout(() => shrinkSheetToFitRef.current(), 0);
     };
 
     const worker = getArrangeWorker();
@@ -449,7 +649,10 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         const bestResult: PlacedItem[] = e.data.result;
         const anyRotated = bestResult.some(p => p.rotation !== 0);
         const hasOverflow = bestResult.some(p => p.overflows);
-        applyResult(bestResult, anyRotated, hasOverflow);
+        applyResult(bestResult, anyRotated, hasOverflow, {
+          packedExtent: e.data.packedExtent,
+          minRequiredHeight: e.data.minRequiredHeight,
+        });
       };
       const timer = setTimeout(() => {
         if (!settled) {
@@ -471,218 +674,48 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         isAggressive: true,
         customGap: designGap,
         fixedRects,
+        current: currentRects,
+        preferStable,
+        heightSteps: GANGSHEET_HEIGHTS,
       });
     } else {
       runFallbackArrange();
     }
 
+    // Synchronous path for when the worker is unavailable or has timed out. It calls the
+    // same `runArrange` the worker does, so the two can no longer drift apart.
     function runFallbackArrange() {
-      const hasCustomGap = designGap !== undefined && designGap >= 0;
-      const GAP = hasCustomGap ? designGap : 0.25;
-      const getItemGapVal = (_fill: number) => GAP;
-
-      type SkylineSeg = { x: number; y: number; w: number };
-      type PackItem = { id: string; w: number; h: number; rotation: number; gap: number };
-
-      const findBestPos = (sky: SkylineSeg[], itemW: number, itemH: number): { x: number; y: number; waste: number } | null => {
-        let bestX = -1, bestY = Infinity, bestWaste = Infinity, found = false;
-        for (let i = 0; i < sky.length; i++) {
-          let spanW = 0, maxY = 0, j = i;
-          while (j < sky.length && spanW < itemW) { maxY = Math.max(maxY, sky[j].y); spanW += sky[j].w; j++; }
-          if (spanW < itemW - 0.001) continue;
-          if (maxY + itemH > usableH + 0.001) continue;
-          let waste = 0;
-          const rb = sky[i].x + itemW;
-          for (let k = i; k < j; k++) { waste += (maxY - sky[k].y) * Math.max(0, Math.min(sky[k].x + sky[k].w, rb) - Math.max(sky[k].x, sky[i].x)); }
-          if (maxY < bestY - 0.001 || (Math.abs(maxY - bestY) < 0.001 && sky[i].x < bestX - 0.001) || (Math.abs(maxY - bestY) < 0.001 && Math.abs(sky[i].x - bestX) < 0.001 && waste < bestWaste)) {
-            bestY = maxY; bestX = sky[i].x; bestWaste = waste; found = true;
-          }
-        }
-        return found ? { x: bestX, y: bestY, waste: bestWaste } : null;
-      };
-      const placeSeg = (sky: SkylineSeg[], px: number, iw: number, ih: number): SkylineSeg[] => {
-        let topY = 0;
-        for (const s of sky) { if (s.x < px + iw && s.x + s.w >= px - 0.01) topY = Math.max(topY, s.y); }
-        const next: SkylineSeg[] = [];
-        for (const s of sky) { const sR = s.x + s.w, iR = px + iw; if (sR <= px || s.x >= iR) { next.push(s); continue; } if (s.x < px) next.push({ x: s.x, y: s.y, w: px - s.x }); if (sR > iR) next.push({ x: iR, y: s.y, w: sR - iR }); }
-        next.push({ x: px, y: topY + ih, w: iw }); next.sort((a, b) => a.x - b.x);
-        const merged: SkylineSeg[] = [next[0]];
-        for (let k = 1; k < next.length; k++) { const p = merged[merged.length - 1]; if (Math.abs(p.y - next[k].y) < 0.001 && Math.abs((p.x + p.w) - next[k].x) < 0.001) p.w += next[k].w; else merged.push(next[k]); }
-        return merged;
-      };
-      const toNxNy = (ax: number, ay: number, w: number, h: number) => ({
-        nx: Math.max(w / 2 / artboardWidth, Math.min((artboardWidth - w / 2) / artboardWidth, ax / artboardWidth)),
-        ny: Math.max(h / 2 / artboardHeight, Math.min((artboardHeight - h / 2) / artboardHeight, ay / artboardHeight)),
+      const { result, packedExtent, minRequiredHeight } = runArrange({
+        type: 'arrange',
+        requestId: 0,
+        items,
+        usableW,
+        usableH,
+        artboardWidth: usableW,
+        artboardHeight: usableH,
+        isAggressive: true,
+        customGap: designGap,
+        fixedRects,
+        current: currentRects,
+        preferStable,
+        heightSteps: GANGSHEET_HEIGHTS,
       });
-      const skylinePack = (pi: PackItem[]) => {
-        let sky: SkylineSeg[] = [{ x: 0, y: 0, w: usableW }]; const res: PlacedItem[] = []; let tw = 0;
-        for (const it of pi) {
-          const g = it.gap, hg = g / 2;
-          let pos = findBestPos(sky, it.w + g, it.h + g); let rw = it.w + g, rh = it.h + g;
-          if (!pos) { pos = findBestPos(sky, it.w + hg, it.h + hg); if (pos) { rw = it.w + hg; rh = it.h + hg; } }
-          if (pos) { tw += pos.waste; sky = placeSeg(sky, pos.x, rw, rh); const p = toNxNy(pos.x + it.w / 2, pos.y + it.h / 2, it.w, it.h); res.push({ id: it.id, nx: p.nx, ny: p.ny, rotation: it.rotation, overflows: false }); }
-          else { const sm = sky.length > 0 ? Math.max(...sky.map(s => s.y)) : 0; const ph = it.h + hg; sky = placeSeg(sky, 0, Math.min(it.w + hg, usableW), ph); const p = toNxNy(it.w / 2, sm + ph / 2, it.w, it.h); res.push({ id: it.id, nx: p.nx, ny: p.ny, rotation: it.rotation, overflows: true }); }
-        }
-        return { result: res, maxHeight: sky.length > 0 ? Math.max(...sky.map(s => s.y)) : 0, wastedArea: tw };
-      };
-      const mkPi = (order: typeof items, orient: string, go?: number): PackItem[] => order.map(d => {
-        const g = go !== undefined ? go : getItemGapVal(d.fill); let w = d.w, h = d.h, rot = 0;
-        if (orient === 'landscape' && h > w) { const t = w; w = h; h = t; rot = 90; }
-        if (orient === 'portrait' && w > h) { const t = w; w = h; h = t; rot = 90; }
-        return { id: d.id, w, h, rotation: rot, gap: g };
-      });
-      const greedyOrientPack = (sortedItems: Array<{ id: string; w: number; h: number; gap: number }>) => {
-        let sky: SkylineSeg[] = [{ x: 0, y: 0, w: usableW }]; const res: PlacedItem[] = []; let tw = 0;
-        for (const it of sortedItems) {
-          const g = it.gap;
-          const orients: Array<{ w: number; h: number; rot: number }> = [{ w: it.w, h: it.h, rot: 0 }];
-          if (Math.abs(it.w - it.h) > 0.1) orients.push({ w: it.h, h: it.w, rot: 90 });
-          let bp: { x: number; y: number; waste: number } | null = null, bo = orients[0], bs = sky;
-          for (const o of orients) { const hg = g / 2; for (const a of [{ w: o.w + g, h: o.h + g }, { w: o.w + hg, h: o.h + hg }]) { const pos = findBestPos(sky, a.w, a.h); if (!pos) continue; const sc = pos.y * 10000 + pos.x * 10 + pos.waste; if (!bp || sc < bp.y * 10000 + bp.x * 10 + bp.waste) { bp = pos; bo = o; bs = placeSeg(sky.map(s => ({ ...s })), pos.x, a.w, a.h); } break; } }
-          if (bp) { tw += bp.waste; sky = bs; const p = toNxNy(bp.x + bo.w / 2, bp.y + bo.h / 2, bo.w, bo.h); res.push({ id: it.id, nx: p.nx, ny: p.ny, rotation: bo.rot, overflows: false }); }
-          else { const sm = sky.length > 0 ? Math.max(...sky.map(s => s.y)) : 0; const ph = it.h + g; sky = placeSeg(sky, 0, Math.min(it.w + g, usableW), ph); const p = toNxNy(it.w / 2, sm + ph / 2, it.w, it.h); res.push({ id: it.id, nx: p.nx, ny: p.ny, rotation: 0, overflows: true }); }
-        }
-        return { result: res, maxHeight: sky.length > 0 ? Math.max(...sky.map(s => s.y)) : 0, wastedArea: tw };
-      };
-      const mixedOrientPack = (pi: PackItem[]) => {
-        const halfW = usableW / 2;
-        const adj: PackItem[] = pi.map(it => (it.w > halfW && it.h < it.w && it.h <= halfW) ? { ...it, w: it.h, h: it.w, rotation: it.rotation === 0 ? 90 : 0 } : it);
-        return skylinePack(adj);
-      };
-      type FreeRect = { x: number; y: number; w: number; h: number };
-      const maxRectsPack = (pi: PackItem[], heuristic: 'bssf' | 'baf') => {
-        let freeRects: FreeRect[] = [{ x: 0, y: 0, w: usableW, h: usableH }];
-        const res: PlacedItem[] = []; let mH = 0, tia = 0;
-        for (const it of pi) {
-          const g = it.gap, iw = it.w + g, ih = it.h + g;
-          let bsc = Infinity, bse = Infinity, bx = 0, by = 0, found = false;
-          for (const fr of freeRects) {
-            if (iw > fr.w + 0.001 || ih > fr.h + 0.001) continue;
-            let sc: number, se: number;
-            if (heuristic === 'bssf') { sc = Math.min(fr.w - iw, fr.h - ih); se = Math.max(fr.w - iw, fr.h - ih); }
-            else { sc = fr.w * fr.h - iw * ih; se = Math.min(fr.w - iw, fr.h - ih); }
-            if (sc < bsc - 0.001 || (Math.abs(sc - bsc) < 0.001 && se < bse - 0.001)) { bsc = sc; bse = se; bx = fr.x; by = fr.y; found = true; }
-          }
-          if (found) {
-            mH = Math.max(mH, by + ih); tia += it.w * it.h;
-            const p = toNxNy(bx + it.w / 2, by + it.h / 2, it.w, it.h);
-            res.push({ id: it.id, nx: p.nx, ny: p.ny, rotation: it.rotation, overflows: false });
-            const pl = { x: bx, y: by, w: iw, h: ih };
-            const nf: FreeRect[] = [];
-            for (const fr of freeRects) {
-              if (pl.x >= fr.x + fr.w - 0.001 || pl.x + pl.w <= fr.x + 0.001 || pl.y >= fr.y + fr.h - 0.001 || pl.y + pl.h <= fr.y + 0.001) { nf.push(fr); continue; }
-              if (pl.x > fr.x + 0.001) nf.push({ x: fr.x, y: fr.y, w: pl.x - fr.x, h: fr.h });
-              if (pl.x + pl.w < fr.x + fr.w - 0.001) nf.push({ x: pl.x + pl.w, y: fr.y, w: fr.x + fr.w - pl.x - pl.w, h: fr.h });
-              if (pl.y > fr.y + 0.001) nf.push({ x: fr.x, y: fr.y, w: fr.w, h: pl.y - fr.y });
-              if (pl.y + pl.h < fr.y + fr.h - 0.001) nf.push({ x: fr.x, y: pl.y + pl.h, w: fr.w, h: fr.y + fr.h - pl.y - pl.h });
-            }
-            freeRects = [];
-            for (let i = 0; i < nf.length; i++) {
-              if (nf[i].w < 0.01 || nf[i].h < 0.01) continue;
-              let cont = false;
-              for (let j = 0; j < nf.length; j++) { if (i !== j && nf[i].x >= nf[j].x - 0.001 && nf[i].y >= nf[j].y - 0.001 && nf[i].x + nf[i].w <= nf[j].x + nf[j].w + 0.001 && nf[i].y + nf[i].h <= nf[j].y + nf[j].h + 0.001) { cont = true; break; } }
-              if (!cont) freeRects.push(nf[i]);
-            }
-          } else {
-            const p = toNxNy(it.w / 2, mH + ih / 2, it.w, it.h);
-            res.push({ id: it.id, nx: p.nx, ny: p.ny, rotation: it.rotation, overflows: true }); mH += ih;
-          }
-        }
-        return { result: res, maxHeight: mH, wastedArea: Math.max(0, usableW * mH - tia) };
-      };
-      const shelfPack = (pi: PackItem[]) => {
-        const res: PlacedItem[] = []; let cY = 0, cX = 0, sH = 0, tia = 0;
-        for (const it of pi) {
-          const g = it.gap, iw = it.w + g, ih = it.h + g;
-          if (cX + iw > usableW + 0.001) { cY += sH + g; cX = 0; sH = 0; }
-          sH = Math.max(sH, ih); tia += it.w * it.h;
-          const ov = cX + iw > usableW + 0.001 || cY + ih > usableH + 0.001;
-          const p = toNxNy(cX + it.w / 2, cY + it.h / 2, it.w, it.h);
-          res.push({ id: it.id, nx: p.nx, ny: p.ny, rotation: it.rotation, overflows: ov }); cX += iw;
-        }
-        const mH = cY + sH;
-        return { result: res, maxHeight: mH, wastedArea: Math.max(0, usableW * mH - tia) };
-      };
-      const gridPack = (g: number) => {
-        if (items.length < 2) return null;
-        const ref = items[0];
-        if (!items.every(d => Math.abs(d.w - ref.w) < 0.2 && Math.abs(d.h - ref.h) < 0.2)) return null;
-        const tryGrid = (iw: number, ih: number, rot: number) => {
-          const cols = Math.max(1, Math.floor((usableW + g) / (iw + g)));
-          const rows = Math.ceil(items.length / cols);
-          const totalH = rows * ih + (rows - 1) * g;
-          const totalWUsed = cols * iw + (cols - 1) * g;
-          const res: PlacedItem[] = [];
-          for (let idx = 0; idx < items.length; idx++) {
-            const col = idx % cols, row = Math.floor(idx / cols);
-            const ax = col * (iw + g) + iw / 2, ay = row * (ih + g) + ih / 2;
-            const ov = ax + iw / 2 > usableW + 0.001 || ay + ih / 2 > usableH + 0.001;
-            const p = toNxNy(ax, ay, iw, ih);
-            res.push({ id: items[idx].id, nx: p.nx, ny: p.ny, rotation: rot, overflows: ov });
-          }
-          return { result: res, maxHeight: totalH, wastedArea: (usableW - totalWUsed) * totalH };
-        };
-        const ng = tryGrid(ref.w, ref.h, 0);
-        if (Math.abs(ref.w - ref.h) < 0.2) return ng;
-        const rg = tryGrid(ref.h, ref.w, 90);
-        const no = ng.result.filter(r => r.overflows).length, ro = rg.result.filter(r => r.overflows).length;
-        if (no !== ro) return no < ro ? ng : rg;
-        if (Math.abs(ng.maxHeight - rg.maxHeight) > 0.01) return ng.maxHeight < rg.maxHeight ? ng : rg;
-        return ng.wastedArea <= rg.wastedArea ? ng : rg;
-      };
-      const ev = (p: { result: PlacedItem[]; maxHeight: number; wastedArea: number }) => ({ ...p, overflows: p.result.filter(r => r.overflows).length });
-      const byAreaDesc = [...items].sort((a, b) => (b.w * b.h) - (a.w * a.h));
-      const altArr: typeof items = [];
-      for (let lo = 0, hi = byAreaDesc.length - 1; lo <= hi;) { altArr.push(byAreaDesc[lo++]); if (lo <= hi) altArr.push(byAreaDesc[hi--]); }
-      const sorts = [
-        [...items].sort((a, b) => b.w - a.w || b.h - a.h),
-        [...items].sort((a, b) => Math.max(b.h, b.w) - Math.max(a.h, a.w)),
-        byAreaDesc,
-        [...items].sort((a, b) => (b.w + b.h) - (a.w + a.h)),
-        [...items].sort((a, b) => a.fill - b.fill || (b.w * b.h) - (a.w * a.h)),
-        [...items].sort((a, b) => (b.w / Math.max(b.h, 0.01)) - (a.w / Math.max(a.h, 0.01))),
-        [...items].sort((a, b) => Math.max(b.w, b.h) - Math.max(a.w, a.h) || (b.w * b.h) - (a.w * a.h)),
-        altArr,
-        [...items].sort((a, b) => (a.w * a.h) - (b.w * b.h)),
-      ];
-      type Candidate = { result: PlacedItem[]; maxHeight: number; wastedArea: number; overflows: number };
-      const cands: Candidate[] = [];
-      for (const go of hasCustomGap ? [undefined] : [undefined, 0.125, 0.0625]) {
-        const g = go !== undefined ? go : GAP;
-        for (const s of sorts) {
-          const npi = mkPi(s, 'normal', go);
-          cands.push(ev(skylinePack(npi)));
-          const greedyItems = s.map(d => ({ id: d.id, w: d.w, h: d.h, gap: go !== undefined ? go : getItemGapVal(d.fill) }));
-          cands.push(ev(greedyOrientPack(greedyItems)));
-          cands.push(ev(mixedOrientPack(npi)));
-          cands.push(ev(maxRectsPack(npi, 'bssf')));
-          cands.push(ev(maxRectsPack(npi, 'baf')));
-          cands.push(ev(shelfPack(npi)));
-          cands.push(ev(skylinePack(mkPi(s, 'landscape', go)))); cands.push(ev(skylinePack(mkPi(s, 'portrait', go))));
-        }
-        const gr = gridPack(g);
-        if (gr) cands.push(ev(gr));
-      }
-      // Preserve the same legacy candidate ranking as `arrange-worker.ts`.
-      // This keeps duplicate/copy arrangements consistent when the worker
-      // is unavailable or times out.
-      const totalItemArea = items.reduce((sum, d) => sum + d.w * d.h, 0);
-      cands.sort((a, b) => {
-        if (a.overflows !== b.overflows) return a.overflows - b.overflows;
-        const af = a.maxHeight <= usableH ? 0 : 1, bf = b.maxHeight <= usableH ? 0 : 1;
-        if (af !== bf) return af - bf;
-        const au = totalItemArea / (usableW * Math.max(a.maxHeight, 0.01));
-        const bu = totalItemArea / (usableW * Math.max(b.maxHeight, 0.01));
-        if (Math.abs(au - bu) > 0.02) return bu - au;
-        if (Math.abs(a.maxHeight - b.maxHeight) > 0.01) return a.maxHeight - b.maxHeight;
-        return a.wastedArea - b.wastedArea;
-      });
-      const best = cands[0].result;
-      applyResult(best, best.some(p => p.rotation !== 0), best.some(p => p.overflows));
+      applyResult(
+        result,
+        result.some(p => p.rotation !== 0),
+        result.some(p => p.overflows),
+        { packedExtent, minRequiredHeight },
+      );
     }
+
   }, [selectedDesignIds, saveSnapshot, toast, t, designGap, GANGSHEET_HEIGHTS, MAX_ARTBOARD_HEIGHT, ensureDesignImagesAvailable, handleAutoArrangeRef]);
 
-  const handleArtboardResize = useCallback((newWidth: number, newHeight: number) => {
+  /**
+   * `skipSnapshot` is for the expansion path only, where a single Auto-Arrange can grow the
+   * sheet more than once and the customer expects one Ctrl+Z to undo the lot. Everything
+   * else — the size dropdown above all — must keep recording its own undo point.
+   */
+  const handleArtboardResize = useCallback((newWidth: number, newHeight: number, opts?: { skipSnapshot?: boolean }) => {
     if (newWidth <= 0 || newHeight <= 0) return;
 
     if (designs.length === 0) {
@@ -691,7 +724,7 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       return;
     }
 
-    saveSnapshot();
+    if (!opts?.skipSnapshot) saveSnapshot();
     const oldW = artboardWidth;
     const oldH = artboardHeight;
 
@@ -708,18 +741,166 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
   }, [designs.length, saveSnapshot, artboardWidth, artboardHeight]);
   handleArtboardResizeRef.current = handleArtboardResize;
 
-  const recommendedArtboardHeight = useMemo(() => {
-    if (designs.length === 0) return null;
-    let minY = Infinity, maxY = -Infinity;
-    for (const d of designs) {
-      const bounds = getRotatedBounds(d);
-      const cy = d.transform.ny * artboardHeight;
-      minY = Math.min(minY, cy + bounds.minY);
-      maxY = Math.max(maxY, cy + bounds.maxY);
-    }
-    const requiredH = maxY - minY + (designGap ?? 0.25) * 2;
-    return GANGSHEET_HEIGHTS.find(h => h >= requiredH) ?? null;
-  }, [designs, artboardHeight, designGap, GANGSHEET_HEIGHTS]);
+  const recommendedArtboardHeight = useMemo(
+    () => fitGangsheetHeight(designs, artboardHeight, designGap, GANGSHEET_HEIGHTS)?.height ?? null,
+    [designs, artboardHeight, designGap, GANGSHEET_HEIGHTS],
+  );
+
+  /**
+   * Resize, then record the pick. Wired to the Gangsheet Size dropdown.
+   *
+   * The order is the whole point. `handleArtboardResize` pushes an undo snapshot, and that
+   * snapshot has to describe the sheet as it was *before* this pick — height and floor
+   * together. Setting the floor first put the new value into the old height's snapshot, so
+   * undoing the pick returned the sheet to 60" while leaving it pinned at 120".
+   *
+   * The floor itself lives in `useImageEditorModelStateDesign` alongside the history, which
+   * snapshots and restores it; see `manualHeightFloorRef` there for why it is no longer a
+   * ref sitting outside undo.
+   */
+  const handleArtboardHeightPick = useCallback((newHeight: number) => {
+    handleArtboardResizeRef.current(artboardWidthRef.current, newHeight);
+    manualHeightFloorRef.current = newHeight;
+  }, [artboardWidthRef, manualHeightFloorRef]);
+
+  /**
+   * Drop the sheet to the smallest purchasable height that still fits the artwork.
+   *
+   * Deliberately a measure-and-translate, never a re-pack. The current layout already fits
+   * inside its own measured band, so sliding that band as a rigid unit onto a shorter sheet is
+   * guaranteed to fit — which is what makes this safe to run automatically. Re-packing at the
+   * smaller height could overflow instead, and overflow is exactly what triggers expansion, so
+   * the two features would sit there growing and shrinking the sheet against each other.
+   *
+   * For the same reason it cannot go through `handleArtboardResize`: that keeps each design's
+   * absolute Y and then clamps designs individually, which on a shrink would pull the artwork
+   * apart and pile it against the bottom edge instead of moving the arrangement intact.
+   *
+   * Being a pure translation also makes it idempotent — the band's height never changes, so a
+   * second call finds nothing left to do.
+   *
+   * It can legitimately land on a height the packer just refused. Expansion fires when the
+   * *search* cannot find a layout at a given height, which is not the same as no layout
+   * existing; a pack that succeeds at 24" and comes out 11.4" tall genuinely does fit a 12"
+   * sheet. Taking that saving is the point of the feature, and it cannot loop, because
+   * shrinking moves the artwork without ever asking the packer to run again.
+   */
+  const shrinkSheetToFit = useCallback((opts?: { snapshot?: boolean }) => {
+    // In edit mode the gangsheet size is locked to the variant the customer already bought,
+    // so shrinking here would swap that line item for a cheaper one behind their back.
+    if (isEditMode) return;
+    const currentDesigns = designsRef.current;
+    if (currentDesigns.length === 0) return;
+    const currentHeight = artboardHeightRef.current;
+    const band = getContentInkBandY(currentDesigns, currentHeight);
+    if (!band) return;
+    // `designGap` is one setting doing duty as two physical quantities: the gap *between*
+    // designs, where 0 is a legitimate customer choice, and the margin at the *sheet edge*,
+    // where it is not — ink flush to the edge of a DTF sheet is a production risk. Only the
+    // sheet-edge reading is floored, and it is named apart from the gap so the distinction
+    // survives the next reader. The gap handed to the packer above is left exactly as chosen.
+    const sheetEdgeMargin = Math.max(designGap ?? DEFAULT_SHEET_MARGIN, DEFAULT_SHEET_MARGIN);
+    const shrink = planSheetShrink({
+      band,
+      currentHeight,
+      margin: sheetEdgeMargin,
+      heights: GANGSHEET_HEIGHTS,
+      manualFloor: manualHeightFloorRef.current,
+    });
+    // With no size to be saved the sheet can still be wrong at the top: the packers have no
+    // border inset, so an arrange that fits without shrinking leaves its first row flush
+    // against the edge. Reseating is the same rigid translation with the height held, so it
+    // cannot cost the customer a rung — see `planBandReseat`.
+    const plan = shrink ?? (() => {
+      const reseat = planBandReseat({ band, currentHeight, margin: sheetEdgeMargin });
+      return reseat ? { height: currentHeight, shift: reseat.shift } : null;
+    })();
+    if (!plan) return;
+
+    if (opts?.snapshot) saveSnapshot();
+    // Writes the very array it measured rather than taking `prev`, so the band the new height
+    // was derived from and the designs being moved onto it can never be two different things.
+    setDesigns(currentDesigns.map(d => ({
+      ...d,
+      transform: { ...d.transform, ny: (d.transform.ny * currentHeight - plan.shift) / plan.height },
+    })));
+    if (plan.height !== currentHeight) setArtboardHeight(plan.height);
+  }, [isEditMode, designsRef, artboardHeightRef, designGap, GANGSHEET_HEIGHTS, saveSnapshot, setDesigns, setArtboardHeight, manualHeightFloorRef]);
+  shrinkSheetToFitRef.current = shrinkSheetToFit;
+
+  /**
+   * Slide the artwork clear of the sheet's top edge, holding the height.
+   *
+   * `shrinkSheetToFit` already does this, but only as the consolation prize when there is
+   * no size to be saved, and it only runs from the arrange and delete paths. Import has the
+   * same problem and neither of those triggers: placement goes through the packer, the
+   * packer seeds its free space at the origin, so the first row of a fresh sheet — or of any
+   * sheet with room at the top — lands flush at y=0. That is ink on the edge of a DTF sheet,
+   * which is a production risk, and until now it sat there until the customer happened to
+   * delete something.
+   *
+   * Deliberately the re-seat *without* the shrink. An import is not a reason to change the
+   * size the customer is buying, and holding the height is also what makes this incapable of
+   * costing them a rung: `planBandReseat` is a rigid translation of a band whose height it
+   * does not change, and where the sheet is too tight for the full margin at both ends it
+   * splits the slack rather than asking for more film. Unlike `shrinkSheetToFit` it is
+   * therefore safe in edit mode too, where the height is locked to a purchased variant.
+   *
+   * Never snapshots. `applyImageDirectly` already recorded one, so the import and the
+   * re-seat undo together as the single step the customer thinks they took.
+   */
+  const reseatSheetBand = useCallback(() => {
+    const currentDesigns = designsRef.current;
+    if (currentDesigns.length === 0) return;
+    const currentHeight = artboardHeightRef.current;
+    const band = getContentInkBandY(currentDesigns, currentHeight);
+    if (!band) return;
+    // Same two-quantities-one-setting distinction `shrinkSheetToFit` makes: the gap handed
+    // to the packer is the customer's choice and 0 is legitimate, but the sheet *edge* is
+    // floored, and the local is named apart so the difference survives the next reader.
+    const sheetEdgeMargin = Math.max(designGap ?? DEFAULT_SHEET_MARGIN, DEFAULT_SHEET_MARGIN);
+    const reseat = planBandReseat({ band, currentHeight, margin: sheetEdgeMargin });
+    // Null covers the case this must not fight: an import that overflowed leaves the band
+    // taller than the sheet, so there is no slack to redistribute and the expansion path is
+    // left to grow the sheet on its own.
+    if (!reseat) return;
+    setDesigns(currentDesigns.map(d => ({
+      ...d,
+      transform: { ...d.transform, ny: (d.transform.ny * currentHeight - reseat.shift) / currentHeight },
+    })));
+  }, [designsRef, artboardHeightRef, designGap, setDesigns]);
+  const reseatSheetBandRef = useRef(reseatSheetBand);
+  reseatSheetBandRef.current = reseatSheetBand;
+
+  const importReseatTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /**
+   * Ask for one re-seat once the current import has settled.
+   *
+   * Called per file, but coalesced to one run per batch: each call cancels the pending
+   * timer, and the timer parks itself while `isUploadBatchActive()` is true. Re-seating per
+   * file would be both churn and wrong — every re-seat slides the whole sheet down, and the
+   * next file then lands flush in the strip that opened up at the top, so twenty files would
+   * walk the customer's existing work five inches down the sheet.
+   */
+  const scheduleImportReseat = useCallback(() => {
+    if (importReseatTimerRef.current) clearTimeout(importReseatTimerRef.current);
+    const tick = () => {
+      if (isUploadBatchActive()) {
+        importReseatTimerRef.current = setTimeout(tick, IMPORT_RESEAT_POLL_MS);
+        return;
+      }
+      importReseatTimerRef.current = null;
+      if (!mountedRef.current) return;
+      reseatSheetBandRef.current();
+    };
+    importReseatTimerRef.current = setTimeout(tick, 0);
+  }, [mountedRef]);
+
+  useEffect(() => () => {
+    if (importReseatTimerRef.current) clearTimeout(importReseatTimerRef.current);
+  }, []);
+
   // Stable refs for keyboard handler to avoid frequent re-registration
   const handleUndoRef = useRef(handleUndo);
   handleUndoRef.current = handleUndo;
@@ -900,7 +1081,20 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
   }, []);
 
 
-  const applyImageDirectly = useCallback((newImageInfo: ImageInfo, widthInches: number, heightInches: number, alphaThresholded?: boolean) => {
+  const applyImageDirectly = useCallback((newImageInfo: ImageInfo, rawWidthInches: number, rawHeightInches: number, alphaThresholded?: boolean) => {
+    // Every import format funnels through here, so this is the one place that can
+    // keep a file's declared size out of a design's geometry. Refusing the import
+    // is the only safe answer to an unreadable size: the arithmetic below divides
+    // by both values, and a non-finite result would be written into `transform`
+    // and then persisted, which no reload can undo.
+    const sane = sanitizeDesignInches(rawWidthInches, rawHeightInches);
+    if (!sane) {
+      console.error("[import] refusing artwork with unusable physical size", rawWidthInches, rawHeightInches);
+      toast({ title: t("toast.invalidImage"), description: t("toast.invalidImageDesc"), variant: "destructive" });
+      return;
+    }
+    const { widthInches, heightInches } = sane;
+
     saveSnapshot();
     const currentAbH = artboardHeightRef.current;
     const currentAbW = artboardWidthRef.current;
@@ -958,63 +1152,77 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
 
     const scaledW = widthInches * initialS;
     const scaledH = heightInches * initialS;
-    const gap = 0.25;
+    const gap = designGap ?? 0.25;
 
     let baseNx = 0;
     let baseNy = 0;
+    /** True once the packer has returned a slot, which must then be used unmodified. */
+    let placed = false;
     const existingDesigns = designsRef.current;
     if (existingDesigns.length === 0) {
       baseNx = (scaledW / 2) / currentAbW;
       baseNy = (scaledH / 2) / effectiveAbH;
     } else {
-      const occupied: { left: number; top: number; right: number; bottom: number }[] = existingDesigns.map(d => {
-        const cx = d.transform.nx * currentAbW;
-        const cy = d.transform.ny * effectiveAbH;
-        const bounds = getRotatedBounds(d);
-        return { left: cx + bounds.minX, top: cy + bounds.minY, right: cx + bounds.maxX, bottom: cy + bounds.maxY };
-      });
-
-      let placed = false;
-      const sortedRows: number[] = [0, ...occupied.map(r => r.bottom + gap)].sort((a, b) => a - b);
-      const uniqueRows = [...new Set(sortedRows.map(v => Math.round(v * 100) / 100))];
-
-      for (const tryY of uniqueRows) {
-        const candidateTop = tryY;
-        const candidateBottom = tryY + scaledH;
-        if (candidateBottom > effectiveAbH + 0.01) continue;
-
-        const sortedCols: number[] = [0, ...occupied.map(r => r.right + gap)].sort((a, b) => a - b);
-        const uniqueCols = [...new Set(sortedCols.map(v => Math.round(v * 100) / 100))];
-
-        for (const tryX of uniqueCols) {
-          const candidateLeft = tryX;
-          const candidateRight = tryX + scaledW;
-          if (candidateRight > currentAbW + 0.01) continue;
-
-          const overlaps = occupied.some(r =>
-            candidateLeft < r.right + gap &&
-            candidateRight > r.left - gap &&
-            candidateTop < r.bottom + gap &&
-            candidateBottom > r.top - gap
-          );
-          if (!overlaps) {
-            baseNx = (candidateLeft + scaledW / 2) / currentAbW;
-            baseNy = (candidateTop + scaledH / 2) / effectiveAbH;
-            placed = true;
-            break;
-          }
-        }
-        if (placed) break;
-      }
-
-      if (!placed) {
-        const maxBottom = Math.max(...occupied.map(r => r.bottom));
+      // Placement goes through the shared packer rather than a bespoke corner scan, so an
+      // incoming design gets the same best-fit treatment as an arrange and cannot land on
+      // top of existing work. Existing designs are anchored, so none of them move.
+      //
+      // Occupancy is measured against `currentAbH`, not `effectiveAbH`: if the sheet grew
+      // above, the `setDesigns` rescale that compensates for it has only been queued, so
+      // `designsRef` still holds pre-growth `ny` values. That rescale preserves absolute
+      // position, so `ny * currentAbH` is the design's real inch offset either way. Using
+      // the new height here instead is what let designs overlap after a growth step.
+      const INCOMING = '__incoming__';
+      // Grouped designs collapse into one rectangle covering the whole group, so an import
+      // cannot nest into a gap *inside* a group and split it apart. Ungrouped designs keep
+      // their silhouette, so the newcomer can still tuck into their concavities.
+      const currentRects = toPackRects(
+        existingDesigns, currentAbW, currentAbH, getDesignNestSilhouette,
+      );
+      const incomingMask = getDesignNestMask({
+        image: newImageInfo.image,
+        artW: scaledW,
+        artH: scaledH,
+        stampExtra: 0,
+        sourceKey: newImageInfo.image.src,
+      })?.mask;
+      // Nesting rather than rectangle-fitting the newcomer, so it can slot into a
+      // neighbour's concavity instead of demanding a clear box of its own.
+      const packed = keepPositionsNest(
+        [
+          ...currentRects.map(r => ({ id: r.id, w: r.w, h: r.h, mask: r.mask, noRotate: r.isGroup })),
+          { id: INCOMING, w: scaledW, h: scaledH, mask: incomingMask },
+        ],
+        currentRects,
+        currentAbW, effectiveAbH, currentAbW, effectiveAbH,
+        gap, undefined,
+        false, // never auto-rotate an import
+      );
+      const spot = packed.result.find(p => p.id === INCOMING);
+      if (spot && !spot.overflows) {
+        baseNx = spot.nx;
+        baseNy = spot.ny;
+        placed = true;
+      } else {
+        const maxBottom = Math.max(...currentRects.map(r => r.y + r.h));
         baseNx = (scaledW / 2) / currentAbW;
         baseNy = (maxBottom + gap + scaledH / 2) / effectiveAbH;
       }
     }
 
-    const newTransform = { nx: Math.min(baseNx, 0.95), ny: Math.min(baseNy, 0.95), s: initialS, rotation: 0 };
+    // A placement from the packer is already legal and must be used verbatim: nesting
+    // deliberately lets a design's transparent margin hang over a neighbour or off the
+    // sheet edge, so re-clamping it to its bounding box here would drag it out of the very
+    // slot that was just found for it. Only the fallback path, which guessed a position,
+    // gets clamped.
+    const halfNx = (scaledW / 2) / currentAbW;
+    const halfNy = (scaledH / 2) / effectiveAbH;
+    const newTransform = {
+      nx: placed ? baseNx : Math.min(Math.max(baseNx, halfNx), Math.max(halfNx, 1 - halfNx)),
+      ny: placed ? baseNy : Math.max(baseNy, halfNy),
+      s: initialS,
+      rotation: 0,
+    };
 
     setImageInfo(newImageInfo);
     setDesignTransform(newTransform);
@@ -1048,7 +1256,11 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     // design. `selectOne` writes both fields in a single store
     // transaction so downstream reads always see a consistent pair.
     selectOne(newDesignId);
-  }, [saveSnapshot, toast]);
+    // The packer had the whole sheet, so this design may well have landed flush against the
+    // top edge. Coalesced, so a twenty-file drop re-seats once at the end rather than
+    // twenty times on the way through.
+    scheduleImportReseat();
+  }, [saveSnapshot, toast, designGap, scheduleImportReseat]);
 
 
   return {
@@ -1057,6 +1269,9 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     handleAlignCorner,
     handleAutoArrange,
     handleArtboardResize,
+    handleArtboardHeightPick,
+    shrinkSheetToFit,
+    reseatSheetBand,
     GANGSHEET_HEIGHTS,
     MAX_ARTBOARD_HEIGHT,
     recommendedArtboardHeight,

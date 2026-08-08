@@ -8,6 +8,8 @@ import EditorActionToolbar from "./editor-action-toolbar";
 import { LayerRow, type LayerRowHandlers } from "./layer-row";
 import { UploadsPanel } from "./uploads-panel";
 import { useToast } from "@/hooks/use-toast";
+import { useKeyboardSafeFocus } from "@/hooks/use-keyboard-safe-focus";
+import { useMobileLayout } from "@/hooks/use-layout-viewport";
 import { formatDimensions, formatLength, useMetric, getUnitSuffix } from "@/lib/format-length";
 import {
   ArrowDownLeft, ArrowDownRight, ArrowUpLeft, ArrowUpRight, Copy, ChevronDown, ChevronUp,
@@ -67,7 +69,7 @@ export default function ImageEditorView() {
     handleEffectiveSizeChange, handleResizeChange, handleDuplicateDesign,
     handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleSetGroupCount,
     handleDeleteDesign, handleDeleteGroup, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleAlignCorner,
-    handleAutoArrange, handleArtboardResize, handleThresholdAlpha,
+    handleAutoArrange, handleArtboardHeightPick, handleThresholdAlpha,
     handleThresholdAlphaAll, handleCropDesign, handleCropApply, handleDownload, handleAddToCart,
     handleApplyHalftone, handleOpenHalftoneMenu, halftoneStrength, setHalftoneStrength,
     halftoneMenuOpen, setHalftoneMenuOpen, halftoneTopColors,
@@ -79,6 +81,21 @@ export default function ImageEditorView() {
     recoverEditorDraft, discardEditorDraft,
   } = useImageEditorContext();
   const { toast } = useToast();
+  // Which layout to render, as distinct from `isMobile` (which stays "is this a
+  // small touch device" and drives target sizing in `preview-section` and the
+  // fixed bottom bar in `controls-section`).
+  //
+  // Two things separate them. A phone on its side is 844×390: wide enough to
+  // leave the mobile layout, too short for the desktop one, whose sidebar is
+  // `w-full` until `lg` and pushes the canvas ~790px down a viewport that cannot
+  // scroll. And inside the storefront iframe `window.innerWidth` is the iframe's
+  // width, not the device's, so a padded theme container can hand a tablet the
+  // phone layout — the shell can correct that over `dtf-builder-shell-config`.
+  // See `hooks/use-layout-viewport.ts`.
+  const mobileLayout = useMobileLayout();
+  // Lifts a focused field clear of the software keyboard. Inert unless the
+  // visual viewport actually shrinks, so desktop is untouched.
+  useKeyboardSafeFocus();
   const handleAddFromUploads = useCallback(async (file: File) => {
     await processSidebarFile(file);
   }, [processSidebarFile]);
@@ -178,9 +195,12 @@ export default function ImageEditorView() {
   //     boolean that would invalidate the callback on every toggle). We
   //     read it imperatively via `useUiStore.getState()` at click time so
   //     the callback identity stays permanently stable.
+  // Picking a height from the dropdown is the one height change the customer makes on
+  // purpose, so it goes through `handleArtboardHeightPick`, which records it as the floor
+  // auto-shrink will not drop below.
   const handleArtboardHeightChange = useCallback(
-    (h: number) => handleArtboardResize(artboardWidth, h),
-    [handleArtboardResize, artboardWidth],
+    (h: number) => handleArtboardHeightPick(h),
+    [handleArtboardHeightPick],
   );
   const handleWandDeleteToggle = useCallback(() => {
     const prev = useUiStore.getState().wandDeleteModeActive;
@@ -326,6 +346,10 @@ export default function ImageEditorView() {
 
   return (
     <div
+      /* `isMobile`, not `mobileLayout`: this reserve exists solely to clear the
+         bottom bar that `controls-section` pins with `position: fixed`, and that
+         is gated on `useIsMobile()`. The two must agree or the bar covers
+         content. */
       className={`h-full flex flex-col ${isMobile ? "pb-16" : ""} relative`}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
@@ -374,7 +398,7 @@ export default function ImageEditorView() {
             </div>
           </div>
         )}
-        {isMobile && (
+        {mobileLayout && (
           <div className="flex-shrink-0 border-b border-gray-200 bg-white px-2 py-1.5">
             <div className="grid grid-cols-2 gap-1.5">
               <button
@@ -398,11 +422,11 @@ export default function ImageEditorView() {
           </div>
         )}
         <div
-          className={isMobile ? "flex min-h-0 flex-1 flex-row transition-transform duration-300 ease-out" : "flex-1 min-h-0 flex flex-col lg:flex-row"}
-          style={isMobile ? { transform: mobilePanel === "preview" ? "translateX(-100%)" : "translateX(0)" } : undefined}
+          className={mobileLayout ? "flex min-h-0 flex-1 flex-row transition-transform duration-300 ease-out" : "flex-1 min-h-0 flex flex-col lg:flex-row"}
+          style={mobileLayout ? { transform: mobilePanel === "preview" ? "translateX(-100%)" : "translateX(0)" } : undefined}
         >
       {/* Left sidebar - Layers + Settings */}
-      <div className={`flex-shrink-0 w-full lg:w-[320px] xl:w-[340px] border-r border-gray-200 bg-white overflow-x-hidden ${isMobile ? "" : "overflow-y-auto"}`}>
+      <div className={`flex-shrink-0 w-full lg:w-[320px] xl:w-[340px] border-r border-gray-200 bg-white overflow-x-hidden ${mobileLayout ? "" : "overflow-y-auto"}`}>
         <div className="p-2.5 space-y-2">
           <ControlsSection
             resizeSettings={activeResizeSettings}
@@ -443,7 +467,7 @@ export default function ImageEditorView() {
             onWandDeleteToggle={handleWandDeleteToggle}
           />
 
-           {!isMobile && halftoneEnabled && (
+           {!mobileLayout && halftoneEnabled && (
              <div className="relative rounded-lg border border-amber-200 bg-amber-50/40 p-2">
                <button
                  onClick={handleOpenHalftoneMenu}
@@ -570,11 +594,13 @@ export default function ImageEditorView() {
       </div>
 
       {/* Right area - Canvas workspace */}
-      <div className={`min-w-0 flex flex-col ${isMobile ? "w-full flex-shrink-0" : "flex-1 h-full overflow-hidden"}`}>
-        {!isMobile && <EditorActionToolbar {...actionToolbarProps} />}
+      <div className={`min-w-0 flex flex-col ${mobileLayout ? "w-full flex-shrink-0" : "flex-1 h-full overflow-hidden"}`}>
+        {/* The toolbar's own mobile/desktop arms have to match the layout it is
+            rendered into, so the bag's device-level `isMobile` is overridden. */}
+        {!mobileLayout && <EditorActionToolbar {...actionToolbarProps} isMobile={mobileLayout} />}
 
         {/* Preview Canvas */}
-        {isMobile ? (
+        {mobileLayout ? (
           <div className="flex min-h-0 flex-1 flex-col">
             <div className="flex min-h-0 flex-1">
             <div className="min-h-0 min-w-0 h-full pl-1.5 basis-[53%] shrink-0 flex flex-col">
@@ -669,7 +695,7 @@ export default function ImageEditorView() {
                     )}
                   </div>
                 )}
-                <div className={`rounded-md border border-gray-200 bg-white p-2 ${isMobile ? "mx-auto" : ""}`}>
+                <div className={`rounded-md border border-gray-200 bg-white p-2 ${mobileLayout ? "mx-auto" : ""}`}>
                   <div className="flex flex-col gap-2">
                     <button
                       onClick={() => handleDuplicateDesign(duplicateCount)}
@@ -690,7 +716,11 @@ export default function ImageEditorView() {
                         onChange={(e) => setDuplicateCount(parseDuplicateCount(e.target.value))}
                         onKeyDown={handleDuplicateCountKeyDown}
                         disabled={!selectedDesignId}
-                         className="w-full h-full text-center text-[12px] font-semibold leading-none p-0 pr-3 bg-white outline-none disabled:opacity-30 disabled:pointer-events-none"
+                        /* 16px on any touch screen so iOS does not auto-zoom on
+                           focus — same reasoning as `size-input.tsx`. Gated on the
+                           pointer rather than on the width breakpoint, so a tablet
+                           in this layout is covered too. */
+                         className="w-full h-full text-center text-[12px] coarse:text-[16px] font-semibold leading-none p-0 pr-3 bg-white outline-none disabled:opacity-30 disabled:pointer-events-none"
                         style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                         title="Number of copies"
                       />
@@ -735,9 +765,9 @@ export default function ImageEditorView() {
                             const v = e.target.value;
                             const newGap = v === "auto" ? undefined : parseFloat(v);
                             setDesignGap(newGap);
-                            setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true }), 0);
+                            setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true, fullRepack: true }), 0);
                           }}
-                           className="h-8 px-1.5 bg-gray-100 border border-gray-300 rounded text-[12px] font-medium text-gray-800 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
+                           className="h-8 px-1.5 bg-gray-100 border border-gray-300 rounded text-[12px] coarse:text-[16px] font-medium text-gray-800 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
                           title={useMetric(lang) ? t("editor.marginGapCm") : t("editor.marginGap")}
                         >
                           <option value="auto">{t("editor.marginAuto")}</option>
@@ -752,7 +782,7 @@ export default function ImageEditorView() {
                   </div>
                 </div>
                 <span className={`mx-auto inline-flex rounded px-2 py-1 text-[11px] font-bold ${effectiveDPI < 277 ? "border border-amber-400 bg-amber-100 text-amber-700" : "border border-emerald-700 bg-emerald-100 text-emerald-700"}`} title={t("editor.effectiveRes", { dpi: effectiveDPI })}>{effectiveDPI} DPI</span>
-                <div className={`rounded-md border border-gray-200 bg-white p-2 ${isMobile ? "mx-auto w-fit max-w-full" : ""}`}>
+                <div className={`rounded-md border border-gray-200 bg-white p-2 ${mobileLayout ? "mx-auto w-fit max-w-full" : ""}`}>
                   <div className="mx-auto mb-1 inline-flex items-center justify-center gap-1">
                     <span className="text-[12px] font-bold text-gray-800">W</span>
                     <SizeInput value={activeResizeSettings.widthInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("width", v)} title={useMetric(lang) ? t("editor.widthTitleCm") : t("editor.widthTitle")} max={artboardWidth} lang={lang} />
@@ -773,7 +803,7 @@ export default function ImageEditorView() {
                   </div>
                 </div>
                 <button
-                  onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2 })}
+                  onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2, fullRepack: true })}
                   disabled={designs.length < 2 && selectedDesignIds.size < 2}
                    className={`mx-auto flex min-h-[36px] items-center justify-center gap-1 rounded-md px-2 py-1 text-[12px] font-semibold transition-colors ${
                     designs.length >= 2 || selectedDesignIds.size >= 2

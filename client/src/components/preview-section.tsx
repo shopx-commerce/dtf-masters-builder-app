@@ -9,14 +9,92 @@ import { Button } from "@/components/ui/button";
 import { ImageInfo, ResizeSettings, type ImageTransform, type DesignItem } from "./image-editor";
 import { RotationBadge } from "./image-editor/rotation-badge";
 import { computeLayerRect } from "@/lib/types";
+import { inkInset } from "@/lib/nest-core";
+import { getDesignNestMask } from "@/lib/nest-mask";
 
 const BASE_DPI_SCALE = 2;
 const HIGH_QUALITY_DETAIL_ZOOM = 3;
 const HIGH_QUALITY_DETAIL_MAX_AREA = 4_000_000;
 const HIGH_QUALITY_DETAIL_MAX_EDGE = 4096;
-/** Keep selection controls compact only when the canvas is genuinely zoomed out. */
-function getLowZoomHandleScale(zoom: number): number {
-  return zoom < 0.5 ? 0.25 : 1;
+// The preview canvas is inset inside the zoom wrapper and draws its border
+// OUTSIDE the pixel surface (`box-sizing: content-box`), so the surface —
+// the space `computeLayerRect` returns coordinates in — starts at
+// inset + border. Overlays aligned to the artwork must use that same origin.
+const PREVIEW_CANVAS_INSET = 3;
+const PREVIEW_CANVAS_BORDER = 3;
+const PREVIEW_SURFACE_ORIGIN = PREVIEW_CANVAS_INSET + PREVIEW_CANVAS_BORDER;
+/**
+ * Half the drawn extent of a selection resize handle, in screen CSS px, so a
+ * single-selection square and a multi-selection circle both read as 2x this on
+ * screen at any zoom. All four corners are the same size: the bottom-right used
+ * to paint at 2x on touch, which on a phone made it 40 CSS px across — 80% of an
+ * 8in design and over 250% of a 1in one — while the other three stayed 20.
+ * Touch gets a slightly larger glyph than pointer devices, and hit-testing keeps
+ * its own, larger radius — see `hitTestHandles` — so the drawn size never
+ * dictates how big the grab area is.
+ */
+const TOUCH_HANDLE_HALF_PX = 8;
+const DESKTOP_HANDLE_HALF_PX = 6;
+/**
+ * Pointer-device hit-test ring radii, as multiples of the *drawn* handle half-extent
+ * above. Keeping them relative to the drawn size is right for a mouse, which can land
+ * on a 12 CSS px glyph unaided: the hit tests previously hardcoded a base of 10,
+ * which silently became an orphaned copy of `TOUCH_HANDLE_HALF_PX` when the pointer handle
+ * shrank to 6. Desktop then hit-tested resize out to 14px around a 6px glyph and rotate out
+ * to 30px, so a click 15-30px outside a corner — aiming to start a marquee — rotated the
+ * design instead, with nothing drawn to explain why.
+ */
+const HANDLE_HIT_BOOST = 1.4;
+const HANDLE_ROTATE_RING = 3.0;
+/**
+ * Touch hit-test ring radii, in screen CSS px from the corner — absolute, not a
+ * multiple of the drawn glyph.
+ *
+ * A multiple ties the thumb target to however large the design happens to be drawn.
+ * At 1.4x a 20 CSS px glyph earned a 28 CSS px resize target, well under the 44 CSS px
+ * minimum, and everything from 28 out to 60 was rotate rather than a bigger resize —
+ * so shrinking the glyph for legibility shrank the target with it. 22 gives the 44
+ * across that a thumb needs at any design size. The rotate band has to be absolute
+ * too: 3x22 would reach 132 CSS px on a 159 CSS px phone canvas and swallow the whole
+ * design.
+ */
+const TOUCH_RESIZE_HIT_R_CSS_PX = 22;
+const TOUCH_ROTATE_OUTER_R_CSS_PX = 34;
+/**
+ * Floor on the drawn handle, as a full width/diameter in screen CSS px. Kept in
+ * screen space (not canvas-buffer space) so zooming out cannot shrink a handle
+ * into an invisible sliver the way a buffer-relative floor did.
+ */
+const MIN_HANDLE_CSS_PX = 8;
+/** Below this zoom the canvas is genuinely zoomed out and handles stay compact. */
+const LOW_ZOOM_HANDLE_MAX_ZOOM = 0.5;
+/**
+ * Full drawn width of a handle below `LOW_ZOOM_HANDLE_MAX_ZOOM`, in screen CSS px.
+ * A flat CSS size rather than a fraction of the normal one, because a fractional
+ * scale compounds with the zoom that triggered it: 0.25x of a design-relative
+ * handle drew a 0.4 CSS px sliver at 10% zoom.
+ */
+const LOW_ZOOM_HANDLE_FULL_CSS_PX = 8;
+/**
+ * Half the drawn extent of a handle, in screen CSS px.
+ *
+ * `minEdgeCssPx` is the shorter on-screen edge of the design or group box being
+ * decorated, so something far smaller than a full-size handle shrinks its handles
+ * instead of disappearing underneath them, down to `MIN_HANDLE_CSS_PX`.
+ * `shrinkRatio` is the share of that edge one handle may occupy, which differs
+ * between a single design and a group box.
+ */
+function getHandleHalfCssPx(
+  minEdgeCssPx: number,
+  zoom: number,
+  touch: boolean,
+  shrinkRatio: number,
+): number {
+  const base = touch ? TOUCH_HANDLE_HALF_PX : DESKTOP_HANDLE_HALF_PX;
+  const half = Math.min(base, Math.max(minEdgeCssPx * shrinkRatio, MIN_HANDLE_CSS_PX / 2));
+  return zoom < LOW_ZOOM_HANDLE_MAX_ZOOM
+    ? Math.min(half, LOW_ZOOM_HANDLE_FULL_CSS_PX / 2)
+    : half;
 }
 const ZOOM_MIN_ABSOLUTE = 0.1;
 const ZOOM_WHEEL_FACTOR = 1.1;
@@ -63,6 +141,15 @@ function computePreviewDimensions(
 function isNarrowViewport(): boolean {
   return typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches;
 }
+
+/**
+ * How long an overlap check may run before its worker is assumed dead rather than slow.
+ *
+ * A worker that dies without dispatching `error` — what a Safari or Firefox worker OOM
+ * looks like — would otherwise leave the red overlap highlighting stuck on whatever it
+ * last said, with no listener ever removed and no fallback ever run.
+ */
+const OVERLAP_TIMEOUT_MS = 60_000;
 
 interface PreviewSectionProps {
   imageInfo: ImageInfo | null;
@@ -536,6 +623,9 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const [editingRotation, setEditingRotation] = useState(false);
     const [rotationInput, setRotationInput] = useState('0');
     const [overlappingDesigns, setOverlappingDesigns] = useState<Set<string>>(new Set());
+    // Bumped when a group gesture ends, purely to force one final render pass
+    // so the static composite is rebuilt without the mid-gesture exclusions.
+    const [interactionEpoch, setInteractionEpoch] = useState(0);
     const [previewBgColor, setPreviewBgColor] = useState('transparent');
     const isDraggingRef = useRef(false);
     const isResizingRef = useRef(false);
@@ -618,6 +708,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     }, []);
 
     const stopBottomGlow = useCallback(() => {
+      // The drag path calls this on every pointer-move frame, so an
+      // unconditional render here doubled the render count for a whole drag
+      // even though there was nothing to clear. Only repaint when the glow
+      // was actually on screen.
+      const hadGlow = bottomGlowActiveRef.current || bottomGlowRef.current !== 0;
       bottomGlowActiveRef.current = false;
       if (expandTimerRef.current) {
         clearTimeout(expandTimerRef.current);
@@ -628,7 +723,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         glowAnimRef.current = null;
       }
       bottomGlowRef.current = 0;
-      renderRef.current?.();
+      if (hadGlow) renderRef.current?.();
     }, []);
     useEffect(() => () => stopBottomGlow(), [stopBottomGlow]);
 
@@ -755,37 +850,55 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       if (handles.length === 0) return null;
       const rect = getDesignRect();
       if (!rect) return null;
-      const z = Math.max(0.25, zoomRef.current);
-      const handleScale = getLowZoomHandleScale(z);
+      const z = Math.max(ZOOM_MIN_ABSOLUTE, zoomRef.current);
       const canvasBuf = canvasRef.current;
       const dims = previewDimsRef.current;
       const actualDpi = canvasBuf && dims.width > 0
         ? canvasBuf.width / dims.width
         : dpiScaleRef.current;
-      const designMin = Math.min(rect.width, rect.height);
-      const cappedHandlePx = Math.min(
-        10 * actualDpi / z,
-        Math.max(designMin * 0.25, actualDpi * 2),
-      );
-      // Hit-test radius is slightly larger than visual for easy grabbing.
-      const resizeR = cappedHandlePx * 1.4 * handleScale;
-      const rotateOuterR = cappedHandlePx * 3.0 * handleScale;
+      // Canvas-buffer px per screen CSS px, the only conversion between the space the
+      // rings are specified in and the space `px`/`py` arrive in.
+      const bufferPerCss = actualDpi / z;
+      // Touch grabs an absolute number of CSS px, so a legible glyph and a thumb-sized
+      // target are independent. A mouse keeps its rings proportional to the drawn glyph
+      // so that a click well outside a corner still falls through to the marquee.
+      let resizeR: number;
+      let rotateOuterR: number;
+      if (isMobile) {
+        resizeR = TOUCH_RESIZE_HIT_R_CSS_PX * bufferPerCss;
+        rotateOuterR = TOUCH_ROTATE_OUTER_R_CSS_PX * bufferPerCss;
+      } else {
+        const designMinCss = Math.min(rect.width, rect.height) / bufferPerCss;
+        const drawnHalf = getHandleHalfCssPx(designMinCss, z, false, 0.25) * bufferPerCss;
+        resizeR = drawnHalf * HANDLE_HIT_BOOST;
+        rotateOuterR = drawnHalf * HANDLE_ROTATE_RING;
+      }
+
+      // Nearest corner in range, not the first in tl/tr/br/bl order. An absolute touch
+      // ring is wider than a small design — a 44 CSS px target on a 25 CSS px design
+      // overlaps all four corners — so a first-match loop would resolve every grab to
+      // the top-left and leave the other three corners unreachable.
+      let best: { type: 'resize' | 'rotate'; id: string } | null = null;
+      let bestD = Infinity;
+      for (const h of handles) {
+        const d = Math.sqrt((px - h.x) ** 2 + (py - h.y) ** 2);
+        if (d < resizeR && d < bestD) {
+          best = { type: 'resize', id: h.id };
+          bestD = d;
+        }
+      }
+      // Resize wins outright when both rings are in range.
+      if (best) return best;
 
       for (const h of handles) {
         const d = Math.sqrt((px - h.x) ** 2 + (py - h.y) ** 2);
-        if (d < resizeR) {
-          return { type: 'resize', id: h.id };
+        if (d >= resizeR && d < rotateOuterR && d < bestD) {
+          best = { type: 'rotate', id: `rot-${h.id}` };
+          bestD = d;
         }
       }
 
-      for (const h of handles) {
-        const d = Math.sqrt((px - h.x) ** 2 + (py - h.y) ** 2);
-        if (d >= resizeR && d < rotateOuterR) {
-          return { type: 'rotate', id: `rot-${h.id}` };
-        }
-      }
-
-      return null;
+      return best;
     }, [getHandlePositions, getDesignRect, isMobile]);
 
     // Group bounding box in canvas buffer space for multi-selection
@@ -838,45 +951,80 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const hitTestMultiHandles = useCallback((px: number, py: number): { type: 'resize' | 'rotate'; id: string } | null => {
       const handles = getMultiHandlePositions();
       if (handles.length === 0) return null;
-      const z = Math.max(0.25, zoomRef.current);
-      const handleScale = getLowZoomHandleScale(z);
+      const z = Math.max(ZOOM_MIN_ABSOLUTE, zoomRef.current);
       const bbox = getMultiSelectionBBox();
       const canvasBuf = canvasRef.current;
       const dims = previewDimsRef.current;
       const actualDpi = canvasBuf && dims.width > 0
         ? canvasBuf.width / dims.width
         : dpiScaleRef.current;
+      const bufferPerCss = actualDpi / z;
       const groupMin = bbox ? Math.min(bbox.width, bbox.height) : actualDpi * 20;
-      const cappedGroupPx = Math.min(
-        10 * actualDpi / z,
-        Math.max(groupMin * 0.15, actualDpi * 2),
-      );
-      const resizeR = cappedGroupPx * 1.4 * handleScale;
-      const rotateOuterR = cappedGroupPx * 3.0 * handleScale;
+      // Same split as single selection: absolute CSS radii for touch, glyph-relative
+      // rings for a mouse. The group draw at `drawSelectionHandles` shares the base.
+      let resizeR: number;
+      let rotateOuterR: number;
+      if (isMobile) {
+        resizeR = TOUCH_RESIZE_HIT_R_CSS_PX * bufferPerCss;
+        rotateOuterR = TOUCH_ROTATE_OUTER_R_CSS_PX * bufferPerCss;
+      } else {
+        const drawnHalf = getHandleHalfCssPx(groupMin / bufferPerCss, z, false, 0.15) * bufferPerCss;
+        resizeR = drawnHalf * HANDLE_HIT_BOOST;
+        rotateOuterR = drawnHalf * HANDLE_ROTATE_RING;
+      }
+
+      // Nearest corner in range — see `hitTestHandles`.
+      let best: { type: 'resize' | 'rotate'; id: string } | null = null;
+      let bestD = Infinity;
+      for (const h of handles) {
+        const d = Math.sqrt((px - h.x) ** 2 + (py - h.y) ** 2);
+        if (d < resizeR && d < bestD) {
+          best = { type: 'resize', id: h.id };
+          bestD = d;
+        }
+      }
+      if (best) return best;
 
       for (const h of handles) {
         const d = Math.sqrt((px - h.x) ** 2 + (py - h.y) ** 2);
-        if (d < resizeR) {
-          return { type: 'resize', id: h.id };
+        if (d >= resizeR && d < rotateOuterR && d < bestD) {
+          best = { type: 'rotate', id: `rot-${h.id}` };
+          bestD = d;
         }
       }
 
-      for (const h of handles) {
-        const d = Math.sqrt((px - h.x) ** 2 + (py - h.y) ** 2);
-        if (d >= resizeR && d < rotateOuterR) {
-          return { type: 'rotate', id: `rot-${h.id}` };
-        }
-      }
-
-      return null;
-    }, [getMultiHandlePositions, isMobile]);
+      return best;
+    }, [getMultiHandlePositions, getMultiSelectionBBox, isMobile]);
 
     const canvasToLocal = useCallback((clientX: number, clientY: number) => {
       const canvas = canvasRef.current;
       if (!canvas) return { x: 0, y: 0 };
       const canvasRect = canvasRectCacheRef.current || canvas.getBoundingClientRect();
-      const x = ((clientX - canvasRect.left) / canvasRect.width) * canvas.width;
-      const y = ((clientY - canvasRect.top) / canvasRect.height) * canvas.height;
+      // `getBoundingClientRect` returns the BORDER box, but the canvas draws its border
+      // outside the pixel surface under `content-box`, so the rect covers
+      // PREVIEW_CANVAS_BORDER more than the surface on every side. Left uncorrected the
+      // mapping is affine-wrong: exact only at the centre and off by the border at either
+      // edge, which zoom multiplies into ~24 screen px at 8x.
+      //
+      // The border cannot be subtracted as a constant, because the rect is a SCREEN
+      // measurement taken through the wrapper's `scale(zoom)` — the border occupies
+      // `PREVIEW_CANVAS_BORDER * zoom` screen px. Taking it as a fraction of the layout
+      // border-box instead is zoom-agnostic, and stays correct mid-zoom-transition when
+      // `zoomRef` has not yet caught up with the rendered transform.
+      //
+      // This belongs here and not at the cache site: `canvasRectCacheRef` holds the raw
+      // rect and the drag handlers read it for their own (delta-based) math.
+      const dims = previewDimsRef.current;
+      const layoutW = dims.width + 2 * PREVIEW_CANVAS_BORDER;
+      const layoutH = dims.height + 2 * PREVIEW_CANVAS_BORDER;
+      if (dims.width <= 0 || dims.height <= 0) return { x: 0, y: 0 };
+      const surfaceW = canvasRect.width * (dims.width / layoutW);
+      const surfaceH = canvasRect.height * (dims.height / layoutH);
+      const borderX = canvasRect.width * (PREVIEW_CANVAS_BORDER / layoutW);
+      const borderY = canvasRect.height * (PREVIEW_CANVAS_BORDER / layoutH);
+      if (surfaceW <= 0 || surfaceH <= 0) return { x: 0, y: 0 };
+      const x = ((clientX - canvasRect.left - borderX) / surfaceW) * canvas.width;
+      const y = ((clientY - canvasRect.top - borderY) / surfaceH) * canvas.height;
       return { x, y };
     }, []);
 
@@ -968,6 +1116,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const overlapWorkerRef = useRef<Worker | null>(null);
     const overlapRequestIdRef = useRef(0);
     const overlapHandlerRef = useRef<((ev: MessageEvent) => void) | null>(null);
+    const overlapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     useEffect(() => {
       try {
         overlapWorkerRef.current = new Worker(
@@ -980,6 +1129,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         const h = overlapHandlerRef.current;
         if (w && h) w.removeEventListener('message', h);
         overlapHandlerRef.current = null;
+        if (overlapTimerRef.current) clearTimeout(overlapTimerRef.current);
+        overlapTimerRef.current = null;
         overlapWorkerRef.current?.terminate();
       };
     }, []);
@@ -1018,11 +1169,34 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         const cosA = Math.cos(rad);
         const sinA = Math.sin(rad);
         const hw = rect.width / 2, hh = rect.height / 2;
+        // Inset to the artwork before rotating. A nested design's transparent margin is
+        // allowed to sit over a neighbour or past the sheet edge, so flagging the image box
+        // would mark correctly nested layouts as out of bounds and overlapping.
+        const artW = d.widthInches * d.transform.s;
+        const artH = d.heightInches * d.transform.s;
+        const stampInches = d.printFileName ? 0.1 + artH * 0.05 : 0;
+        const silhouette = getDesignNestMask({
+          image: d.imageInfo.image,
+          artW,
+          artH,
+          stampExtra: stampInches,
+          stampText: d.printFileName ? d.name : undefined,
+          flipX: d.transform.flipX,
+          flipY: d.transform.flipY,
+          sourceKey: d.imageInfo.image.src,
+        })?.mask;
+        const inset = inkInset(silhouette, artW, artH + stampInches, 0);
+        const pxPerInchX = artW > 0 ? rect.width / artW : 0;
+        const pxPerInchY = artH > 0 ? rect.height / artH : 0;
+        const left = -hw + inset.left * pxPerInchX;
+        const right = hw - inset.right * pxPerInchX;
+        const top = -hh + inset.top * pxPerInchY;
+        const bottom = hh + stampPx - inset.bottom * pxPerInchY;
         const corners = [
-          { x: -hw, y: -hh },
-          { x:  hw, y: -hh },
-          { x:  hw, y:  hh + stampPx },
-          { x: -hw, y:  hh + stampPx },
+          { x: left, y: top },
+          { x: right, y: top },
+          { x: right, y: bottom },
+          { x: left, y: bottom },
         ];
         let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
         for (const c of corners) {
@@ -1107,10 +1281,17 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
             };
           });
 
+          const finish = () => {
+            worker.removeEventListener('message', handler);
+            worker.removeEventListener('error', onWorkerFailure);
+            worker.removeEventListener('messageerror', onWorkerFailure);
+            clearTimeout(timer);
+            if (overlapTimerRef.current === timer) overlapTimerRef.current = null;
+            if (overlapHandlerRef.current === handler) overlapHandlerRef.current = null;
+          };
           const handler = (ev: MessageEvent) => {
             if (ev.data.type === 'result') {
-              worker.removeEventListener('message', handler);
-              overlapHandlerRef.current = null;
+              finish();
               if (myRequestId !== overlapRequestIdRef.current) return;
               const workerOverlapping = new Set<string>(ev.data.overlapping as string[]);
               for (const id of outOfBounds) workerOverlapping.add(id);
@@ -1119,17 +1300,50 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                 setOverlappingDesigns(workerOverlapping);
               }
             } else if (ev.data.type === 'error') {
-              worker.removeEventListener('message', handler);
-              overlapHandlerRef.current = null;
+              // An in-band error is a caught exception inside a worker that is still
+              // alive, so it costs one fallback pass and nothing more.
+              finish();
               const err = (ev.data as { error?: string }).error;
               console.warn('Overlap worker error:', err);
               runMainThreadOverlap();
             }
           };
+          /**
+           * Stop using the worker for the rest of the session and answer on the main
+           * thread instead. A worker that crashed or went silent will not get better, and
+           * keeping it would cost every later check the full timeout before falling back;
+           * nulling the ref sends them straight down the main-thread path, the same way
+           * the halftone bridge disables its worker after a crash.
+           */
+          const abandonWorker = (reason: string) => {
+            finish();
+            console.warn(`Overlap worker abandoned (${reason}) — using main thread.`);
+            worker.terminate();
+            if (overlapWorkerRef.current === worker) overlapWorkerRef.current = null;
+            if (myRequestId === overlapRequestIdRef.current) runMainThreadOverlap();
+          };
+          // `messageerror` fires when a reply cannot be deserialised. It never reaches
+          // `handler`, so without it the check would wait out the whole timeout.
+          const onWorkerFailure = (ev: Event) => abandonWorker(
+            ev.type === 'messageerror' ? 'unreadable reply' : ((ev as ErrorEvent).message || 'error event'),
+          );
+          const timer = setTimeout(() => {
+            if (myRequestId !== overlapRequestIdRef.current) { finish(); return; }
+            abandonWorker(`no reply in ${OVERLAP_TIMEOUT_MS}ms`);
+          }, OVERLAP_TIMEOUT_MS);
+          overlapTimerRef.current = timer;
           overlapHandlerRef.current = handler;
           worker.addEventListener('message', handler);
+          worker.addEventListener('error', onWorkerFailure);
+          worker.addEventListener('messageerror', onWorkerFailure);
           const transferable = Array.from(bmpMap.values());
-          worker.postMessage({ type: 'check', designs: workerDesigns, sw, sh }, transferable as Transferable[]);
+          try {
+            worker.postMessage({ type: 'check', designs: workerDesigns, sw, sh }, transferable as Transferable[]);
+          } catch (err) {
+            finish();
+            console.warn('Overlap worker post failed:', err);
+            runMainThreadOverlap();
+          }
         }).catch((err) => {
           if (myRequestId !== overlapRequestIdRef.current) return;
           console.warn('Overlap worker fallback:', err);
@@ -1353,7 +1567,13 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           return;
         }
 
-        if (!isMobile && handleHit && handleHit.type === 'resize' && isClickInDesignInterior(local.x, local.y)) {
+        // Touch used to skip this and let a resize ring win anywhere it reached, which was
+        // survivable while the ring was 1.4x a small glyph. An absolute 22 CSS px ring
+        // covers a 4in design outright on a phone, so without the interior preference a
+        // design under ~5in could no longer be dragged at all. The margin inside
+        // `isClickInDesignInterior` scales with the design, so a tiny design still has
+        // effectively no interior and stays resizable everywhere.
+        if (handleHit && handleHit.type === 'resize' && isClickInDesignInterior(local.x, local.y)) {
           altKeyAtDragStartRef.current = false;
           isDraggingRef.current = true;
           altDragDuplicatedRef.current = false;
@@ -1753,6 +1973,15 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         stopBottomGlow();
         if (canvasAreaRef.current) canvasAreaRef.current.style.cursor = getIdleCursor();
         checkPixelOverlap();
+        // Group gestures exclude the selected companions from the static
+        // composite and draw them per-frame instead, so releasing the pointer
+        // MUST re-run the render effect to bake them back in at full quality.
+        // Nothing else here guarantees that: `checkPixelOverlap` only commits
+        // state when the overlap set actually changes, and a group gesture
+        // does not go through `onTransformChange`. Without this the last
+        // mid-gesture frame stayed on screen — which for a group drag left
+        // the companions at ghost alpha after the pointer came up.
+        if (wasGroupInteracting) setInteractionEpoch(e => e + 1);
         if (wasGroupInteracting) onInteractionEnd?.();
         return;
       }
@@ -1878,8 +2107,14 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         queuePanStateCommit(clamped.x, clamped.y);
         return;
       }
+      // Active interactions are serviced exclusively by the window-level
+      // `mousemove` listener, which coalesces through requestAnimationFrame.
+      // Handling them here too ran `handleInteractionMove` (and therefore a
+      // full canvas render) a second time for every mouse event while the
+      // pointer was over the canvas — measured as 2 renders per pointer move
+      // during a resize and 4 during a drag. Bail out so the rAF-coalesced
+      // path is the only one.
       if (isMarqueeRef.current || isMultiDragRef.current || isMultiResizeRef.current || isMultiRotateRef.current || isDraggingRef.current || isResizingRef.current || isRotatingRef.current) {
-        handleInteractionMove(e.clientX, e.clientY, e.altKey);
         return;
       }
       if (!canvasAreaRef.current) return;
@@ -2762,7 +2997,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const srcCanvas = document.createElement('canvas');
       srcCanvas.width = ow;
       srcCanvas.height = oh;
-      const srcCtx = srcCanvas.getContext('2d');
+      const srcCtx = srcCanvas.getContext('2d', { willReadFrequently: true });
       if (!srcCtx) return null;
       srcCtx.drawImage(img, 0, 0, ow, oh);
       let srcData: ImageData;
@@ -2996,13 +3231,22 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       // instead of re-hashing every design on every drag/render frame — with
       // many designs the per-frame string build was itself a hot-path cost.
       const multiSelectionKey = Array.from(selectedDesignIds).sort().join(',');
-      // While a drag is active, multi-selected companions are excluded from
-      // the static composite and drawn per-frame on top (with ghost alpha).
-      // Multi-drag commits `designs` on every pointer move, so leaving their
-      // transforms in the signature would invalidate — and fully rebuild —
-      // the composite on every frame. Excluding them keeps the composite
-      // cacheable for the whole drag (rebuilds only at drag start/stop).
-      const movingExcluded = (isDraggingRef.current || isMultiDragRef.current) && selectedDesignIds.size > 1
+      // While a group interaction is active, multi-selected companions are
+      // excluded from the static composite and drawn per-frame on top.
+      // Group drag/resize/rotate all commit `designs` on every pointer move,
+      // so leaving their transforms in the signature would invalidate — and
+      // fully rebuild — the composite on every frame. Excluding them keeps
+      // the composite cacheable for the whole gesture (rebuilds only at
+      // gesture start/stop).
+      //
+      // Resize and rotate were previously left out of this, which meant a
+      // group resize rebuilt the full-resolution composite of every
+      // unselected design on every frame while a group drag rebuilt it
+      // twice for the entire gesture. The exclusion is purely about which
+      // canvas the companions are drawn onto; the ghost alpha below is a
+      // separate, drag-only visual treatment.
+      const groupTransforming = isMultiResizeRef.current || isMultiRotateRef.current;
+      const movingExcluded = (isDraggingRef.current || isMultiDragRef.current || groupTransforming) && selectedDesignIds.size > 1
         ? selectedDesignIds
         : null;
       let staticSignatureBody = '';
@@ -3057,10 +3301,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       // below because its transform mutates via `transformRef` on every
       // drag frame). If unchanged, we blit the cached bitmap in a single
       // drawImage call.
-      // `mv` + multi-selection key participate in the signature because the
-      // ghost-alpha treatment below changes how multi-selected designs are
-      // drawn into the composite; drag start/stop must invalidate it.
-      const signature = `${canvasWidth}x${canvasHeight}|${previewBgColor}|${artboardWidth}x${artboardHeight}|sel:${selectedDesignId ?? '-'}|mv:${isMoving ? 1 : 0}|msel:${multiSelectionKey}|${staticSignatureBody}`;
+      // `mv` (build scale + ghost alpha), `gx` (whether multi-selected
+      // companions are baked in at all) and the multi-selection key all
+      // participate in the signature, so starting or ending a group gesture
+      // invalidates the cache and forces one clean rebuild.
+      const signature = `${canvasWidth}x${canvasHeight}|${previewBgColor}|${artboardWidth}x${artboardHeight}|sel:${selectedDesignId ?? '-'}|mv:${isMoving ? 1 : 0}|gx:${movingExcluded ? 1 : 0}|msel:${multiSelectionKey}|${staticSignatureBody}`;
 
       const cached = staticCompositeRef.current;
       if (cached && cached.signature === signature) {
@@ -3098,17 +3343,23 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         }
       }
 
-      // Ghost effect: while dragging, multi-selected companions render
-      // per-frame on top of the cached composite, semi-transparent so the
-      // user can see where they're landing. Preview-only — exports untouched.
+      // Multi-selected companions render per-frame on top of the cached
+      // composite. While *dragging* they are semi-transparent so the user can
+      // see where they are landing. A group resize or rotate deliberately
+      // keeps them fully opaque at full smoothing quality: the customer is
+      // judging size and fit against the sheet, so fidelity matters more than
+      // the ghost cue there. Preview-only — exports untouched.
       if (movingExcluded) {
-        ctx.globalAlpha = 0.77;
+        const prevQuality = ctx.imageSmoothingQuality;
+        if (isMoving) ctx.globalAlpha = 0.77;
+        else ctx.imageSmoothingQuality = 'high';
         for (const design of designs) {
           if (design.id === selectedDesignId) continue;
           if (!movingExcluded.has(design.id)) continue;
           drawSingleDesign(ctx, design, canvasWidth, canvasHeight);
         }
         ctx.globalAlpha = 1;
+        ctx.imageSmoothingQuality = prevQuality;
       }
 
       function drawStaticSceneInto(dctx: CanvasRenderingContext2D, cw: number, ch: number) {
@@ -3249,31 +3500,25 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           ctx.setLineDash([]);
           ctx.restore();
 
-          // Resize handles at corners (br is 2x on mobile for easier touch)
-          const handleScale = getLowZoomHandleScale(z);
+          // Resize handles at corners — all four the same size.
+          const zHandles = Math.max(ZOOM_MIN_ABSOLUTE, zoomRef.current);
           const actualDpi = canvasWidth / Math.max(1, previewDims.width);
+          const bufferPerCss = actualDpi / zHandles;
           const groupMin = Math.min(groupBBox.width, groupBBox.height);
-          const cappedGroupPx = Math.min(
-            10 * actualDpi / z,
-            Math.max(groupMin * 0.15, actualDpi * 2),
-          );
-          const handleR = cappedGroupPx * handleScale;
-          const brHandleR = isMobile ? handleR * 2 : handleR;
+          const handleR = getHandleHalfCssPx(groupMin / bufferPerCss, zHandles, isMobile, 0.15) * bufferPerCss;
           const groupHandles = [
             { x: groupBBox.x, y: groupBBox.y },
             { x: groupBBox.x + groupBBox.width, y: groupBBox.y },
             { x: groupBBox.x + groupBBox.width, y: groupBBox.y + groupBBox.height },
             { x: groupBBox.x, y: groupBBox.y + groupBBox.height },
           ];
-          for (let i = 0; i < groupHandles.length; i++) {
-            const gh = groupHandles[i];
-            const r = i === 2 ? brHandleR : handleR;
+          for (const gh of groupHandles) {
             ctx.save();
             ctx.fillStyle = '#ffffff';
             ctx.strokeStyle = '#22d3ee';
             ctx.lineWidth = 1.5 * inv;
             ctx.beginPath();
-            ctx.arc(gh.x, gh.y, r, 0, Math.PI * 2);
+            ctx.arc(gh.x, gh.y, handleR, 0, Math.PI * 2);
             ctx.fill();
             ctx.stroke();
             ctx.restore();
@@ -3317,7 +3562,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       };
       renderRef.current = doRender;
       doRender();
-    }, [imageInfo, resizeSettings, previewDims.height, previewDims.width, artboardWidth, artboardHeight, designTransform, designs, selectedDesignId, selectedDesignIds, drawSingleDesign, overlappingDesigns, previewBgColor, zoomDpiTier, isMobile]);
+    }, [imageInfo, resizeSettings, previewDims.height, previewDims.width, artboardWidth, artboardHeight, designTransform, designs, selectedDesignId, selectedDesignIds, drawSingleDesign, overlappingDesigns, previewBgColor, zoomDpiTier, isMobile, interactionEpoch]);
 
     const drawImageWithResizePreview = (ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number) => {
       if (!imageInfo) return;
@@ -3413,12 +3658,9 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const actualDpi = canvasBuf && dims.width > 0
         ? canvasBuf.width / dims.width
         : dpiScaleRef.current;
-      const targetHandlePx = 10 * actualDpi / z;
+      const zHandles = Math.max(ZOOM_MIN_ABSOLUTE, zoomRef.current);
+      const bufferPerCss = actualDpi / zHandles;
       const designMin = Math.min(rect.width, rect.height);
-      const cappedHandlePx = Math.min(
-        targetHandlePx,
-        Math.max(designMin * 0.25, actualDpi * 2),
-      );
 
       const corners = [
         { lx: -hw, ly: -hh },
@@ -3461,17 +3703,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         ctx.restore();
       }
 
-      const handleScale = getLowZoomHandleScale(z);
-      const handleSize = cappedHandlePx * handleScale;
-      const handleR = Math.max(1, handleSize * 0.30);
+      // All four corners are the same size; the bottom-right no longer doubles on touch.
+      const handleSize = getHandleHalfCssPx(designMin / bufferPerCss, zHandles, isMobile, 0.25) * bufferPerCss;
+      const r = Math.max(1, handleSize * 0.30);
       const borderW = 1.5 * inv;
-      const brHandleSize = isMobile ? handleSize * 2 : handleSize;
-      const brHandleR = isMobile ? handleR * 2 : handleR;
-      for (let i = 0; i < pts.length; i++) {
-        const p = pts[i];
-        const isBr = i === 2;
-        const sz = isBr ? brHandleSize : handleSize;
-        const r = isBr ? brHandleR : handleR;
+      for (const p of pts) {
         ctx.save();
         ctx.translate(p.x, p.y);
         ctx.rotate(rad);
@@ -3479,7 +3715,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         ctx.shadowBlur = 3 * inv;
         ctx.shadowOffsetY = 1 * inv;
         ctx.beginPath();
-        ctx.roundRect(-sz, -sz, sz * 2, sz * 2, r);
+        ctx.roundRect(-handleSize, -handleSize, handleSize * 2, handleSize * 2, r);
         ctx.fillStyle = '#ffffff';
         ctx.fill();
         ctx.shadowBlur = 0;
@@ -3670,11 +3906,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                   ref={canvasRef}
                   className="absolute z-10 block"
                   style={{
-                    left: 3,
-                    top: 3,
+                    left: PREVIEW_CANVAS_INSET,
+                    top: PREVIEW_CANVAS_INSET,
                     width: previewDims.width,
                     height: previewDims.height,
-                    border: '3px solid #ffffff',
+                    border: `${PREVIEW_CANVAS_BORDER}px solid #ffffff`,
                     outline: '2px solid #000000',
                     boxSizing: 'content-box',
                     pointerEvents: 'none',
@@ -3700,8 +3936,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                         aria-hidden="true"
                         className="absolute z-20 pointer-events-none block"
                         style={{
-                          left: 3 + detailRect.x,
-                          top: 3 + detailRect.y,
+                          left: PREVIEW_SURFACE_ORIGIN + detailRect.x,
+                          top: PREVIEW_SURFACE_ORIGIN + detailRect.y,
                           width: detailRect.width,
                           height: detailRect.height,
                           transformOrigin: 'center',

@@ -26,7 +26,7 @@ export function createVectorStroke(
   
   // Create canvas for vector-quality processing
   const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return canvas;
   
   // Use more reasonable scaling to prevent crashes
@@ -150,7 +150,7 @@ export function createVectorPaths(
 ): { paths: string[], bounds: { width: number; height: number } } {
   // Create a high-resolution canvas for path tracing
   const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return { paths: [], bounds: { width: 0, height: 0 } };
   
   const strokeWidth = strokeSettings.width;
@@ -506,7 +506,7 @@ function createMagentaCutContour(
   
   // Create a temporary canvas to analyze the image
   const tempCanvas = document.createElement('canvas');
-  const tempCtx = tempCanvas.getContext('2d');
+  const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
   if (!tempCtx) return canvas;
   
   const totalPixels = image.width * image.height;

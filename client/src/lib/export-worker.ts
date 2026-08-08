@@ -12,6 +12,9 @@ interface DesignExportData {
   sourceIndex?: number;
   imageBuffer?: ArrayBuffer;
   mimeType?: string;
+  // Content box within the source, in source pixels. Present when the source
+  // is an uncropped original (the oversized-raster import path).
+  sourceCrop?: { x: number; y: number; width: number; height: number };
   alphaThresholded?: boolean;
   printFileName?: boolean;
   name?: string;
@@ -143,22 +146,64 @@ function stripHasContent(designs: DesignExportBounds[], stripY: number, stripH: 
 // synthetic key when the caller sends inline buffers).
 type SourceBitmapCache = Map<string, ImageBitmap>;
 
+/**
+ * Decode a design's print source, cropped and scaled to the size it will
+ * actually occupy on the sheet.
+ *
+ * A design never needs more pixels than its placed size at the export DPI, so
+ * asking the codec for exactly that bounds peak memory by the sheet rather
+ * than by the upload: a 150 MP photo placed at 4"×3" decodes to 1200×900.
+ * It is also higher quality than decoding full-size and scaling afterwards,
+ * because the pixels are resampled once, inside the decoder.
+ *
+ * Downscale only. When the source is already smaller than the placement we
+ * decode it 1:1 and let the stamp canvas do the upscale, exactly as before.
+ */
 async function getSourceBitmap(
   d: DesignExportData,
   sources: ArrayBuffer[] | undefined,
   cache: SourceBitmapCache,
+  targetW?: number,
+  targetH?: number,
 ): Promise<ImageBitmap> {
   if (typeof createImageBitmap !== 'function') {
     throw new Error('This browser cannot decode images inside the export worker.');
   }
-  const key = designSourceKey(d);
+  const crop = d.sourceCrop;
+  const wantW = targetW && targetW > 0 ? Math.round(targetW) : 0;
+  const wantH = targetH && targetH > 0 ? Math.round(targetH) : 0;
+  const key = `${designSourceKey(d)}|${wantW}x${wantH}`;
   const cached = cache.get(key);
   if (cached) return cached;
+
   const buf = d.sourceIndex != null && sources ? sources[d.sourceIndex] : d.imageBuffer;
   if (!buf) throw new Error('Export design is missing image data.');
-  const bitmap = await createImageBitmap(
-    new Blob([buf], { type: d.mimeType || 'image/png' }),
-  );
+  const blob = new Blob([buf], { type: d.mimeType || 'image/png' });
+
+  const resizeQuality: ImageBitmapOptions['resizeQuality'] = d.alphaThresholded ? 'pixelated' : 'high';
+  const shouldResize =
+    wantW > 0 && wantH > 0 &&
+    (!crop || wantW < crop.width || wantH < crop.height);
+  const options: ImageBitmapOptions | undefined = shouldResize
+    ? { resizeWidth: wantW, resizeHeight: wantH, resizeQuality }
+    : undefined;
+
+  let bitmap: ImageBitmap;
+  if (crop) {
+    bitmap = await createImageBitmap(blob, crop.x, crop.y, crop.width, crop.height, options);
+  } else if (options) {
+    // Without a crop rect we only know the source size after a probe decode,
+    // so clamp the request to the natural size to avoid upscaling here.
+    const probe = await createImageBitmap(blob);
+    if (wantW >= probe.width && wantH >= probe.height) {
+      cache.set(key, probe);
+      return probe;
+    }
+    bitmap = await createImageBitmap(probe, 0, 0, probe.width, probe.height, options);
+    probe.close();
+  } else {
+    bitmap = await createImageBitmap(blob);
+  }
   cache.set(key, bitmap);
   return bitmap;
 }
@@ -258,7 +303,7 @@ async function drawDesignsOnStrip(
   for (const p of designs) {
     if (p.bottom < stripY || p.top > stripBottom) continue;
     const d = p.design;
-    const bitmap = await getSourceBitmap(d, sources, bitmapCache);
+    const bitmap = await getSourceBitmap(d, sources, bitmapCache, p.drawW, p.drawH);
     const { stamp, aabbW, aabbH } = await getOrBuildStamp(
       d, p, bitmap, exportDpi, stampCache, stampCacheState,
     );
@@ -591,8 +636,8 @@ async function runExportLegacy(input: ExportInput): Promise<Uint8Array> {
     throw new Error('This browser cannot decode images inside the export worker.');
   }
   for (const design of designs) {
-    const bitmap = await getSourceBitmap(design, sources, bitmapCache);
     const { drawW, drawH } = designDrawSize(design, exportDpi);
+    const bitmap = await getSourceBitmap(design, sources, bitmapCache, drawW, drawH);
     const centerX = design.nx * outW;
     const centerY = design.ny * outH;
 

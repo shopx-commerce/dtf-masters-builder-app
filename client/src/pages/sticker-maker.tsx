@@ -6,6 +6,7 @@ import { Link } from "wouter";
 import { ArrowLeft, Upload, X } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
 import LanguageToggle from "@/components/language-toggle";
+import { resolveShellTargetOrigin, resolveShellTopTargetOrigin } from "@/lib/shell-message";
 
 interface StickerMakerProps {
   profile?: ProfileConfig;
@@ -258,8 +259,9 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
     };
   }, [stateUrl, stateKey]);
 
-  // Dev-only: `?heights=12,24,36` on the test page simulates a storefront
-  // variant height list so height-expansion flows can be reproduced locally.
+  // Dev-only: test page simulates storefront height options so expansion /
+  // size-picker flows work without Shopify. Override with `?heights=12,24,36`.
+  const TEST_MODE_DEFAULT_HEIGHTS = [12, 18, 24, 36, 48, 60, 72, 84, 96, 120, 160, 240, 340];
   const devHeights = (import.meta.env.DEV && testMode)
     ? (rawParams["heights"] ?? "")
         .split(",")
@@ -270,7 +272,7 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
   const resolvedHeight = variantConfig?.configured ? variantConfig.selectedHeight : undefined;
   const resolvedHeights = variantConfig?.configured
     ? variantConfig.gangsheetHeights
-    : (devHeights.length > 0 ? devHeights : undefined);
+    : (devHeights.length > 0 ? devHeights : (testMode ? TEST_MODE_DEFAULT_HEIGHTS : undefined));
   const resolvedVariants = variantConfig?.configured ? variantConfig.variants : undefined;
   /** Wait for `/api/builder-context` before mounting the editor so artboard size isn’t briefly wrong (first variant / default). */
   const waitingForCtx = Boolean(ctxToken) && variantConfig === null;
@@ -311,14 +313,14 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
     /* Nested iframes: parent = app-proxy shell; theme script runs on the storefront (top). */
     try {
       if (window.top && window.top !== window) {
-        window.top.postMessage(payload, "*");
+        window.top.postMessage(payload, resolveShellTopTargetOrigin());
       }
     } catch {
       /* ignore */
     }
     try {
       if (window.parent && window.parent !== window) {
-        window.parent.postMessage(payload, "*");
+        window.parent.postMessage(payload, resolveShellTargetOrigin());
       }
     } catch {
       /* ignore */
