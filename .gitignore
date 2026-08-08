@@ -11,5 +11,11 @@ client/public/ort/
 # build plugin, so a fresh clone has to fetch them before the local WebGPU
 # upscaler can load — see docs/local-upscale.md.
 client/public/models/*.onnx
+# Upstream Real-ESRGAN weights, fetched rather than authored. tools/upscale-export
+# converts these to the .onnx above; see docs/local-upscale.md.
+*.pth
+__pycache__/
 # Scratch directories and files from debugging and verification harnesses.
 tmp-*
+tmp_*
+.cursor/*.log
