@@ -138,7 +138,7 @@ async function makeThumbnail(file: File): Promise<{ dataUrl: string; width: numb
     const canvas = document.createElement("canvas");
     canvas.width = tw;
     canvas.height = th;
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return null;
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
+import { isTrustedShellMessage, sanitizeShellUploadUrl } from "@/lib/shell-message";
+import { isTrustedCartStatus } from "@/lib/cart-submit-token";
 import {
   ADD_TO_CART_STALL_MIN_MS_NEW,
   ADD_TO_CART_STALL_MIN_MS_UPDATE,
@@ -56,8 +58,14 @@ export function useAddToCartStall({
   useEffect(() => {
     const onShellConfig = (e: MessageEvent) => {
       if (e.data?.type !== 'dtf-builder-shell-config') return;
+      if (!isTrustedShellMessage(e, 'shell-config')) return;
       if (typeof e.data.uploadUrl === 'string' && e.data.uploadUrl.trim()) {
-        shellUploadUrlRef.current = String(e.data.uploadUrl).trim();
+        // The endpoint receives the customer's full-resolution production file,
+        // so it is allow-listed even when the message itself looked genuine.
+        // Rejecting leaves the ref null, which routes the upload through the
+        // shell relay instead of an unknown host.
+        const safeUploadUrl = sanitizeShellUploadUrl(e.data.uploadUrl);
+        if (safeUploadUrl) shellUploadUrlRef.current = safeUploadUrl;
       }
     };
     window.addEventListener('message', onShellConfig);
@@ -67,6 +75,11 @@ export function useAddToCartStall({
   useEffect(() => {
     const onCartStatus = (e: MessageEvent) => {
       if (e.data?.type !== 'dtf-builder-cart-status') return;
+      if (!isTrustedShellMessage(e, 'cart-status')) return;
+      // Must belong to a submit this tab made, so a spoofed status cannot fake
+      // an "Added to cart" toast, drop the spinner mid-upload, or hold the
+      // stall watchdog open indefinitely.
+      if (!isTrustedCartStatus(e.data.requestId, e.data.status)) return;
       if (e.data.status === 'progress' || e.data.status === 'uploaded') {
         refreshAddToCartStallTimeout(lastAddToCartPngBytesRef.current || undefined);
       }

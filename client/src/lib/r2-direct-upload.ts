@@ -1,3 +1,5 @@
+import { isTrustedShellMessage, resolveShellTargetOrigin } from "./shell-message";
+
 type UploadJson = Record<string, unknown>;
 export type R2UploadBody = Blob | ArrayBuffer | Uint8Array;
 
@@ -62,6 +64,10 @@ function waitForShellMessage<T>(
     const onMessage = (e: MessageEvent) => {
       const data = e.data as Record<string, unknown> | null;
       if (!data || data.type !== responseType || String(data.requestId || "") !== requestId) return;
+      // The requestId already stops unrelated windows from resolving this wait;
+      // the origin check stops one that can observe the outgoing relay request
+      // from answering it with signed URLs of its own choosing.
+      if (!isTrustedShellMessage(e, `relay:${responseType}`)) return;
       window.removeEventListener("message", onMessage);
       window.clearTimeout(timer);
       const err = typeof data.error === "string" ? data.error.trim() : "";
@@ -100,7 +106,7 @@ async function prepareViaShellRelay(
       ...(options.productionFormat ? { productionFormat: options.productionFormat } : {}),
       ...(options.objectKey ? { objectKey: options.objectKey } : {}),
     },
-    "*",
+    resolveShellTargetOrigin(),
   );
   try {
     return await wait;
@@ -136,7 +142,7 @@ async function completeViaShellRelay(
       totalParts,
       ...(uploadedParts?.length ? { parts: uploadedParts } : {}),
     },
-    "*",
+    resolveShellTargetOrigin(),
   );
   return wait;
 }

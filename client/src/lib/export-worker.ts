@@ -1,3 +1,5 @@
+import { SAFARI_MAX_CANVAS_AREA } from "./image-budget";
+
 interface DesignExportData {
   widthInches: number;
   heightInches: number;
@@ -12,6 +14,9 @@ interface DesignExportData {
   sourceIndex?: number;
   imageBuffer?: ArrayBuffer;
   mimeType?: string;
+  // Content box within the source, in source pixels. Present when the source
+  // is an uncropped original (the oversized-raster import path).
+  sourceCrop?: { x: number; y: number; width: number; height: number };
   alphaThresholded?: boolean;
   printFileName?: boolean;
   name?: string;
@@ -66,7 +71,32 @@ function makeStampKey(d: DesignExportData, drawW: number, drawH: number): string
 // Keep temporary export canvases bounded for tall sheets. This only changes
 // internal batching; output dimensions, DPI, placement, and pixel quality are
 // unchanged.
-const STRIP_HEIGHT = 4096;
+const MAX_STRIP_HEIGHT = 4096;
+
+/**
+ * Floor on the strip height, so a pathological sheet width cannot reduce this
+ * to a handful of rows and spend all its time on per-strip overhead.
+ */
+const MIN_STRIP_HEIGHT = 256;
+
+/**
+ * How tall a strip may be for a sheet of this width.
+ *
+ * Strips bound the height of the temporary canvas, but nothing bounded its
+ * width, which is the full sheet at export DPI. At a fixed 4096 that made the
+ * area *worse* the wider the sheet: a 22 inch sheet at 300 DPI is 6600 px
+ * across, so the strip was 27 MP against Safari's 16.8 MP ceiling — over the
+ * limit for every sheet width sold, and only ever safe below 13.65 inches.
+ *
+ * Deriving the height from the width holds the area under the cap instead:
+ * 2542 rows at 22 inches, 2282 at 24.5, and the full 4096 for anything narrow
+ * enough to afford it. Output is unaffected — strips are tiles of the same
+ * render, so this changes only how many passes it takes.
+ */
+function stripHeightFor(outW: number): number {
+  const byArea = Math.floor(SAFARI_MAX_CANVAS_AREA / Math.max(1, outW));
+  return Math.max(MIN_STRIP_HEIGHT, Math.min(MAX_STRIP_HEIGHT, byArea));
+}
 const BATCH_ROWS = 1024;
 const MAX_IDAT_BYTES = 2 * 1024 * 1024;
 
@@ -143,22 +173,64 @@ function stripHasContent(designs: DesignExportBounds[], stripY: number, stripH: 
 // synthetic key when the caller sends inline buffers).
 type SourceBitmapCache = Map<string, ImageBitmap>;
 
+/**
+ * Decode a design's print source, cropped and scaled to the size it will
+ * actually occupy on the sheet.
+ *
+ * A design never needs more pixels than its placed size at the export DPI, so
+ * asking the codec for exactly that bounds peak memory by the sheet rather
+ * than by the upload: a 150 MP photo placed at 4"×3" decodes to 1200×900.
+ * It is also higher quality than decoding full-size and scaling afterwards,
+ * because the pixels are resampled once, inside the decoder.
+ *
+ * Downscale only. When the source is already smaller than the placement we
+ * decode it 1:1 and let the stamp canvas do the upscale, exactly as before.
+ */
 async function getSourceBitmap(
   d: DesignExportData,
   sources: ArrayBuffer[] | undefined,
   cache: SourceBitmapCache,
+  targetW?: number,
+  targetH?: number,
 ): Promise<ImageBitmap> {
   if (typeof createImageBitmap !== 'function') {
     throw new Error('This browser cannot decode images inside the export worker.');
   }
-  const key = designSourceKey(d);
+  const crop = d.sourceCrop;
+  const wantW = targetW && targetW > 0 ? Math.round(targetW) : 0;
+  const wantH = targetH && targetH > 0 ? Math.round(targetH) : 0;
+  const key = `${designSourceKey(d)}|${wantW}x${wantH}`;
   const cached = cache.get(key);
   if (cached) return cached;
+
   const buf = d.sourceIndex != null && sources ? sources[d.sourceIndex] : d.imageBuffer;
   if (!buf) throw new Error('Export design is missing image data.');
-  const bitmap = await createImageBitmap(
-    new Blob([buf], { type: d.mimeType || 'image/png' }),
-  );
+  const blob = new Blob([buf], { type: d.mimeType || 'image/png' });
+
+  const resizeQuality: ImageBitmapOptions['resizeQuality'] = d.alphaThresholded ? 'pixelated' : 'high';
+  const shouldResize =
+    wantW > 0 && wantH > 0 &&
+    (!crop || wantW < crop.width || wantH < crop.height);
+  const options: ImageBitmapOptions | undefined = shouldResize
+    ? { resizeWidth: wantW, resizeHeight: wantH, resizeQuality }
+    : undefined;
+
+  let bitmap: ImageBitmap;
+  if (crop) {
+    bitmap = await createImageBitmap(blob, crop.x, crop.y, crop.width, crop.height, options);
+  } else if (options) {
+    // Without a crop rect we only know the source size after a probe decode,
+    // so clamp the request to the natural size to avoid upscaling here.
+    const probe = await createImageBitmap(blob);
+    if (wantW >= probe.width && wantH >= probe.height) {
+      cache.set(key, probe);
+      return probe;
+    }
+    bitmap = await createImageBitmap(probe, 0, 0, probe.width, probe.height, options);
+    probe.close();
+  } else {
+    bitmap = await createImageBitmap(blob);
+  }
   cache.set(key, bitmap);
   return bitmap;
 }
@@ -258,7 +330,7 @@ async function drawDesignsOnStrip(
   for (const p of designs) {
     if (p.bottom < stripY || p.top > stripBottom) continue;
     const d = p.design;
-    const bitmap = await getSourceBitmap(d, sources, bitmapCache);
+    const bitmap = await getSourceBitmap(d, sources, bitmapCache, p.drawW, p.drawH);
     const { stamp, aabbW, aabbH } = await getOrBuildStamp(
       d, p, bitmap, exportDpi, stampCache, stampCacheState,
     );
@@ -474,11 +546,12 @@ async function buildPngStreaming(input: ExportInput): Promise<Uint8Array> {
 
   let stripCanvas: OffscreenCanvas | null = null;
   let stripCtx: OffscreenCanvasRenderingContext2D | null = null;
-  const totalStrips = Math.max(1, Math.ceil(outH / STRIP_HEIGHT));
+  const stripHeight = stripHeightFor(outW);
+  const totalStrips = Math.max(1, Math.ceil(outH / stripHeight));
   let completedStrips = 0;
 
-  for (let stripY = 0; stripY < outH; stripY += STRIP_HEIGHT) {
-    const stripH = Math.min(STRIP_HEIGHT, outH - stripY);
+  for (let stripY = 0; stripY < outH; stripY += stripHeight) {
+    const stripH = Math.min(stripHeight, outH - stripY);
 
     if (!stripHasContent(designBounds, stripY, stripH)) {
       await writeEmptyRows(writer, outW, stripH, emptyRow, filteredRowLen);
@@ -591,8 +664,8 @@ async function runExportLegacy(input: ExportInput): Promise<Uint8Array> {
     throw new Error('This browser cannot decode images inside the export worker.');
   }
   for (const design of designs) {
-    const bitmap = await getSourceBitmap(design, sources, bitmapCache);
     const { drawW, drawH } = designDrawSize(design, exportDpi);
+    const bitmap = await getSourceBitmap(design, sources, bitmapCache, drawW, drawH);
     const centerX = design.nx * outW;
     const centerY = design.ny * outH;
 

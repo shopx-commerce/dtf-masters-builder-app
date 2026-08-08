@@ -886,7 +886,11 @@ function ControlsSection({
                     ? (exportProgressLabel || t("editor.processing"))
                       : (addToCartLabel || t("controls.addToCart"))
               }
-              className="flex-1 h-10 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white rounded-lg shadow-lg shadow-emerald-500/25 font-medium disabled:opacity-50"
+              /* 44px on the phone: this bar is `position: fixed` inside a 64px
+                 reserve, so the extra 4px costs no canvas. Keyed to `isMobile`
+                 rather than `coarse:` because an iPad renders this bar inline
+                 and its layout has to stay put. */
+              className={`flex-1 ${isMobile ? "h-11" : "h-10"} bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white rounded-lg shadow-lg shadow-emerald-500/25 font-medium disabled:opacity-50`}
             >
               {isAddingToCart ? (
                 <>
@@ -910,7 +914,7 @@ function ControlsSection({
               onClick={handleDownloadClick}
               disabled={isProcessing || !canDownload}
               title={dlTitle}
-              className="flex-1 h-10 bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 text-white rounded-lg shadow-lg shadow-cyan-500/25 font-medium disabled:opacity-50"
+              className={`flex-1 ${isMobile ? "h-11" : "h-10"} bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 text-white rounded-lg shadow-lg shadow-cyan-500/25 font-medium disabled:opacity-50`}
             >
               {isProcessing ? (
                 <>

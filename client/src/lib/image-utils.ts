@@ -46,7 +46,7 @@ export async function downloadCanvas(
 ) {
   // Create a high-resolution canvas for export
   const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('Failed to get canvas context');
 
   // Calculate output dimensions based on shape settings
@@ -259,7 +259,7 @@ async function drawHighResImage(
     
     // Create temporary canvas for high-quality stroke processing
     const tempCanvas = document.createElement('canvas');
-    const tempCtx = tempCanvas.getContext('2d');
+    const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
     if (!tempCtx) return;
     
     // Set size with padding for stroke

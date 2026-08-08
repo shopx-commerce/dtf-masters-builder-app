@@ -6,7 +6,8 @@ interface OverlapRequest {
     top: number;
     right: number;
     bottom: number;
-    imgBitmap: ImageBitmap;
+    /** Index into `bitmaps`, or -1 for a design that has none. */
+    bitmapIndex: number;
     drawX: number;
     drawY: number;
     drawW: number;
@@ -16,12 +17,25 @@ interface OverlapRequest {
     cy: number;
     stampExtraH?: number;
   }>;
+  /**
+   * Decoded artwork, already scaled to the footprint it is drawn at, shared by
+   * every design that uses it. Copies of one design are the common case on a
+   * gang sheet, and a transferred bitmap can only be handed over once.
+   */
+  bitmaps: ImageBitmap[];
   sw: number;
   sh: number;
 }
 
 self.onmessage = (e: MessageEvent<OverlapRequest>) => {
   const designs = e.data?.designs;
+  // Bitmaps are shared between designs, so releasing them is a job for this
+  // list rather than for the design loop — closing per design would close the
+  // same bitmap several times and skip any that no design ended up using.
+  const bitmaps = e.data?.bitmaps ?? [];
+  const closeAll = () => {
+    for (const b of bitmaps) { try { b.close(); } catch { /* already closed */ } }
+  };
   try {
   if (e.data.type !== 'check') return;
   const { sw, sh } = e.data;
@@ -34,7 +48,7 @@ self.onmessage = (e: MessageEvent<OverlapRequest>) => {
   }
 
   if (designs.length < 2) {
-    for (const d of designs) { try { d.imgBitmap?.close(); } catch {} }
+    closeAll();
     (self as unknown as Worker).postMessage({ type: 'result', overlapping: Array.from(outOfBounds) });
     return;
   }
@@ -50,7 +64,7 @@ self.onmessage = (e: MessageEvent<OverlapRequest>) => {
   }
 
   if (aabbPairs.length === 0) {
-    for (const d of designs) { try { d.imgBitmap?.close(); } catch {} }
+    closeAll();
     (self as unknown as Worker).postMessage({ type: 'result', overlapping: Array.from(outOfBounds) });
     return;
   }
@@ -62,7 +76,8 @@ self.onmessage = (e: MessageEvent<OverlapRequest>) => {
     d: OverlapRequest['designs'][0],
     rx: number, ry: number, rw: number, rh: number,
   ): Uint8Array | null => {
-    if (!d.imgBitmap || rw < 1 || rh < 1) return null;
+    const bitmap = bitmaps[d.bitmapIndex];
+    if (!bitmap || rw < 1 || rh < 1) return null;
     try {
       const oc = new OffscreenCanvas(rw, rh);
       const ctx = oc.getContext('2d');
@@ -71,7 +86,7 @@ self.onmessage = (e: MessageEvent<OverlapRequest>) => {
       ctx.translate(-rx, -ry);
       ctx.translate(d.cx, d.cy);
       ctx.rotate((d.rotation * Math.PI) / 180);
-      ctx.drawImage(d.imgBitmap, -d.drawW / 2, -d.drawH / 2, d.drawW, d.drawH);
+      ctx.drawImage(bitmap, -d.drawW / 2, -d.drawH / 2, d.drawW, d.drawH);
       if (d.stampExtraH && d.stampExtraH > 0) {
         ctx.fillStyle = 'rgba(0,0,0,1)';
         ctx.fillRect(-d.drawW / 2, d.drawH / 2, d.drawW, d.stampExtraH);
@@ -90,6 +105,12 @@ self.onmessage = (e: MessageEvent<OverlapRequest>) => {
 
   for (const [i, j] of aabbPairs) {
     const a = designs[i], b = designs[j];
+    // Both already flagged, so the pixel test cannot change the answer — the result
+    // is a set of ids, and re-adding either is a no-op. On a crowded sheet, where most
+    // designs touch something, this skips the bulk of the rasterisation: each test
+    // costs two OffscreenCanvas draws plus two getImageData reads.
+    if (overlapping.has(a.id) && overlapping.has(b.id)) continue;
+
     // Compute the intersection rectangle of the two AABBs
     const ix = Math.max(a.left, b.left);
     const iy = Math.max(a.top, b.top);
@@ -128,13 +149,11 @@ self.onmessage = (e: MessageEvent<OverlapRequest>) => {
     }
   }
 
-  for (const d of designs) {
-    if (d.imgBitmap) d.imgBitmap.close();
-  }
+  closeAll();
 
   (self as unknown as Worker).postMessage({ type: 'result', overlapping: Array.from(overlapping) });
   } catch (err) {
-    if (designs) for (const d of designs) { try { d.imgBitmap?.close(); } catch {} }
+    closeAll();
     (self as unknown as Worker).postMessage({ type: 'error', error: String(err) });
   }
 };

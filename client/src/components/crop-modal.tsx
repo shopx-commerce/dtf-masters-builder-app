@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
+import { hasVectorPrintSource } from "@/lib/vector-print-source";
 import type { ImageInfo } from "@/lib/types";
 
 interface CropModalProps {
@@ -18,6 +19,139 @@ function loadImageFromBlob(blob: Blob): Promise<HTMLImageElement> {
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Failed to load image")); };
     img.src = url;
   });
+}
+
+/** The crop box as a fraction of the preview it was drawn on, so it can be
+ *  reapplied to a print source of any resolution. */
+interface FractionalBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * Pixel dimensions of an encoded image without decoding it when we can avoid
+ * it. A PNG carries them in the IHDR at a fixed offset, and every print source
+ * this app produces itself is a PNG; anything else falls back to a decode.
+ */
+async function readEncodedSize(blob: Blob): Promise<{ w: number; h: number } | null> {
+  try {
+    const head = new Uint8Array(await blob.slice(0, 24).arrayBuffer());
+    if (head.length === 24 && head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47) {
+      const view = new DataView(head.buffer, head.byteOffset, head.byteLength);
+      const w = view.getUint32(16);
+      const h = view.getUint32(20);
+      if (w > 0 && h > 0) return { w, h };
+    }
+  } catch {
+    /* fall through to a decode */
+  }
+  if (typeof createImageBitmap !== "function") return null;
+  try {
+    const bitmap = await createImageBitmap(blob);
+    const size = { w: bitmap.width, h: bitmap.height };
+    bitmap.close();
+    return size.w > 0 && size.h > 0 ? size : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Moves the crop onto the design's existing `exportBlob` by narrowing
+ * `exportCrop`, in whole source pixels. Nothing is re-encoded, so the print
+ * source keeps every pixel it had inside the box the customer kept.
+ */
+async function composeExportCrop(
+  info: ImageInfo,
+  box: FractionalBox,
+): Promise<{ rect: NonNullable<ImageInfo["exportCrop"]>; baseWidth: number } | null> {
+  if (!info.exportBlob) return null;
+  let base = info.exportCrop;
+  if (!base) {
+    const size = await readEncodedSize(info.exportBlob);
+    if (!size) return null;
+    base = { x: 0, y: 0, width: size.w, height: size.h };
+  }
+  const x = Math.max(base.x, Math.min(base.x + base.width - 1, Math.round(base.x + box.x * base.width)));
+  const y = Math.max(base.y, Math.min(base.y + base.height - 1, Math.round(base.y + box.y * base.height)));
+  const width = Math.max(1, Math.min(base.x + base.width - x, Math.round(box.w * base.width)));
+  const height = Math.max(1, Math.min(base.y + base.height - y, Math.round(box.h * base.height)));
+  return { rect: { x, y, width, height }, baseWidth: base.width };
+}
+
+/**
+ * Carries the design's print source through the crop.
+ *
+ * Crop was the one editing tool that built a fresh `ImageInfo` and so dropped
+ * `exportBlob` / `exportCrop` / `svgSource` / `originalPdfData` /
+ * `vectorInkBox` on the floor. The customer's 300 DPI source was replaced by
+ * the 4096-capped preview the crop was taken from, and a PDF or SVG lost its
+ * geometry entirely — while `dpi` was carried over unchanged, so the badge kept
+ * quoting the resolution the design used to have.
+ *
+ * Both sources are cropped geometrically rather than re-rendered: a raster by
+ * narrowing `exportCrop`, a vector by composing the box into `vectorInkBox`,
+ * which is already a page fraction for exactly this reason. Neither costs a
+ * pixel of resolution, and neither needs the design's physical size.
+ */
+async function cropPrintSourceFields(
+  info: ImageInfo,
+  box: FractionalBox,
+  croppedPreviewBlob: Blob,
+): Promise<Partial<ImageInfo>> {
+  const isVector = hasVectorPrintSource(info);
+  // The preview already *is* the print source, so there is nothing to carry.
+  if (!isVector && !info.exportBlob) {
+    return { dpi: scaleDpi(info.dpi, box.w) };
+  }
+
+  const composed = await composeExportCrop(info, box);
+
+  if (isVector) {
+    const base = info.vectorInkBox ?? { x: 0, y: 0, w: 1, h: 1 };
+    return {
+      vectorInkBox: {
+        x: base.x + box.x * base.w,
+        y: base.y + box.y * base.h,
+        w: box.w * base.w,
+        h: box.h * base.h,
+      },
+      // `exportBlob` is only the fallback for a failed re-rasterise, but it has
+      // to frame the same artwork or that fallback prints the uncropped design.
+      ...(composed
+        ? { exportCrop: composed.rect }
+        : { exportBlob: croppedPreviewBlob, exportCrop: undefined }),
+    };
+  }
+
+  if (composed) {
+    return {
+      exportCrop: composed.rect,
+      dpi: scaleDpi(info.dpi, composed.rect.width / composed.baseWidth),
+    };
+  }
+
+  // The print source could not be measured, so it can no longer be trusted to
+  // frame the same artwork as the preview. Leaving it in place would print the
+  // uncropped design; the cropped preview becomes the print source instead.
+  console.warn("[crop-modal] could not measure the print source; using the cropped preview");
+  return {
+    exportBlob: croppedPreviewBlob,
+    exportCrop: undefined,
+    svgSource: undefined,
+    originalPdfData: undefined,
+    vectorInkBox: undefined,
+    isPDF: false,
+    dpi: scaleDpi(info.dpi, box.w),
+  };
+}
+
+/** DPI after the print source lost the same fraction of its pixels. */
+function scaleDpi(dpi: number, scale: number): number {
+  if (!(dpi > 0) || !(scale > 0)) return dpi;
+  return Math.max(1, Math.round(dpi * scale));
 }
 
 export default function CropModal({
@@ -190,32 +324,44 @@ export default function CropModal({
   }, [dragging, imgW, imgH, toImgCoords]);
 
   const handleApply = useCallback(async () => {
+    // Whole pixels, so the crop is a straight blit. Drawing a fractional source
+    // rect resamples every pixel through a bilinear filter, which softens the
+    // artwork and reintroduces the semi-transparent edges the alpha-threshold
+    // and halftone tools exist to remove.
+    const rx = Math.max(0, Math.min(imgW - 1, Math.round(crop.x)));
+    const ry = Math.max(0, Math.min(imgH - 1, Math.round(crop.y)));
+    const rw = Math.max(1, Math.min(imgW - rx, Math.round(crop.w)));
+    const rh = Math.max(1, Math.min(imgH - ry, Math.round(crop.h)));
+
     const canvas = document.createElement("canvas");
-    canvas.width = Math.round(crop.w);
-    canvas.height = Math.round(crop.h);
-    const ctx = canvas.getContext("2d");
+    canvas.width = rw;
+    canvas.height = rh;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return;
-    ctx.drawImage(
-      img,
-      crop.x, crop.y, crop.w, crop.h,
-      0, 0, crop.w, crop.h
-    );
+    ctx.drawImage(img, rx, ry, rw, rh, 0, 0, rw, rh);
     const blob = await new Promise<Blob | null>((res) =>
       canvas.toBlob((b) => res(b), "image/png")
     );
+    canvas.width = 0;
+    canvas.height = 0;
     if (!blob) return;
     const croppedImg = await loadImageFromBlob(blob);
     const file = new File([blob], imageInfo.file.name.replace(/\.[^/.]+$/, "") + "-cropped.png", { type: "image/png" });
+
+    const box: FractionalBox = { x: rx / imgW, y: ry / imgH, w: rw / imgW, h: rh / imgH };
+    const printSource = await cropPrintSourceFields(imageInfo, box, blob);
+
     const newInfo: ImageInfo = {
+      ...imageInfo,
       file,
       image: croppedImg,
       originalWidth: croppedImg.naturalWidth,
       originalHeight: croppedImg.naturalHeight,
-      dpi: imageInfo.dpi,
+      ...printSource,
     };
     onCrop(newInfo);
     onClose();
-  }, [crop, img, imageInfo, onCrop, onClose]);
+  }, [crop, img, imgW, imgH, imageInfo, onCrop, onClose]);
 
   if (!open) return null;
 

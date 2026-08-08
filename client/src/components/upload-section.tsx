@@ -4,7 +4,14 @@ import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/lib/i18n";
 import { useMetric } from "@/lib/format-length";
 import { runWithConcurrency, resolveUploadConcurrency } from "@/lib/upload-queue";
-import { checkPixelBudget, formatMegapixels, MAX_UPLOAD_MEGAPIXELS } from "@/lib/image-budget";
+import {
+  describeBudgetRejection,
+  importRasterForEditor,
+  type PreparedRaster,
+} from "@/lib/prepare-raster-upload";
+// From the module rather than the `image-editor` barrel: that barrel renders
+// the editor view, which imports this file, so a value import would be a cycle.
+import { injectPngDpi, readDeclaredDpi } from "./image-editor/utils";
 import type { ImageInfo, ResizeSettings } from "./image-editor";
 
 const ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'application/pdf', 'image/svg+xml', 'application/postscript', 'application/eps', 'application/x-eps'];
@@ -21,7 +28,11 @@ interface UploadSectionProps {
    *  file's processing to complete before starting the next. Callers may
    *  return `void` for legacy behaviour; the queue will treat that as
    *  "done immediately". */
-  onImageUpload: (file: File, image: HTMLImageElement | null) => void | Promise<void>;
+  onImageUpload: (
+    file: File,
+    image: HTMLImageElement | null,
+    opts?: { prepared?: PreparedRaster },
+  ) => void | Promise<void>;
   onBatchStart?: (fileCount: number) => void;
   imageInfo?: ImageInfo | null;
   resizeSettings?: ResizeSettings | null;
@@ -34,6 +45,23 @@ export default function UploadSection({ onImageUpload, onBatchStart, imageInfo, 
   const { t, lang } = useLanguage();
   const metric = useMetric(lang);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Preparing a large source is silent: print quality is unaffected either
+  // way, so there is nothing here worth interrupting the customer for. The
+  // solid-background warning below is different — it is actionable, and the
+  // inline path has always shown it.
+  const deliverPrepared = useCallback(async (prepared: PreparedRaster) => {
+    // Hand back the original file, not the preview: DPI metadata and the
+    // Uploads library both need the source the customer actually picked.
+    await onImageUpload(prepared.sourceBlob as File, prepared.previewImage, { prepared });
+    if (!prepared.hasTransparency) {
+      toast({
+        title: t("toast.solidBg"),
+        description: t("toast.solidBgDesc"),
+        variant: "warning",
+      });
+    }
+  }, [onImageUpload, toast, t]);
 
   const handleFileUpload = useCallback(async (file: File) => {
     const ext = file.name.toLowerCase();
@@ -58,94 +86,110 @@ export default function UploadSection({ onImageUpload, onBatchStart, imageInfo, 
       return;
     }
 
-    // Decode the raster metadata up front so we can enforce a megapixel
-    // budget *before* creating full-resolution canvases. iOS Safari caps
-    // a single canvas at 4096 × 4096 — above that `drawImage` silently
-    // no-ops and the user sees a black upload. A 200 MP scan can also
-    // crash the tab outright on any mobile browser.
-    await new Promise<void>((resolve) => {
-      const img = new Image();
-      img.decoding = "async";
-      const originalUrl = URL.createObjectURL(file);
-      img.onload = () => {
-        URL.revokeObjectURL(originalUrl);
+    try {
+      await importRasterForEditor(file, {
+        onPrepared: deliverPrepared,
+        onInline: async (rasterFile, img) => {
+          // Cheap transparency probe on a 512 px thumbnail. Bounded so this
+          // never allocates more than ~1 MB even when the source is huge.
+          const c = document.createElement('canvas');
+          c.width = Math.min(img.width, 512);
+          c.height = Math.min(img.height, 512);
+          const ctx = c.getContext('2d', { willReadFrequently: true });
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, c.width, c.height);
+            const { data } = ctx.getImageData(0, 0, c.width, c.height);
+            let hasTransparency = false;
+            for (let i = 3; i < data.length; i += 16) {
+              if (data[i] < 250) { hasTransparency = true; break; }
+            }
+            if (!hasTransparency) {
+              toast({
+                title: t("toast.solidBg"),
+                description: t("toast.solidBgDesc"),
+                variant: "warning",
+              });
+            }
+          }
+          c.width = 0; c.height = 0;
 
-        const budget = checkPixelBudget(img.naturalWidth || img.width, img.naturalHeight || img.height);
-        if (!budget.ok) {
+          const isPng = rasterFile.type === 'image/png' || rasterFile.name.toLowerCase().endsWith('.png');
+          if (!isPng) {
+            // A canvas PNG carries no pHYs chunk, so re-encoding here destroys
+            // whatever resolution the original container declared — and every
+            // reader downstream (the model's DPI resolve, the uploads library,
+            // /api/image-info) only ever sees the converted file. So read the
+            // declaration off the original bytes first and stamp it into the
+            // PNG, which keeps the file self-describing instead of correct at
+            // one call site. A 1024 px JPEG declaring 300 DPI is 3.41" of
+            // artwork; without this it lands as 14.22" at 72 DPI.
+            const declared = await readDeclaredDpi(rasterFile);
+
+            const cvs = document.createElement('canvas');
+            cvs.width = img.width;
+            cvs.height = img.height;
+            const cctx = cvs.getContext('2d', { willReadFrequently: true });
+            if (!cctx) {
+              await onImageUpload(rasterFile, img);
+              return;
+            }
+            cctx.drawImage(img, 0, 0);
+            const rawBlob = await new Promise<Blob | null>((resolve) => cvs.toBlob(resolve, 'image/png'));
+            cvs.width = 0; cvs.height = 0;
+            if (!rawBlob) {
+              await onImageUpload(rasterFile, img);
+              return;
+            }
+            // Only stamp what the file actually declared. A source that declared
+            // nothing must stay undeclared: the model tells "declared 72" from
+            // "declared nothing" and defaults them differently, and inventing a
+            // number here would erase that distinction permanently.
+            const blob = declared.dpi != null
+              ? await injectPngDpi(rawBlob, declared.dpi).catch(() => rawBlob)
+              : rawBlob;
+            const pngFile = new File([blob], rasterFile.name.replace(/\.\w+$/, '.png'), { type: 'image/png' });
+            const pngImg = await new Promise<HTMLImageElement>((resolve, reject) => {
+              const pi = new Image();
+              pi.decoding = "async";
+              const u = URL.createObjectURL(blob);
+              pi.onload = () => { URL.revokeObjectURL(u); resolve(pi); };
+              pi.onerror = () => { URL.revokeObjectURL(u); reject(new Error("PNG convert failed")); };
+              pi.src = u;
+            }).catch(async () => {
+              await onImageUpload(rasterFile, img);
+              return null;
+            });
+            if (!pngImg) return;
+            await onImageUpload(pngFile, pngImg);
+            return;
+          }
+          await onImageUpload(rasterFile, img);
+        },
+        onReject: (reason, megapixels) => {
+          if (reason === "unreadable_dimensions") {
+            toast({ title: t("toast.invalidImage"), description: t("toast.invalidImageDesc"), variant: "destructive" });
+            return;
+          }
+          const { sizeLabel, maxLabel } = describeBudgetRejection(reason, megapixels, file.size);
           toast({
             title: t("toast.imageTooLarge"),
-            description: t("toast.imageTooLargeDesc", {
-              size: formatMegapixels(budget.megapixels),
-              max: `${MAX_UPLOAD_MEGAPIXELS} MP`,
-            }),
+            description: t("toast.imageTooLargeDesc", { size: sizeLabel, max: maxLabel }),
             variant: "destructive",
           });
-          resolve();
-          return;
-        }
-
-        // Cheap transparency probe on a 512 px thumbnail. Bounded so this
-        // never allocates more than ~1 MB even when the source is huge.
-        const c = document.createElement('canvas');
-        c.width = Math.min(img.width, 512);
-        c.height = Math.min(img.height, 512);
-        const ctx = c.getContext('2d', { willReadFrequently: true });
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, c.width, c.height);
-          const { data } = ctx.getImageData(0, 0, c.width, c.height);
-          let hasTransparency = false;
-          for (let i = 3; i < data.length; i += 16) {
-            if (data[i] < 250) { hasTransparency = true; break; }
-          }
-          if (!hasTransparency) {
-            toast({
-              title: t("toast.solidBg"),
-              description: t("toast.solidBgDesc"),
-              variant: "warning",
-            });
-          }
-        }
-        // Explicit zero-size to free the thumbnail canvas before the
-        // (potentially much larger) full-res conversion below.
-        c.width = 0; c.height = 0;
-
-        const isPng = file.type === 'image/png' || ext.endsWith('.png');
-        if (!isPng) {
-          const cvs = document.createElement('canvas');
-          cvs.width = img.width;
-          cvs.height = img.height;
-          const cctx = cvs.getContext('2d');
-          if (!cctx) { void Promise.resolve(onImageUpload(file, img)).finally(resolve); return; }
-          cctx.drawImage(img, 0, 0);
-          cvs.toBlob((blob) => {
-            cvs.width = 0; cvs.height = 0;
-            if (!blob) { void Promise.resolve(onImageUpload(file, img)).finally(resolve); return; }
-            const pngFile = new File([blob], file.name.replace(/\.\w+$/, '.png'), { type: 'image/png' });
-            const pngImg = new Image();
-            pngImg.decoding = "async";
-            const u = URL.createObjectURL(blob);
-            pngImg.onload = () => {
-              URL.revokeObjectURL(u);
-              void Promise.resolve(onImageUpload(pngFile, pngImg)).finally(resolve);
-            };
-            pngImg.onerror = () => {
-              URL.revokeObjectURL(u);
-              void Promise.resolve(onImageUpload(file, img)).finally(resolve);
-            };
-            pngImg.src = u;
-          }, 'image/png');
-        } else {
-          void Promise.resolve(onImageUpload(file, img)).finally(resolve);
-        }
-      };
-      img.onerror = () => {
-        URL.revokeObjectURL(originalUrl);
-        toast({ title: t("toast.failedLoad"), description: t("toast.failedLoadDesc"), variant: "destructive" });
-        resolve();
-      };
-      img.src = originalUrl;
-    });
-  }, [onImageUpload, toast, t]);
+        },
+        onPrepareError: (error) => {
+          console.error("[upload] prepare failed:", error);
+        },
+      });
+    } catch (err) {
+      console.error("[upload] raster import failed:", err);
+      toast({
+        title: t("toast.uploadFailed"),
+        description: err instanceof Error ? err.message : t("toast.uploadFailedDesc"),
+        variant: "destructive",
+      });
+    }
+  }, [onImageUpload, deliverPrepared, toast, t]);
 
   const processBatch = useCallback(async (files: File[]) => {
     if (files.length > 1) onBatchStart?.(files.length);

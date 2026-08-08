@@ -1,3 +1,14 @@
+/**
+ * Edge flood-fill background removal.
+ *
+ * All bookkeeping uses typed arrays indexed by pixel position rather than
+ * `Set<number>`. A `Set` throws "Set maximum size exceeded" past roughly 16.7
+ * million entries, so the previous implementation could not process anything
+ * above ~16 MP — which is every 300 DPI design larger than about 13 inches
+ * square. Flag arrays cost one byte per pixel, have no such ceiling, and are
+ * substantially faster at the preview sizes too.
+ */
+
 function isWhitePixel(data: Uint8ClampedArray, index: number, thresholdValue: number): boolean {
   const r = data[index];
   const g = data[index + 1];
@@ -26,142 +37,157 @@ function shouldRemoveBlackPixel(data: Uint8ClampedArray, index: number, threshol
   return Math.max(data[index], data[index + 1], data[index + 2]) <= thresholdValue;
 }
 
+/** Growable Int32 stack of pixel positions. */
+class PosQueue {
+  private buf: Int32Array;
+  private len = 0;
+  private head = 0;
+
+  constructor(initial = 1 << 14) {
+    this.buf = new Int32Array(initial);
+  }
+
+  push(pos: number): void {
+    if (this.len === this.buf.length) {
+      const next = new Int32Array(this.buf.length * 2);
+      next.set(this.buf);
+      this.buf = next;
+    }
+    this.buf[this.len++] = pos;
+  }
+
+  shift(): number {
+    return this.buf[this.head++];
+  }
+
+  get pending(): boolean {
+    return this.head < this.len;
+  }
+}
+
+/**
+ * Marks every background pixel reachable from the border in `removed`.
+ *
+ * Alpha is deliberately not written here: `isWhitePixel` treats a nearly
+ * transparent pixel as background, so zeroing alpha mid-traversal would let the
+ * fill bleed through the artwork. The caller applies the flags afterwards.
+ */
 function floodFillFromEdges(
   data: Uint8ClampedArray,
   width: number,
   height: number,
   thresholdValue: number,
-  mode: 'white' | 'black' = 'white'
-): Set<number> {
+  mode: 'white' | 'black',
+  removed: Uint8Array,
+): void {
   const isBackground = mode === 'black' ? isBlackPixel : isWhitePixel;
   const shouldRemove = mode === 'black' ? shouldRemoveBlackPixel : shouldRemovePixel;
-  const toRemove = new Set<number>();
-  const visited = new Set<number>();
-  const queue: number[] = [];
-  const getIndex = (x: number, y: number) => (y * width + x) * 4;
+  const visited = new Uint8Array(width * height);
+  const queue = new PosQueue();
+
+  const seed = (pos: number) => {
+    if (visited[pos]) return;
+    if (!isBackground(data, pos * 4, thresholdValue)) return;
+    visited[pos] = 1;
+    queue.push(pos);
+  };
 
   for (let x = 0; x < width; x++) {
-    const topIndex = getIndex(x, 0);
-    if (isBackground(data, topIndex, thresholdValue) && !visited.has(topIndex)) {
-      queue.push(topIndex);
-      visited.add(topIndex);
-    }
-    const bottomIndex = getIndex(x, height - 1);
-    if (isBackground(data, bottomIndex, thresholdValue) && !visited.has(bottomIndex)) {
-      queue.push(bottomIndex);
-      visited.add(bottomIndex);
-    }
+    seed(x);
+    seed((height - 1) * width + x);
   }
   for (let y = 0; y < height; y++) {
-    const leftIndex = getIndex(0, y);
-    if (isBackground(data, leftIndex, thresholdValue) && !visited.has(leftIndex)) {
-      queue.push(leftIndex);
-      visited.add(leftIndex);
-    }
-    const rightIndex = getIndex(width - 1, y);
-    if (isBackground(data, rightIndex, thresholdValue) && !visited.has(rightIndex)) {
-      queue.push(rightIndex);
-      visited.add(rightIndex);
-    }
+    seed(y * width);
+    seed(y * width + width - 1);
   }
 
-  let queueIndex = 0;
-  while (queueIndex < queue.length) {
-    const currentIndex = queue[queueIndex++];
-    if (shouldRemove(data, currentIndex, thresholdValue)) {
-      toRemove.add(currentIndex);
-    }
-    const pixelPos = currentIndex / 4;
-    const x = pixelPos % width;
-    const y = Math.floor(pixelPos / width);
-    const neighbors = [
-      { nx: x, ny: y - 1 },
-      { nx: x, ny: y + 1 },
-      { nx: x - 1, ny: y },
-      { nx: x + 1, ny: y },
-    ];
-    for (const { nx, ny } of neighbors) {
-      if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
-      const neighborIndex = getIndex(nx, ny);
-      if (visited.has(neighborIndex)) continue;
-      visited.add(neighborIndex);
-      if (isBackground(data, neighborIndex, thresholdValue)) {
-        queue.push(neighborIndex);
-      }
-    }
+  while (queue.pending) {
+    const pos = queue.shift();
+    if (shouldRemove(data, pos * 4, thresholdValue)) removed[pos] = 1;
+
+    const x = pos % width;
+    const y = (pos - x) / width;
+
+    if (y > 0) { const n = pos - width; if (!visited[n]) { visited[n] = 1; if (isBackground(data, n * 4, thresholdValue)) queue.push(n); } }
+    if (y < height - 1) { const n = pos + width; if (!visited[n]) { visited[n] = 1; if (isBackground(data, n * 4, thresholdValue)) queue.push(n); } }
+    if (x > 0) { const n = pos - 1; if (!visited[n]) { visited[n] = 1; if (isBackground(data, n * 4, thresholdValue)) queue.push(n); } }
+    if (x < width - 1) { const n = pos + 1; if (!visited[n]) { visited[n] = 1; if (isBackground(data, n * 4, thresholdValue)) queue.push(n); } }
   }
-  return toRemove;
 }
 
-function processRemoval(data: Uint8ClampedArray, width: number, height: number, threshold: number, mode: 'white' | 'black' = 'white'): void {
+function processRemoval(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  threshold: number,
+  mode: 'white' | 'black' = 'white',
+): void {
   const thresholdValue = mode === 'black' ? threshold : (threshold / 100) * 255;
-  const pixelsToRemove = floodFillFromEdges(data, width, height, thresholdValue, mode);
+  const total = width * height;
+  const removed = new Uint8Array(total);
 
-  const pixelArray = Array.from(pixelsToRemove);
-  for (let i = 0; i < pixelArray.length; i++) {
-    data[pixelArray[i] + 3] = 0;
+  floodFillFromEdges(data, width, height, thresholdValue, mode, removed);
+
+  for (let pos = 0; pos < total; pos++) {
+    if (removed[pos]) data[pos * 4 + 3] = 0;
   }
 
-  const removedPositions = new Set<number>();
-  for (let i = 0; i < pixelArray.length; i++) {
-    removedPositions.add(pixelArray[i] / 4);
-  }
-
+  // Feather cleanup: creep a few pixels into the artwork edge to clear the
+  // white fringe and semi-transparent halo the fill leaves behind.
   const maxCleanupDepth = 3;
   const alphaCleanupThreshold = 180;
   const whiteCleanupThreshold = 200;
-  const cleanupQueue: Array<{ pos: number; depth: number }> = [];
+  const cleanupVisited = new Uint8Array(total);
+  const queue = new PosQueue();
+  const depths = new PosQueue();
 
-  const removedArr = Array.from(removedPositions);
-  for (let ri = 0; ri < removedArr.length; ri++) {
-    const pixelPos = removedArr[ri];
-    const x = pixelPos % width;
-    const y = Math.floor(pixelPos / width);
-    const neighbors = [
-      { nx: x - 1, ny: y }, { nx: x + 1, ny: y },
-      { nx: x, ny: y - 1 }, { nx: x, ny: y + 1 },
-      { nx: x - 1, ny: y - 1 }, { nx: x + 1, ny: y - 1 },
-      { nx: x - 1, ny: y + 1 }, { nx: x + 1, ny: y + 1 },
-    ];
-    for (const { nx, ny } of neighbors) {
-      if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
-      const nPos = ny * width + nx;
-      if (removedPositions.has(nPos)) continue;
-      cleanupQueue.push({ pos: nPos, depth: 1 });
+  const enqueue = (pos: number, depth: number) => {
+    queue.push(pos);
+    depths.push(depth);
+  };
+
+  for (let pos = 0; pos < total; pos++) {
+    if (!removed[pos]) continue;
+    const x = pos % width;
+    const y = (pos - x) / width;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+        const nPos = ny * width + nx;
+        if (removed[nPos]) continue;
+        enqueue(nPos, 1);
+      }
     }
   }
 
-  const cleanupVisited = new Set<number>();
-  let qi = 0;
-  while (qi < cleanupQueue.length) {
-    const { pos, depth } = cleanupQueue[qi++];
-    if (cleanupVisited.has(pos)) continue;
-    cleanupVisited.add(pos);
+  while (queue.pending) {
+    const pos = queue.shift();
+    const depth = depths.shift();
+    if (cleanupVisited[pos]) continue;
+    cleanupVisited[pos] = 1;
 
     const idx = pos * 4;
     const a = data[idx + 3];
     if (a === 0) continue;
 
     const minCh = Math.min(data[idx], data[idx + 1], data[idx + 2]);
+    if (minCh < whiteCleanupThreshold && a >= alphaCleanupThreshold) continue;
 
-    if (minCh >= whiteCleanupThreshold || a < alphaCleanupThreshold) {
-      data[idx + 3] = 0;
-      removedPositions.add(pos);
+    data[idx + 3] = 0;
+    removed[pos] = 1;
+    if (depth >= maxCleanupDepth) continue;
 
-      if (depth < maxCleanupDepth) {
-        const x = pos % width;
-        const y = Math.floor(pos / width);
-        for (let dy = -1; dy <= 1; dy++) {
-          for (let dx = -1; dx <= 1; dx++) {
-            if (dx === 0 && dy === 0) continue;
-            const nx = x + dx, ny = y + dy;
-            if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
-            const nPos = ny * width + nx;
-            if (!removedPositions.has(nPos) && !cleanupVisited.has(nPos)) {
-              cleanupQueue.push({ pos: nPos, depth: depth + 1 });
-            }
-          }
-        }
+    const x = pos % width;
+    const y = (pos - x) / width;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+        const nPos = ny * width + nx;
+        if (!removed[nPos] && !cleanupVisited[nPos]) enqueue(nPos, depth + 1);
       }
     }
   }

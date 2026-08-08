@@ -9,12 +9,29 @@
  * typical), so a 200 MP scan can crash the tab before the app even reads
  * the pixels.
  *
- * These helpers give us a place to reject or downscale *before* touching
- * a canvas, with typed error results that the upload UI can turn into a
- * user-friendly toast.
+ * Large sources are accepted via the server prepare path (sharp/libvips):
+ * the browser never full-decodes them. Inline decode is reserved for
+ * sources that fit comfortably in a mobile tab.
  */
 
-export const MAX_UPLOAD_MEGAPIXELS = 40;
+/** Soft threshold: above this, route through `/api/prepare-raster-upload`
+ *  instead of decoding the full raster in the browser. */
+export const MAX_INLINE_DECODE_MEGAPIXELS = 40;
+
+/**
+ * @deprecated Prefer MAX_INLINE_DECODE_MEGAPIXELS. Kept as an alias so
+ * PDF/SVG render clamps and older call sites keep compiling.
+ */
+export const MAX_UPLOAD_MEGAPIXELS = MAX_INLINE_DECODE_MEGAPIXELS;
+
+/** Hard reject for pathological scans even sharp shouldn't try to keep. */
+export const MAX_SOURCE_MEGAPIXELS = 150;
+
+/** Max compressed upload size accepted by the prepare endpoint. */
+export const MAX_SOURCE_FILE_BYTES = 100 * 1024 * 1024;
+
+/** Longest edge on the editor working/preview PNG from prepare. */
+export const PREPARE_PREVIEW_MAX_EDGE = 4096;
 
 /** iOS Safari's single-canvas dimensional cap. Chromium/Firefox are
  *  higher, but staying at or below 4096 on the widest axis avoids
@@ -22,19 +39,48 @@ export const MAX_UPLOAD_MEGAPIXELS = 40;
  *  handled by decoding `exportBlob` directly at print time. */
 export const IOS_SAFE_CANVAS_DIM = 4096;
 
-export type BudgetOutcome =
-  | { ok: true; megapixels: number }
-  | { ok: false; reason: "too_many_pixels" | "unreadable_dimensions"; megapixels: number };
+/**
+ * Safari's ceiling on a single canvas as an *area* rather than an edge.
+ *
+ * The edge cap above is the safe way to size a square-ish canvas, but it says
+ * nothing about a long thin one: a 6600 x 4096 export strip keeps both edges
+ * under 8192 and is still 27 MP, well over what Safari will hand back. Any
+ * canvas whose shape is driven by the sheet rather than by a single dimension
+ * has to be checked against this instead.
+ */
+export const SAFARI_MAX_CANVAS_AREA = IOS_SAFE_CANVAS_DIM * IOS_SAFE_CANVAS_DIM;
 
-export function checkPixelBudget(width: number, height: number, maxMP = MAX_UPLOAD_MEGAPIXELS): BudgetOutcome {
+export type BudgetOutcome =
+  | { ok: true; mode: "inline" | "prepare"; megapixels: number }
+  | { ok: false; reason: "too_many_pixels" | "unreadable_dimensions" | "file_too_large"; megapixels: number };
+
+export function checkPixelBudget(
+  width: number,
+  height: number,
+  maxSourceMP = MAX_SOURCE_MEGAPIXELS,
+  maxInlineMP = MAX_INLINE_DECODE_MEGAPIXELS,
+): BudgetOutcome {
   if (!(width > 0) || !(height > 0)) {
     return { ok: false, reason: "unreadable_dimensions", megapixels: 0 };
   }
   const megapixels = (width * height) / 1_000_000;
-  if (megapixels > maxMP) {
+  if (megapixels > maxSourceMP) {
     return { ok: false, reason: "too_many_pixels", megapixels };
   }
-  return { ok: true, megapixels };
+  if (megapixels > maxInlineMP) {
+    return { ok: true, mode: "prepare", megapixels };
+  }
+  return { ok: true, mode: "inline", megapixels };
+}
+
+export function checkFileSizeBudget(byteLength: number): BudgetOutcome {
+  if (!(byteLength > 0)) {
+    return { ok: false, reason: "unreadable_dimensions", megapixels: 0 };
+  }
+  if (byteLength > MAX_SOURCE_FILE_BYTES) {
+    return { ok: false, reason: "file_too_large", megapixels: 0 };
+  }
+  return { ok: true, mode: "inline", megapixels: 0 };
 }
 
 /**
@@ -50,10 +96,64 @@ export function fitWithinDimension(w: number, h: number, maxDim: number = IOS_SA
 }
 
 /**
+ * Scale factor that fits `w` × `h` under a megapixel budget (and optional
+ * max edge). Returns 1 when already within budget.
+ */
+export function fitWithinMegapixels(
+  w: number,
+  h: number,
+  maxMP: number,
+  maxEdge?: number,
+): number {
+  const pixels = Math.max(1, w * h);
+  const mpScale = Math.sqrt((maxMP * 1_000_000) / pixels);
+  const edgeScale =
+    maxEdge && maxEdge > 0 ? Math.min(maxEdge / Math.max(w, 1), maxEdge / Math.max(h, 1)) : 1;
+  return Math.min(1, mpScale, edgeScale);
+}
+
+/**
  * Format a human-readable megapixel count for toast messages.
  * e.g. `formatMegapixels(53.2)` → `"53 MP"`.
  */
 export function formatMegapixels(mp: number): string {
   if (mp < 10) return `${mp.toFixed(1)} MP`;
   return `${Math.round(mp)} MP`;
+}
+
+/**
+ * Format a compressed file size for toast messages.
+ */
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+}
+
+/** A vector upload larger than `MAX_SOURCE_FILE_BYTES`. */
+export class VectorFileTooLargeError extends Error {
+  readonly code = "vector_file_too_large";
+  /** Keys the caller should use for the toast; `message` is for logs only. */
+  readonly titleKey = "toast.imageTooLarge";
+  readonly translationKey = "toast.imageTooLargeDesc";
+  constructor(readonly bytes: number) {
+    super(
+      `Vector file is ${formatFileSize(bytes)}, over the ` +
+        `${formatFileSize(MAX_SOURCE_FILE_BYTES)} limit`,
+    );
+    this.name = "VectorFileTooLargeError";
+  }
+}
+
+/**
+ * Size ceiling enforced inside the parsers themselves.
+ *
+ * `parseSVG` and `parsePDF` are both exported and both read the whole file
+ * (`file.text()` / `file.arrayBuffer()`) before doing anything else. The 100 MB
+ * ceiling lived only in the upload caller, so the invariant held purely because
+ * all four existing call sites happen to sit behind `rejectOversizedVector`.
+ * Checking here makes it local to the code that would suffer, and survives a
+ * fifth call site.
+ */
+export function assertVectorFileWithinLimit(file: { size: number }): void {
+  if (file.size > MAX_SOURCE_FILE_BYTES) throw new VectorFileTooLargeError(file.size);
 }

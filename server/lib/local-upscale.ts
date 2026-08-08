@@ -6,6 +6,12 @@ import { execFile } from "node:child_process";
 import sharp from "sharp";
 
 const LOCAL_UPSCALE_TIMEOUT_MS = 5 * 60 * 1000;
+/**
+ * Pixel ceiling for libvips reads here, matching the 150 MP the routes layer
+ * accepts. Omitting it falls back to libvips' ~268 MP default, which is well
+ * above anything this app intends to decode.
+ */
+const SHARP_PIXEL_LIMIT = 150_000_000;
 const MAX_PENDING_LOCAL_UPSCALE_JOBS = 2;
 const MAX_CACHED_UPSCALE_BYTES = 64 * 1024 * 1024;
 const MAX_CACHED_UPSCALE_ENTRIES = 8;
@@ -120,7 +126,7 @@ async function runLocalUpscale(input: Buffer, scaleFactor: number): Promise<Buff
     throw new Error("Local Real-ESRGAN is not configured. Set REAL_ESRGAN_BIN.");
   }
 
-  const sourceMetadata = await sharp(input).metadata();
+  const sourceMetadata = await sharp(input, { limitInputPixels: SHARP_PIXEL_LIMIT }).metadata();
   const sourceWidth = sourceMetadata.width ?? 0;
   const sourceHeight = sourceMetadata.height ?? 0;
   if (!sourceWidth || !sourceHeight) {

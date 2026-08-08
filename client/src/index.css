@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+﻿@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Fredoka+One&display=swap');
 @import url('https://db.onlinewebfonts.com/c/598a2bdeaef4affee05367e9e3dd54c6?family=Nabana+Shadow');
 
@@ -6,7 +6,15 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Magic-wand cursor always wins over zoom/pan cursor writes on desktop and touch preview surfaces. */
+/* Magic-wand cursor always wins over the zoom/pan cursor writes. The `!important` is what
+   makes that true: the canvas writes `move`, `grab`, `pointer` and the resize cursors straight
+   onto `style.cursor` from about thirty places, and an important author rule is the one thing
+   that outranks a normal inline style.
+
+   A plain `crosshair` by preference. This spent a while as a custom wand — first hand-drawn,
+   then Lucide's `wand-sparkles`, then a DOM element following the pointer because an image
+   cursor is advisory and Chrome may decline it. All of that is gone: a keyword cursor cannot
+   be declined, cannot be dropped for being oversized, and stays crisp at any display scaling. */
 .preview-canvas-area[data-wand-active="true"],
 .preview-canvas-area[data-wand-active="true"] * {
   cursor: crosshair !important;

@@ -3,23 +3,32 @@ import { uploadProductionToR2, canUseShellRelay } from "@/lib/r2-direct-upload";
 import { EXPORT_DPI, EXPORT_TIMEOUT_MS } from "./constants";
 import {
   canUseMemoryEfficientPngExport,
+  decodePrintSourceAtSize,
   exportPngWithWorker,
   getExportMemoryWarning,
   injectPngDpi,
+  resolveExportDpi,
 } from "./utils";
 import type { ImageEditorBagAfterExport } from "./image-editor-hook-bag.types";
 import type { InitialDesignState } from "./types";
 import type { SpotPreviewData } from "../controls-section";
 import { thresholdImageInfo } from "./useImageEditorModelHalftone";
 import { isRecoverableImageInfo } from "@/lib/editor-draft-storage";
+import { createVectorPrintSourceResolver } from "@/lib/vector-print-source";
 import { getUiSnapshot } from "@/state/ui-store";
+import { resolveShellTargetOrigin } from "@/lib/shell-message";
+import { discardCartSubmitId, mintCartSubmitId } from "@/lib/cart-submit-token";
 
 function postMessageToParent(message: unknown, transfer?: Transferable[]): void {
+  // This payload carries the production file and every layer's artwork, so it is
+  // addressed to the embedding origin rather than to whatever occupies the
+  // parent slot at delivery time.
+  const targetOrigin = resolveShellTargetOrigin();
   try {
     if (transfer?.length) {
-      window.parent.postMessage(message, "*", transfer);
+      window.parent.postMessage(message, targetOrigin, transfer);
     } else {
-      window.parent.postMessage(message, "*");
+      window.parent.postMessage(message, targetOrigin);
     }
   } catch (error) {
     const detail = String(error instanceof Error ? error.message : error);
@@ -241,6 +250,9 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       window.clearTimeout(addToCartStallTimeoutRef.current);
       addToCartStallTimeoutRef.current = null;
     }
+    // Minted just before the payload goes out and echoed back by the shell on
+    // `dtf-builder-cart-status`, so a status can be tied to this submit.
+    let submitId: string | null = null;
     try {
       const repairedDesigns = await ensureDesignImagesAvailable(designsRef.current);
       if (repairedDesigns.some(design => !isRecoverableImageInfo(design.imageInfo))) {
@@ -269,10 +281,31 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         const exportDesignsSource = currentDesigns.map(d =>
           cleaned.has(d.id) ? { ...d, imageInfo: cleaned.get(d.id)! } : d,
         );
-        const exportDpi = EXPORT_DPI;
+        const useWorker = canUseMemoryEfficientPngExport();
+
+        // Without the worker this path allocates the whole gangsheet as one
+        // canvas: 6600 x 36000 for a 22 x 120 inch sheet, around 950 MB, on the
+        // main thread. That reliably kills a tab on iOS, which is exactly where
+        // the worker is missing — `OffscreenCanvas` and `CompressionStream` both
+        // arrive in Safari 16.4, so everything older lands here.
+        //
+        // Unlike the download button this refuses rather than quietly dropping
+        // the DPI. A downgraded download is a file the customer can look at; a
+        // downgraded order is a blurry print nobody sees until it ships, and on
+        // a sheet this size the fit works out near 80 DPI.
+        const resolved = resolveExportDpi(artboardWidth, artboardHeight, useWorker);
+        if (resolved.belowPrintQuality) {
+          throw new Error(t("toast.sheetTooLargeForDevice"));
+        }
+        if (resolved.clamped) {
+          toast({
+            title: t("toast.largeSheet"),
+            description: t("toast.largeSheetDesc", { dpi: Math.floor(resolved.dpi) }),
+          });
+        }
+        const exportDpi = resolved.dpi;
         const outW = Math.max(1, Math.round(artboardWidth * exportDpi));
         const outH = Math.max(1, Math.round(artboardHeight * exportDpi));
-        const useWorker = canUseMemoryEfficientPngExport();
         const memoryWarning = getExportMemoryWarning();
         if (memoryWarning) {
           toast({
@@ -283,54 +316,33 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         let pngBlob: Blob;
         let exportWorkerBuffer: ArrayBuffer | null = null;
 
-        // Decode the full-resolution export source for each non-halftoned design
-        // from its retained PNG blob. This keeps the on-screen `image` small
-        // (MAX_STORED_IMAGE_DIMENSION) while producing the print-DPI raster at
-        // its original resolution. Fallback: reuse the preview image when no
-        // exportBlob is available (halftoned designs, or drafts before this
-        // change was live).
+        // The print source for each non-halftoned design is its retained
+        // `exportBlob`, which stays encoded until the moment it is drawn. The
+        // worker path hands those bytes straight to the worker, which decodes
+        // each one cropped and scaled to its placement size — so a 100 MP
+        // upload placed at 4"×3" only ever materialises 1200×900 pixels.
+        // Halftoned designs keep using their thresholded preview image, whose
+        // pixels are the artwork.
         //
-        // Duplicates share the same exportBlob reference, so we (1) key the
-        // decode cache by Blob identity — one HTMLImageElement per unique
-        // source, shared across every duplicate — and (2) decode all unique
-        // sources in parallel. Sharing HTMLImageElement identity is what lets
-        // the export worker's WeakMap dedup collapse N copies down to 1
-        // encoded ArrayBuffer + 1 decode + 1 cached stamp on the worker side.
-        const decodeBlobToImage = (blob: Blob): Promise<HTMLImageElement> =>
-          new Promise((resolve, reject) => {
-            const url = URL.createObjectURL(blob);
-            const img = new Image();
-            img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
-            img.onerror = (err) => { URL.revokeObjectURL(url); reject(err); };
-            img.src = url;
-          });
-        const exportImagesByBlob = new Map<Blob, HTMLImageElement>();
-        const uniqueBlobs: Blob[] = [];
-        for (const d of exportDesignsSource) {
-          if (d.halftoned) continue;
-          const blob = d.imageInfo.exportBlob;
-          if (!blob || exportImagesByBlob.has(blob)) continue;
-          exportImagesByBlob.set(blob, undefined as unknown as HTMLImageElement); // reserve slot
-          uniqueBlobs.push(blob);
-        }
+        // Vector designs are the exception: their `exportBlob` is only the
+        // screen-sized import preview, so they get re-rasterised from the
+        // retained SVG/PDF geometry at the placement size instead. The result
+        // is already exactly the placement box, so it carries no crop.
+        const vectorSources = createVectorPrintSourceResolver();
+        const vectorSourceByDesignId = new Map<string, Blob>();
         await Promise.all(
-          uniqueBlobs.map(async blob => {
-            try {
-              exportImagesByBlob.set(blob, await decodeBlobToImage(blob));
-            } catch (err) {
-              console.warn("[export] full-res decode failed; using preview image", { err });
-              exportImagesByBlob.delete(blob);
-            }
+          exportDesignsSource.map(async d => {
+            if (d.halftoned) return;
+            const drawW = Math.max(1, Math.round(d.widthInches * d.transform.s * exportDpi));
+            const drawH = Math.max(1, Math.round(d.heightInches * d.transform.s * exportDpi));
+            const blob = await vectorSources.resolve(d.imageInfo, drawW, drawH);
+            if (blob) vectorSourceByDesignId.set(d.id, blob);
           }),
         );
-        const resolveExportImage = (d: typeof exportDesignsSource[number]): HTMLImageElement => {
-          const blob = d.imageInfo.exportBlob;
-          if (blob) {
-            const decoded = exportImagesByBlob.get(blob);
-            if (decoded) return decoded;
-          }
-          return d.imageInfo.image;
-        };
+        const printSourceFor = (d: typeof exportDesignsSource[number]): Blob | undefined =>
+          d.halftoned ? undefined : (vectorSourceByDesignId.get(d.id) ?? d.imageInfo.exportBlob);
+        const printSourceCropFor = (d: typeof exportDesignsSource[number]) =>
+          d.halftoned || vectorSourceByDesignId.has(d.id) ? undefined : d.imageInfo.exportCrop;
 
         if (useWorker) {
           const result = await exportPngWithWorker({
@@ -343,7 +355,9 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
               rotation: d.transform.rotation,
               flipX: d.transform.flipX,
               flipY: d.transform.flipY,
-              image: resolveExportImage(d),
+              image: d.imageInfo.image,
+              sourceBlob: printSourceFor(d),
+              sourceCrop: printSourceCropFor(d),
               alphaThresholded: d.alphaThresholded,
               printFileName: d.printFileName,
               name: d.name,
@@ -367,15 +381,21 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
           const exportCanvas = document.createElement('canvas');
           exportCanvas.width = outW;
           exportCanvas.height = outH;
-          const ctx = exportCanvas.getContext('2d');
+          const ctx = exportCanvas.getContext('2d', { willReadFrequently: true });
           if (!ctx) throw new Error('Canvas not supported');
           ctx.clearRect(0, 0, outW, outH);
           ctx.imageSmoothingEnabled = true;
           ctx.imageSmoothingQuality = 'high';
           for (const design of exportDesignsSource) {
-            const img = resolveExportImage(design);
             const drawW = Math.max(1, Math.round(design.widthInches * design.transform.s * exportDpi));
             const drawH = Math.max(1, Math.round(design.heightInches * design.transform.s * exportDpi));
+            const blob = printSourceFor(design);
+            const decoded = blob
+              ? await decodePrintSourceAtSize(
+                  blob, printSourceCropFor(design), drawW, drawH, design.alphaThresholded,
+                )
+              : null;
+            const img: ImageBitmap | HTMLImageElement = decoded ?? design.imageInfo.image;
             const centerX = design.transform.nx * outW;
             const centerY = design.transform.ny * outH;
             ctx.save();
@@ -386,6 +406,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
             ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
             ctx.imageSmoothingEnabled = true;
             ctx.restore();
+            decoded?.close();
           }
           const rawBlob: Blob = await new Promise((res, rej) =>
             exportCanvas.toBlob((b) => (b ? res(b) : rej(new Error('toBlob failed'))), 'image/png'),
@@ -427,67 +448,77 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         const exportDesignsSource = currentDesigns.map(d =>
           cleaned.has(d.id) ? { ...d, imageInfo: cleaned.get(d.id)! } : d,
         );
-        // Same rationale as the PNG path: decode HD source from exportBlob
-        // just-in-time so preview downsampling doesn't limit print DPI.
-        // Dedupe by Blob identity + parallelize — duplicates share a source.
-        const decodeBlobToImage = (blob: Blob): Promise<HTMLImageElement> =>
-          new Promise((resolve, reject) => {
-            const url = URL.createObjectURL(blob);
-            const img = new Image();
-            img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
-            img.onerror = (err) => { URL.revokeObjectURL(url); reject(err); };
-            img.src = url;
-          });
-        const pdfExportImagesByBlob = new Map<Blob, HTMLImageElement>();
-        const pdfUniqueBlobs: Blob[] = [];
-        for (const d of exportDesignsSource) {
-          if (d.halftoned) continue;
-          const blob = d.imageInfo.exportBlob;
-          if (!blob || pdfExportImagesByBlob.has(blob)) continue;
-          pdfExportImagesByBlob.set(blob, undefined as unknown as HTMLImageElement);
-          pdfUniqueBlobs.push(blob);
-        }
+        // Same rationale as the PNG path: the print source stays encoded until
+        // it is drawn, then decodes cropped and scaled to the placement size,
+        // and vector designs re-rasterise from their retained geometry so the
+        // embedded PNG is generated at print resolution rather than stretched
+        // from the import preview.
+        const vectorSources = createVectorPrintSourceResolver();
+        const vectorSourceByDesignId = new Map<string, Blob>();
         await Promise.all(
-          pdfUniqueBlobs.map(async blob => {
-            try {
-              pdfExportImagesByBlob.set(blob, await decodeBlobToImage(blob));
-            } catch (err) {
-              console.warn("[pdf-export] full-res decode failed; using preview image", { err });
-              pdfExportImagesByBlob.delete(blob);
-            }
+          exportDesignsSource.map(async d => {
+            if (d.halftoned) return;
+            const drawW = Math.max(1, Math.round(d.widthInches * d.transform.s * exportDpi));
+            const drawH = Math.max(1, Math.round(d.heightInches * d.transform.s * exportDpi));
+            const blob = await vectorSources.resolve(d.imageInfo, drawW, drawH);
+            if (blob) vectorSourceByDesignId.set(d.id, blob);
           }),
         );
-        const resolvePdfImage = (d: typeof exportDesignsSource[number]): HTMLImageElement => {
-          const blob = d.imageInfo.exportBlob;
-          if (blob) {
-            const decoded = pdfExportImagesByBlob.get(blob);
-            if (decoded) return decoded;
-          }
-          return d.imageInfo.image;
-        };
+        const printSourceFor = (d: typeof exportDesignsSource[number]): Blob | undefined =>
+          d.halftoned ? undefined : (vectorSourceByDesignId.get(d.id) ?? d.imageInfo.exportBlob);
+        const printSourceCropFor = (d: typeof exportDesignsSource[number]) =>
+          d.halftoned || vectorSourceByDesignId.has(d.id) ? undefined : d.imageInfo.exportCrop;
         // Per-copy PDF embed cache. Duplicates with the same source and
         // matching rasterization parameters share a single embedded PNG.
         // pdfDoc.embedPng parses the whole PNG, so this is a big win when
         // there are many identical copies.
         const embeddedByKey = new Map<string, Awaited<ReturnType<typeof pdfDoc.embedPng>>>();
+        const decodedByKey = new Map<string, ImageBitmap | null>();
+        const sourceKeys = new WeakMap<Blob, number>();
+        let sourceKeyCounter = 0;
         for (const design of exportDesignsSource) {
-          const hdImg = resolvePdfImage(design);
           const drawW = Math.max(1, Math.round(design.widthInches * design.transform.s * exportDpi));
           const drawH = Math.max(1, Math.round(design.heightInches * design.transform.s * exportDpi));
+          const sourceBlob = printSourceFor(design);
+          let sourceKey: string;
+          if (sourceBlob) {
+            let n = sourceKeys.get(sourceBlob);
+            if (n == null) {
+              n = ++sourceKeyCounter;
+              sourceKeys.set(sourceBlob, n);
+            }
+            sourceKey = `b${n}`;
+          } else {
+            sourceKey = design.imageInfo.image.src || design.id;
+          }
           const embedKey = [
-            (hdImg as HTMLImageElement).src || (design.imageInfo.file ? `${design.imageInfo.file.name}:${design.imageInfo.file.size}` : design.id),
+            sourceKey,
             drawW,
             drawH,
             design.transform.flipX ? 1 : 0,
             design.transform.flipY ? 1 : 0,
             design.alphaThresholded ? 1 : 0,
           ].join("|");
+          // Decoded once per unique source+size and shared by duplicates; the
+          // spot-colour tracing below needs the same pixels, so these stay
+          // alive until the page is finished.
+          let decoded = decodedByKey.get(embedKey);
+          if (decoded === undefined) {
+            decoded = sourceBlob
+              ? await decodePrintSourceAtSize(
+                  sourceBlob, printSourceCropFor(design), drawW, drawH, design.alphaThresholded,
+                )
+              : null;
+            decodedByKey.set(embedKey, decoded);
+          }
+          const hdImg: ImageBitmap | HTMLImageElement = decoded ?? design.imageInfo.image;
+
           let image = embeddedByKey.get(embedKey);
           if (!image) {
             const canvas = document.createElement("canvas");
             canvas.width = drawW;
             canvas.height = drawH;
-            const ctx = canvas.getContext("2d");
+            const ctx = canvas.getContext("2d", { willReadFrequently: true });
             if (!ctx) continue;
             ctx.imageSmoothingEnabled = !design.alphaThresholded;
             ctx.imageSmoothingQuality = "high";
@@ -564,6 +595,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
             );
           }
         }
+        for (const bitmap of decodedByKey.values()) bitmap?.close();
 
         return new Blob([await pdfDoc.save()], { type: "application/pdf" });
       };
@@ -712,8 +744,10 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         }
       }
 
+      submitId = mintCartSubmitId();
       const message = {
         type: isEditMode ? 'dtf-builder-save-design' : 'dtf-builder-add-to-cart',
+        requestId: submitId,
         variantId: vidDigits,
         quantity: quantity,
         gangsheetSize: artboardWidth + '" x ' + artboardHeight + '"',
@@ -766,6 +800,8 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       exportWorkerBuffer = null;
       // Keep loading state until parent redirects (upload runs in parent). Do not clear in finally.
     } catch (error) {
+      // Nothing reached the shell, so no status can legitimately arrive for it.
+      if (submitId) discardCartSubmitId(submitId);
       console.error('Add to cart failed:', error);
       toast({
         title: isEditMode ? "Update failed" : "Failed",

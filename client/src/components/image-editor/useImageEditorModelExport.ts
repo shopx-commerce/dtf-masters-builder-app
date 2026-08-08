@@ -1,14 +1,17 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { EXPORT_DPI, EXPORT_TIMEOUT_MS } from "./constants";
 import {
   canUseMemoryEfficientPngExport,
+  decodePrintSourceAtSize,
   exportPngWithWorker,
   getExportMemoryWarning,
   injectPngDpi,
+  resolveExportDpi,
 } from "./utils";
 import type { ImageEditorBagAfterUploadCrop } from "./image-editor-hook-bag.types";
 import { thresholdImageInfo } from "./useImageEditorModelHalftone";
 import { isRecoverableImageInfo } from "@/lib/editor-draft-storage";
+import { createVectorPrintSourceResolver, materialShortfalls } from "@/lib/vector-print-source";
 
 export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
   // Only the bag fields handleDownload actually uses are destructured here;
@@ -25,7 +28,20 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
     ensureDesignImagesAvailable,
   } = bag;
 
+  /**
+   * The sheet as it stands, read at the moment Download is pressed rather than captured in
+   * the callback's dependency list.
+   *
+   * Export cares about the current sheet, so listing `designs` here was correct but
+   * expensive: it gave `handleDownload` a new identity on every design mutation, and since
+   * it is passed to `ControlsSection` as `onDownload` that alone defeated the component's
+   * `React.memo` for the whole of every drag.
+   */
+  const exportLiveRef = useRef({ imageInfo, designs, artboardWidth, artboardHeight });
+  exportLiveRef.current = { imageInfo, designs, artboardWidth, artboardHeight };
+
   const handleDownload = useCallback(async (downloadType: string = 'standard', format: string = 'png', spotColorsByDesign?: Record<string, any[]>) => {
+    const { imageInfo, designs, artboardWidth, artboardHeight } = exportLiveRef.current;
     if (designs.length === 0) {
       toast({ title: t("toast.noDesigns"), description: t("toast.noDesignsDesc"), variant: "destructive" });
       return;
@@ -42,6 +58,34 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
 
       await new Promise(r => setTimeout(r, 50));
 
+      // Print source selection, matching the add-to-cart path.
+      //
+      // `imageInfo.image` is only the editor preview: rasters are capped at
+      // MAX_STORED_IMAGE_DIMENSION and vectors at a screen-safe canvas size.
+      // Drawing the download from it meant a design placed larger than its
+      // preview was upscaled — a 12 in raster printed from 2000 px of real
+      // detail, and a 20 in vector from 4096 px. `exportBlob` holds the
+      // full-resolution source and gets decoded at the placement size instead,
+      // with vector artwork re-rasterised from its retained geometry.
+      //
+      // Halftoned designs are the exception: their thresholded preview *is* the
+      // artwork, so they keep drawing from `image`.
+      const vectorSources = createVectorPrintSourceResolver();
+      const vectorSourceByDesignId = new Map<string, Blob>();
+      await Promise.all(
+        exportDesigns.map(async d => {
+          if (d.halftoned) return;
+          const drawW = Math.max(1, Math.round(d.widthInches * d.transform.s * EXPORT_DPI));
+          const drawH = Math.max(1, Math.round(d.heightInches * d.transform.s * EXPORT_DPI));
+          const blob = await vectorSources.resolve(d.imageInfo, drawW, drawH);
+          if (blob) vectorSourceByDesignId.set(d.id, blob);
+        }),
+      );
+      const printSourceFor = (d: typeof exportDesigns[number]): Blob | undefined =>
+        d.halftoned ? undefined : (vectorSourceByDesignId.get(d.id) ?? d.imageInfo.exportBlob);
+      const printSourceCropFor = (d: typeof exportDesigns[number]) =>
+        d.halftoned || vectorSourceByDesignId.has(d.id) ? undefined : d.imageInfo.exportCrop;
+
       if (format === 'pdf') {
         const { PDFDocument, degrees } = await import('pdf-lib');
         const { addSpotColorVectorsToPDF } = await import('@/lib/spot-color-vectors');
@@ -53,14 +97,20 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
         const page = pdfDoc.addPage([pageWidthPt, pageHeightPt]);
 
         for (const design of exportDesigns) {
-          const img = design.imageInfo.image;
-          const cvs = document.createElement('canvas');
           const drawW = Math.round(design.widthInches * design.transform.s * exportDpi);
           const drawH = Math.round(design.heightInches * design.transform.s * exportDpi);
+          const sourceBlob = printSourceFor(design);
+          const decoded = sourceBlob
+            ? await decodePrintSourceAtSize(
+                sourceBlob, printSourceCropFor(design), drawW, drawH, design.alphaThresholded,
+              )
+            : null;
+          const img: ImageBitmap | HTMLImageElement = decoded ?? design.imageInfo.image;
+          const cvs = document.createElement('canvas');
           cvs.width = drawW;
           cvs.height = drawH;
-          const cctx = cvs.getContext('2d');
-          if (!cctx) continue;
+          const cctx = cvs.getContext('2d', { willReadFrequently: true });
+          if (!cctx) { decoded?.close(); continue; }
           cctx.imageSmoothingEnabled = !design.alphaThresholded;
           if (design.transform.flipX || design.transform.flipY) {
             cctx.save();
@@ -76,11 +126,13 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
             pngDataUrl = cvs.toDataURL('image/png');
           } catch (err) {
             console.warn('Canvas toDataURL failed for design', design.id, err);
+            decoded?.close();
             continue;
           }
           const base64 = pngDataUrl.split(',')[1];
           if (!base64) {
             console.warn('Invalid PNG data URL for design', design.id);
+            decoded?.close();
             continue;
           }
           const pngBytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
@@ -142,6 +194,7 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
           }
           cvs.width = 0;
           cvs.height = 0;
+          decoded?.close();
         }
 
         const pdfBytes = await pdfDoc.save();
@@ -166,27 +219,23 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
           });
         }
 
-        let exportDpi: number;
-        if (useWorker) {
-          exportDpi = EXPORT_DPI;
-        } else {
-          const MAX_FALLBACK_PIXELS = 80_000_000;
-          const MAX_FALLBACK_DIM = 12_000;
-          const dpiByArea = Math.sqrt(MAX_FALLBACK_PIXELS / Math.max(1e-6, artboardWidth * artboardHeight));
-          const dpiByDim = Math.min(MAX_FALLBACK_DIM / artboardWidth, MAX_FALLBACK_DIM / artboardHeight);
-          exportDpi = Math.min(EXPORT_DPI, dpiByArea, dpiByDim);
-          if (exportDpi < EXPORT_DPI) {
-            toast({
-              title: t("toast.largeSheet"),
-              description: t("toast.largeSheetDesc", { dpi: Math.floor(exportDpi) }),
-            });
-          }
-          if (!canUseMemoryEfficientPngExport()) {
-            toast({
-              title: t("toast.exportCompatibilityWarning"),
-              description: t("toast.exportCompatibilityWarningDesc"),
-            });
-          }
+        // A download can be downgraded and still be useful — the customer sees
+        // the toast and knows what they got. The cart path makes the opposite
+        // call on the same numbers, because nobody inspects a production file
+        // before it is printed.
+        const resolved = resolveExportDpi(artboardWidth, artboardHeight, useWorker);
+        const exportDpi = resolved.dpi;
+        if (resolved.clamped) {
+          toast({
+            title: t("toast.largeSheet"),
+            description: t("toast.largeSheetDesc", { dpi: Math.floor(exportDpi) }),
+          });
+        }
+        if (!useWorker) {
+          toast({
+            title: t("toast.exportCompatibilityWarning"),
+            description: t("toast.exportCompatibilityWarningDesc"),
+          });
         }
 
         const outW = Math.max(1, Math.round(artboardWidth * exportDpi));
@@ -226,6 +275,8 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
               flipX: d.transform.flipX,
               flipY: d.transform.flipY,
               image: d.imageInfo.image,
+              sourceBlob: printSourceFor(d),
+              sourceCrop: printSourceCropFor(d),
               alphaThresholded: d.alphaThresholded,
               printFileName: d.printFileName,
               name: d.name,
@@ -249,15 +300,21 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
           const exportCanvas = document.createElement('canvas');
           exportCanvas.width = outW;
           exportCanvas.height = outH;
-          const ctx = exportCanvas.getContext('2d');
+          const ctx = exportCanvas.getContext('2d', { willReadFrequently: true });
           if (!ctx) throw new Error('Failed to prepare export canvas');
           ctx.clearRect(0, 0, outW, outH);
           ctx.imageSmoothingEnabled = true;
           ctx.imageSmoothingQuality = 'high';
           for (const design of exportSrc) {
-            const img = design.imageInfo.image;
             const drawW = Math.max(1, Math.round(design.widthInches * design.transform.s * exportDpi));
             const drawH = Math.max(1, Math.round(design.heightInches * design.transform.s * exportDpi));
+            const sourceBlob = printSourceFor(design);
+            const decoded = sourceBlob
+              ? await decodePrintSourceAtSize(
+                  sourceBlob, printSourceCropFor(design), drawW, drawH, design.alphaThresholded,
+                )
+              : null;
+            const img: ImageBitmap | HTMLImageElement = decoded ?? design.imageInfo.image;
             const centerX = design.transform.nx * outW;
             const centerY = design.transform.ny * outH;
             if (design.alphaThresholded) ctx.imageSmoothingEnabled = false;
@@ -280,6 +337,7 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
             }
             ctx.restore();
             if (design.alphaThresholded) { ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high'; }
+            decoded?.close();
           }
           const rawBlob: Blob = await new Promise((res, rej) =>
             exportCanvas.toBlob((b) => b ? res(b) : rej(new Error('toBlob failed')), 'image/png'));
@@ -298,6 +356,30 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
         const revokeMs = Math.max(5000, Math.round(pngBlob.size / 100000));
         setTimeout(() => URL.revokeObjectURL(url), revokeMs);
       }
+
+      // Tell the customer when the sheet they just downloaded is softer than it
+      // should be. A vector whose print-resolution re-render failed silently
+      // fell back to the import preview: the file still exports, so nothing
+      // else in this function fails and nothing else would ever mention it.
+      //
+      // Deliberately after the download rather than before it. The shortfall is
+      // information about a file that already exists, so a fault in this warning
+      // must not be able to cost someone their export.
+      //
+      // `materialShortfalls` and not `shortfalls()`: the import preview is
+      // clamped to 4096 px, which is still 300 DPI up to about 13.6 in, so most
+      // failures cost nothing. Warning on all of them would put "your print will
+      // be soft" in front of customers whose print is fine, which is how a
+      // warning gets ignored for the one design where it matters.
+      const softDesigns = materialShortfalls(vectorSources);
+      if (softDesigns.length > 0) {
+        console.warn("[export] designs printed below target resolution:", softDesigns);
+        toast({
+          title: t("toast.exportVectorQualityReduced"),
+          description: t("toast.exportVectorQualityReducedDesc", { count: softDesigns.length }),
+          variant: "destructive",
+        });
+      }
     } catch (error) {
       console.error("Download failed:", error);
       toast({ title: t("toast.downloadFailed"), description: error instanceof Error ? error.message : t("toast.downloadFailedDesc"), variant: "destructive" });
@@ -305,7 +387,7 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
       setExportProgressLabel(undefined);
       setIsProcessing(false);
     }
-  }, [imageInfo, designs, artboardWidth, artboardHeight, toast, t, setExportProgressLabel, ensureDesignImagesAvailable, setIsProcessing]);
+  }, [toast, t, setExportProgressLabel, ensureDesignImagesAvailable, setIsProcessing]);
 
   const fileToDataUrl = useCallback((file: File): Promise<string> => {
     return new Promise((resolve, reject) => {

@@ -14,7 +14,7 @@ export interface ShapeDetectionResult {
 
 export function detectShape(image: HTMLImageElement, alphaThreshold: number = 128): ShapeDetectionResult {
   const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) {
     return { shape: 'irregular', confidence: 0, aspectRatio: 1, boundingBox: { x: 0, y: 0, width: 0, height: 0 } };
   }

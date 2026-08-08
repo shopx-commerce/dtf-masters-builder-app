@@ -37,18 +37,86 @@ import {
   computeDraftSignature,
   deleteCurrentEditorDraft,
   getCurrentEditorDraft,
+  isDraftQuotaError,
+  isEditorDraftExpired,
+  isEditorDraftForProfile,
+  isEditorDraftSubmitted,
   isRecoverableImageInfo,
+  markCurrentEditorDraftSubmitted,
   rehydrateDesignImageFromDraft,
   requestPersistentEditorStorage,
   restoreEditorDraft,
   saveCurrentEditorDraft,
 } from "@/lib/editor-draft-storage";
+import { isTrustedShellMessage } from "@/lib/shell-message";
+import { isTrustedCartStatus } from "@/lib/cart-submit-token";
+import {
+  acquireDraftOwnership,
+  getDraftOwnership,
+  isDraftOwner,
+  subscribeDraftOwnership,
+  subscribeDraftPurge,
+  whenDraftOwnershipSettled,
+} from "@/lib/draft-tab-ownership";
 import ThumbnailWorker from "@/lib/thumbnail-worker?worker";
 import {
   getThumbnailCacheEntry,
   revokeThumbnailCacheEntry,
   setThumbnailCacheEntry,
 } from "@/lib/thumbnail-cache";
+
+/**
+ * Ceiling on how long a scheduled draft write may wait for an idle slot. An
+ * un-timed `requestIdleCallback` can be starved indefinitely while the editor
+ * is busy, and a delete that has not reached disk is lost outright if the tab
+ * is killed rather than closed (OOM on mobile, crash), since only an orderly
+ * close runs the unload flush.
+ */
+const DRAFT_SAVE_IDLE_TIMEOUT_MS = 2000;
+
+/**
+ * How long a save paused by a full origin quota waits before it is allowed one
+ * more attempt.
+ *
+ * There has to be *some* clock here. The condition can clear for reasons nothing
+ * in this app can observe — the customer clears another site's data, the browser
+ * evicts a different origin — and the alternative to a periodic probe is a
+ * session that never saves again however much space is freed. One doomed
+ * multi-megabyte write a minute is a cost worth paying for that; one per
+ * keystroke, which is what the bare `console.warn` produced, is not.
+ */
+const DRAFT_QUOTA_RETRY_COOLDOWN_MS = 60_000;
+
+/**
+ * Rough size of what a draft save would write, from data already to hand.
+ *
+ * Only ever compared against another reading of itself, to answer "is there less
+ * to write than there was when we ran out of room" — so it needs to move in the
+ * right direction, not to be accurate. Deliberately cheap enough to call on the
+ * save path, which is the point: the expensive part of a save is
+ * `buildEditorDraft` minting a `Blob` per design, and this is what decides
+ * whether to bother.
+ */
+function estimateDraftPayloadBytes(designs: DesignItem[]): number {
+  let bytes = 0;
+  for (const design of designs) {
+    const info = design.imageInfo;
+    if (!info) continue;
+    bytes += info.file?.size ?? 0;
+    if (info.svgSource) {
+      bytes += info.svgSource.length;
+      continue;
+    }
+    try {
+      // A buffer pdf.js has transferred reports 0, which is the right answer:
+      // there are no bytes left for a save to write either.
+      bytes += info.originalPdfData?.byteLength ?? 0;
+    } catch {
+      /* detached */
+    }
+  }
+  return bytes;
+}
 
 const THUMBNAIL_PLACEHOLDER =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' fill='%23f3f4f6'/%3E%3C/svg%3E";
@@ -124,8 +192,34 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   }, [profile.gangsheetHeights, initialHeight, initialGangsheetHeights]);
   const contentFillCacheRef = useRef<Map<string, number>>(new Map());
   const handleAutoArrangeRef = useRef<(
-    opts?: { skipSnapshot?: boolean; preserveSelection?: boolean; arrangeAll?: boolean }
+    opts?: { skipSnapshot?: boolean; preserveSelection?: boolean; arrangeAll?: boolean; fullRepack?: boolean }
   ) => void>(() => {});
+  // Assigned by `useImageEditorModelArrangeKeyboard`, which owns the height list. Held here so
+  // the delete handlers below can drop the sheet to the smallest size the remaining artwork
+  // needs, the same way they already reach auto-arrange.
+  const shrinkSheetToFitRef = useRef<(opts?: { snapshot?: boolean }) => void>(() => {});
+  /**
+   * Height the customer last chose from the Gangsheet Size dropdown. Auto-shrink refuses to
+   * go below it, so picking 120" is not silently undone by the next arrange or delete.
+   *
+   * It lives here, beside the history, rather than with the rest of the arrange logic that
+   * reads and writes it, because it is snapshotted: `getSnapshot` captures it alongside
+   * `artboardHeight` and `applySnapshot` restores it, which is what makes undo step back
+   * through height picks in order instead of quietly releasing them. It used to be cleared
+   * by an effect watching `designs.length` rise, which cannot tell a customer adding artwork
+   * from history putting artwork back, and so dropped the pin on the first Ctrl+Z.
+   */
+  const manualHeightFloorRef = useRef<number | null>(null);
+  /**
+   * Forget the pick. Called from the delete handlers when the last design goes, because a
+   * height chosen for a sheet is meaningless once that sheet is empty — without this, a
+   * customer who pinned 120", cleared the sheet and uploaded one small design would be held
+   * at 120" with no way back but the dropdown. Undoing back across the delete restores the
+   * floor from the snapshot, so clearing it here loses nothing.
+   */
+  const clearManualHeightFloor = useCallback(() => {
+    manualHeightFloorRef.current = null;
+  }, []);
   const [quantity, setQuantity] = useState(initialQuantity ?? 1);
   useEffect(() => {
     if (initialQuantity != null && initialQuantity >= 1) setQuantity(initialQuantity);
@@ -155,7 +249,6 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   const [designs, setDesigns] = useState<DesignItem[]>([]);
   const [draftRecoveryAvailable, setDraftRecoveryAvailable] = useState(false);
   const [isRecoveringDraft, setIsRecoveringDraft] = useState(false);
-  const draftFileKeysRef = useRef<Set<string>>(new Set());
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Signature of the last state we serialized to IndexedDB. React re-renders
   // often produce new Array/Set references without any observable field
@@ -163,6 +256,42 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   // signature matches the previous save we skip the debounced write entirely.
   const lastDraftSignatureRef = useRef<string | null>(null);
   const draftSaveIdleHandleRef = useRef<number | null>(null);
+  /**
+   * Set when a save was rejected because the origin is out of storage, together
+   * with how much there was to write at the time.
+   *
+   * Both halves matter. Without the pause, every subsequent edit reissued a
+   * doomed multi-megabyte write, because the failure handler resets
+   * `lastDraftSignatureRef` and so nothing short-circuits the retry. Without the
+   * measurements, the pause would be indefinite, and a customer who deleted half
+   * their designs to make room would still never be saved — which is exactly the
+   * action the toast is asking them to consider.
+   *
+   * Not `disableDraftSaves`, despite the overlap. That flag is module-scope and
+   * unconditional, and the crash boundary owns both setting and clearing it: a
+   * quota pause parked there would be cleared by an unrelated "Try to Recover"
+   * click, and would meanwhile suppress the `pagehide` flush for every tab in the
+   * page — including the one write most likely to fit, the one made after the
+   * customer deletes designs. A pause that has to reconsider itself needs the
+   * per-attempt state above, so it lives beside the save it gates.
+   */
+  const draftQuotaBlockRef = useRef<{ designCount: number; bytes: number; at: number } | null>(null);
+  /** Once per session. A full quota fails every save, so the news does not improve
+   *  by being repeated. */
+  const draftQuotaToastShownRef = useRef(false);
+  /**
+   * True once this session has held at least one design. It is what separates
+   * the two states that both look like "zero designs": a page that has only
+   * just loaded (nothing to save, and writing would destroy the draft the
+   * customer is about to be offered) from a sheet the customer has emptied
+   * (a deliberate act, which must reach disk — otherwise the newest record
+   * stays the pre-delete draft and gets offered back as "previous work").
+   *
+   * Set from any route into a non-empty sheet — upload, draft recovery, remote
+   * restore, paste, undo — because in every one of them the customer can see
+   * designs on screen, so clearing them is intentional.
+   */
+  const sessionHadDesignsRef = useRef(false);
   // Snapshot of every input `computeDraftSignature` / `buildEditorDraft`
   // need, refreshed on every render. Held in a ref so the imperative
   // `flushDraftSaveNow` (bound to `visibilitychange`/`pagehide`/unmount)
@@ -177,14 +306,18 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     designs: DesignItem[];
     artboardWidth: number;
     artboardHeight: number;
+    manualHeightFloor: number | null;
     quantity: number;
-    designGap: number;
+    /** `undefined` is the "Auto" margin, and must stay distinguishable from 0. */
+    designGap: number | undefined;
     selectedDesignId: string | null;
     selectedDesignIds: Set<string>;
     /**
      * `true` while we should refuse to save — recovery banner is showing,
-     * a recovery restore is in progress, or a heavy processing job (e.g.
-     * add-to-cart) is running. The same gate as the debounced effect.
+     * a recovery restore is in progress, a heavy processing job (e.g.
+     * add-to-cart) is running, or the sheet has been empty for this whole
+     * session. Literally the same `draftSaveGated` value the debounced
+     * effect uses.
      */
     saveGated: boolean;
   } | null>(null);
@@ -378,26 +511,114 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     return nextDesigns;
   }, [getRehydrationAttemptKey, rehydrateDesignImage, selectedDesignId, setImageInfo, setDesigns]);
 
+  // Only one tab may write draft storage — see `lib/draft-tab-ownership`. Two
+  // tabs are two writers to one `current` record and one shared blob store, and
+  // the observed consequence was total: tab B starting a fresh upload cleared
+  // the file store, tab A carried on saving `fileKey`s that pointed at nothing,
+  // and restore recovered zero designs without being able to say why.
+  const [draftOwnership, setDraftOwnership] = useState(getDraftOwnership);
+  useEffect(() => {
+    const release = acquireDraftOwnership();
+    setDraftOwnership(getDraftOwnership());
+    const unsubscribe = subscribeDraftOwnership(next => {
+      // Whatever is on disk was written by the tab that just went away, so this
+      // tab's own state has never been saved. Dropping the cached signature is
+      // what makes the first save after a handover actually write.
+      if (next.isOwner) lastDraftSignatureRef.current = null;
+      setDraftOwnership(next);
+    });
+    return () => {
+      unsubscribe();
+      release();
+    };
+  }, []);
+
+  /**
+   * A tab that is not saving says so. The alternative — standing down silently —
+   * is precisely the failure this whole area is being audited for: the customer
+   * builds a sheet, closes the tab, and finds nothing waiting for them. Held
+   * back until the sheet is actually non-empty, because a tab with nothing on it
+   * has nothing at stake and does not need interrupting. Reset on promotion, so
+   * a tab that later loses ownership again warns again.
+   */
+  const nonOwnerWarnedRef = useRef(false);
+  useEffect(() => {
+    if (!draftOwnership.settled) return;
+    if (draftOwnership.isOwner) {
+      nonOwnerWarnedRef.current = false;
+      return;
+    }
+    if (designs.length === 0 || nonOwnerWarnedRef.current) return;
+    nonOwnerWarnedRef.current = true;
+    toast({
+      title: t("toast.draftNotSavingHere"),
+      description: t("toast.draftNotSavingHereDesc"),
+      variant: "warning",
+    });
+  }, [draftOwnership, designs.length, t, toast]);
+
   useEffect(() => {
     void requestPersistentEditorStorage();
-    void getCurrentEditorDraft().then(draft => {
-      if (!draft || draft.designs.length === 0) return;
+    void (async () => {
+      // Both branches below write to shared storage — one deletes a record, the
+      // other offers a record this tab would then start overwriting — so neither
+      // may run until the election has decided. A non-owner also must not offer
+      // recovery at all: the record on disk is another tab's *live* sheet, not
+      // unsent work from a previous session.
+      if (!(await whenDraftOwnershipSettled())) return;
+      const draft = await getCurrentEditorDraft();
+      if (!draft) return;
+      // Expiry is enforced here, on the consumer side, rather than inside
+      // `getCurrentEditorDraft`: the same read backs `rehydrateDesignImageFromDraft`,
+      // which repairs artwork for designs already on screen, and that must keep
+      // working in a session that has outlived the cutoff. This effect runs once
+      // per mount, before any save, so the record it judges is always a previous
+      // session's. The purge is deliberately ahead of the edit-mode return below
+      // so a stale draft's blobs are reclaimed in every flow, not just the ones
+      // that would have offered it.
+      if (isEditorDraftExpired(draft)) {
+        void deleteCurrentEditorDraft().catch(error => {
+          console.warn("[editor-draft] expired draft cleanup failed", error);
+        });
+        return;
+      }
+      if (draft.designs.length === 0) return;
+      // Already sent to the cart. Not offered — the customer ordered this sheet,
+      // and being asked to recover it reads as though the order did not go
+      // through — but deliberately still on disk, so a checkout that later fails
+      // has not already cost them the work. Placed after the expiry purge, like
+      // the profile check below, so a submitted record ages out on exactly the
+      // normal schedule instead of becoming the one thing nothing reclaims.
+      if (isEditorDraftSubmitted(draft)) return;
+      // Deliberately *after* the expiry purge: a draft belonging to another
+      // product is hidden rather than deleted, and leaving it out of the purge
+      // would make it the one record nothing on this origin can ever reclaim.
+      if (!isEditorDraftForProfile(draft, profile.id)) {
+        console.warn(
+          "[editor-draft] not offering a draft built for another product",
+          draft.profileId,
+          "!=",
+          profile.id,
+        );
+        return;
+      }
       // A remotely saved design/edit flow is authoritative and should never
       // be replaced by an older browser-local draft.
       if (initialDesignState?.designId || isEditMode) return;
       setDraftRecoveryAvailable(true);
-    }).catch(error => {
+    })().catch(error => {
       console.warn("[editor-draft] availability check failed", error);
     });
-  }, [initialDesignState?.designId, isEditMode]);
+  }, [initialDesignState?.designId, isEditMode, profile.id]);
 
   const discardEditorDraft = useCallback(async () => {
     try {
-      await deleteCurrentEditorDraft();
+      // A non-owner clears its own banner but never the store: the record it
+      // would be deleting belongs to whichever tab is actually saving.
+      if (isDraftOwner()) await deleteCurrentEditorDraft();
     } catch (error) {
       console.warn("[editor-draft] discard failed", error);
     } finally {
-      draftFileKeysRef.current.clear();
       lastDraftSignatureRef.current = null;
       setDraftRecoveryAvailable(false);
     }
@@ -408,18 +629,52 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     setIsRecoveringDraft(true);
     try {
       const draft = await getCurrentEditorDraft();
-      if (!draft) {
+      // Re-checked rather than assumed from the banner: the record can have been
+      // replaced between the offer and the click, and restoring another product's
+      // geometry onto this sheet is a wrong-order risk, not a cosmetic one.
+      if (!draft || !isEditorDraftForProfile(draft, profile.id)) {
         setDraftRecoveryAvailable(false);
         return;
       }
       const restored = await restoreEditorDraft(draft);
       if (restored.designs.length === 0) {
+        // Nothing came back. Silently clearing the banner would look like the
+        // recover button did nothing at all.
         await discardEditorDraft();
+        toast({
+          title: t("toast.draftRestoreFailed"),
+          description: t("toast.draftRestoreFailedDesc"),
+          variant: "destructive",
+        });
         return;
+      }
+      if (restored.missingDesignCount > 0) {
+        toast({
+          title: t("toast.draftPartial"),
+          description: t("toast.draftPartialDesc", { count: restored.missingDesignCount }),
+          variant: "warning",
+        });
+      }
+      // Recovered, but not at the resolution it was built at. Told separately
+      // from the missing-artwork case because the customer's options differ:
+      // artwork that vanished has to be re-uploaded to appear at all, whereas
+      // this design is on the sheet and will print — just softer than they chose.
+      if (restored.reducedQualityDesignCount > 0) {
+        toast({
+          title: t("toast.draftQualityReduced"),
+          description: t("toast.draftQualityReducedDesc", {
+            count: restored.reducedQualityDesignCount,
+          }),
+          variant: "warning",
+        });
       }
       setIsProcessing(true);
       setArtboardWidth(restored.artboardWidth);
       setArtboardHeight(restored.artboardHeight);
+      // In step with the height, for the reason `applySnapshot` restores the two together:
+      // a recovered 120" sheet with no floor behind it is one delete away from being
+      // shrunk to whatever the artwork happens to need.
+      manualHeightFloorRef.current = restored.manualHeightFloor;
       setQuantity(restored.quantity);
       setDesignGap(restored.designGap);
       setDesigns(restored.designs);
@@ -428,7 +683,6 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       const selected = restored.designs.find(design => design.id === restored.selectedDesignId);
       setImageInfo(selected?.imageInfo ?? null);
       setDesignTransform(selected?.transform ?? DEFAULT_DESIGN_TRANSFORM);
-      draftFileKeysRef.current = new Set(draft.designs.map(design => design.fileKey));
       // Force the next save-effect to write, since the debounced-save signature
       // check would otherwise compare against a stale value from a prior draft.
       lastDraftSignatureRef.current = null;
@@ -437,20 +691,53 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     } catch (error) {
       console.error("[editor-draft] restore failed", error);
       setIsProcessing(false);
+      // The banner stays up so the customer can retry, but without this they
+      // get no signal that anything went wrong.
+      toast({
+        title: t("toast.draftRestoreFailed"),
+        description: t("toast.draftRestoreFailedDesc"),
+        variant: "destructive",
+      });
     } finally {
       setIsRecoveringDraft(false);
     }
   }, [
     discardEditorDraft,
     isRecoveringDraft,
+    profile.id,
     setArtboardHeight,
     setArtboardWidth,
     setDesignGap,
     setQuantity,
+    t,
+    toast,
   ]);
 
+  // Set from an effect, not during render. A render React throws away — a discarded
+  // concurrent attempt, StrictMode's double invocation — still ran the render-time write, and
+  // this flag's dangerous direction is being set spuriously: that is what turns "the page has
+  // only just loaded" into "the customer emptied their sheet" and lets a blank draft overwrite
+  // work they were about to be offered back.
+  //
+  // Deferring the write to commit introduces no lag where it matters, because `draftSaveGated`
+  // below only consults the flag when `designs.length === 0`, and the flag can only be true if
+  // some *committed* render had designs on screen. On the render where designs first appear the
+  // length check short-circuits, so the gate does not need the flag yet.
+  useEffect(() => {
+    if (designs.length > 0) sessionHadDesignsRef.current = true;
+  }, [designs.length]);
+  // One expression for both save paths — the debounced effect and the
+  // imperative unload flush. They previously each spelled the gate out, and
+  // an empty sheet reached neither of them.
+  const draftSaveGated =
+    !draftOwnership.isOwner ||
+    draftRecoveryAvailable ||
+    isRecoveringDraft ||
+    isProcessing ||
+    (designs.length === 0 && !sessionHadDesignsRef.current);
+
   // Refresh the imperative save-inputs snapshot every render. Cheap: one
-  // object allocation with 8 primitive/reference fields. `flushDraftSaveNow`
+  // object allocation of primitive/reference fields. `flushDraftSaveNow`
   // reads from this ref during page-hide / unmount, so we don't need to
   // add those state values as `useEffect` deps for the listener effect
   // (that would rebind the listener on every keystroke and produce a
@@ -460,15 +747,12 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     designs,
     artboardWidth,
     artboardHeight,
+    manualHeightFloor: manualHeightFloorRef.current,
     quantity,
-    designGap: designGap ?? 0,
+    designGap,
     selectedDesignId,
     selectedDesignIds,
-    saveGated:
-      draftRecoveryAvailable ||
-      isRecoveringDraft ||
-      isProcessing ||
-      designs.length === 0,
+    saveGated: draftSaveGated,
   };
 
   // Extracted synchronous save so both the debounced idle callback *and*
@@ -480,16 +764,83 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   // the promise is not awaited: by web spec, transactions opened before
   // `visibilitychange:hidden` / `pagehide` / `unload` are guaranteed to
   // commit before the browser terminates the page. That is the only
-  // reason this approach is safe during tab close.
+  // reason this approach is safe during tab close, and it holds only
+  // because `saveCurrentEditorDraft` reaches its `transaction()` call
+  // without awaiting — see the note on it. The one case that still can't
+  // be guaranteed is a cold connection (no read or write yet this
+  // session), where opening the database is itself asynchronous.
+  /**
+   * Whether to skip this save because the last one ran out of storage and nothing
+   * has changed that could make this one fit.
+   *
+   * Clears the pause — and so allows the attempt — on any of three grounds: fewer
+   * designs than when it failed, less to write than when it failed, or the
+   * cooldown has elapsed. The first two are the customer acting on the toast; the
+   * third is everything we cannot see. A cleared pause is re-armed by the next
+   * failure, so a genuinely full quota costs one write per cooldown and no more.
+   */
+  const draftSaveBlockedByQuota = useCallback((currentDesigns: DesignItem[]): boolean => {
+    const blocked = draftQuotaBlockRef.current;
+    if (!blocked) return false;
+    const shrank =
+      currentDesigns.length < blocked.designCount ||
+      estimateDraftPayloadBytes(currentDesigns) < blocked.bytes;
+    if (shrank || Date.now() - blocked.at >= DRAFT_QUOTA_RETRY_COOLDOWN_MS) {
+      draftQuotaBlockRef.current = null;
+      return false;
+    }
+    return true;
+  }, []);
+
+  const handleDraftSaveFailure = useCallback((
+    error: unknown,
+    attemptedDesigns: DesignItem[],
+    reason: string,
+  ) => {
+    // Unchanged for every other failure: dropping the signature is what makes
+    // the next state change retry.
+    lastDraftSignatureRef.current = null;
+    if (!isDraftQuotaError(error)) {
+      console.warn(`[editor-draft] save failed (${reason})`, error);
+      return;
+    }
+    draftQuotaBlockRef.current = {
+      designCount: attemptedDesigns.length,
+      bytes: estimateDraftPayloadBytes(attemptedDesigns),
+      at: Date.now(),
+    };
+    console.warn(`[editor-draft] storage full, pausing draft saves (${reason})`, error);
+    if (draftQuotaToastShownRef.current) return;
+    draftQuotaToastShownRef.current = true;
+    // The customer has no draft protection at all from here, and until this they
+    // were never told — they closed the tab believing their work was safe. Said
+    // once, and phrased around the two things they can actually do about it.
+    toast({
+      title: t("toast.draftStorageFull"),
+      description: t("toast.draftStorageFullDesc"),
+      variant: "destructive",
+    });
+  }, [t, toast]);
+  /**
+   * Reached through a ref so `performDraftSave` can keep empty deps. Its identity
+   * is what keeps `flushDraftSaveNow` stable, and that in turn is what stops the
+   * `pagehide` / `visibilitychange` listeners being rebound while the customer
+   * edits — see the effect that binds them.
+   */
+  const draftSaveFailureRef = useRef(handleDraftSaveFailure);
+  draftSaveFailureRef.current = handleDraftSaveFailure;
+
   const performDraftSave = useCallback((reason: string) => {
     const inputs = latestDraftInputsRef.current;
     if (!inputs) return;
     if (inputs.saveGated) return;
+    if (draftSaveBlockedByQuota(inputs.designs)) return;
     const signature = computeDraftSignature(
       inputs.profileId,
       inputs.designs,
       inputs.artboardWidth,
       inputs.artboardHeight,
+      inputs.manualHeightFloor,
       inputs.quantity,
       inputs.designGap,
       inputs.selectedDesignId,
@@ -501,35 +852,23 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       inputs.designs,
       inputs.artboardWidth,
       inputs.artboardHeight,
+      inputs.manualHeightFloor,
       inputs.quantity,
       inputs.designGap,
       inputs.selectedDesignId,
       inputs.selectedDesignIds,
     );
-    const newFiles = files.filter(
-      (file) => !draftFileKeysRef.current.has(file.key),
-    );
     lastDraftSignatureRef.current = signature;
-    void saveCurrentEditorDraft(draft, newFiles)
-      .then(() => {
-        for (const file of newFiles) draftFileKeysRef.current.add(file.key);
-      })
-      .catch((error) => {
-        lastDraftSignatureRef.current = null;
-        console.warn(`[editor-draft] save failed (${reason})`, error);
-      });
-  }, []);
+    const attemptedDesigns = inputs.designs;
+    void saveCurrentEditorDraft(draft, files).catch((error) => {
+      draftSaveFailureRef.current(error, attemptedDesigns, reason);
+    });
+  }, [draftSaveBlockedByQuota]);
 
-  // Imperative flush entrypoint. Callable from any code path that needs
-  // to guarantee the latest draft is persisted *before* the current
-  // execution completes: page-hide, pagehide, beforeunload, unmount,
-  // client-side navigation.
-  //
-  // Cancels any scheduled debounce/idle callback first so we don't race
-  // with them (they would otherwise fire against a possibly-stale
-  // signature and log a spurious "save failed" warning if the tab tore
-  // down between our synchronous save and their scheduled run).
-  const flushDraftSaveNow = useCallback((reason: string) => {
+  // Drops any write that has been scheduled but not yet run — the 750 ms
+  // debounce and the idle callback it hands off to. Needed by anything that
+  // has to be the last word on what is (or is not) on disk.
+  const cancelScheduledDraftSave = useCallback(() => {
     if (draftSaveTimerRef.current) {
       clearTimeout(draftSaveTimerRef.current);
       draftSaveTimerRef.current = null;
@@ -546,8 +885,21 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       }
       draftSaveIdleHandleRef.current = null;
     }
+  }, []);
+
+  // Imperative flush entrypoint. Callable from any code path that needs
+  // to guarantee the latest draft is persisted *before* the current
+  // execution completes: page-hide, pagehide, beforeunload, unmount,
+  // client-side navigation.
+  //
+  // Cancels any scheduled debounce/idle callback first so we don't race
+  // with them (they would otherwise fire against a possibly-stale
+  // signature and log a spurious "save failed" warning if the tab tore
+  // down between our synchronous save and their scheduled run).
+  const flushDraftSaveNow = useCallback((reason: string) => {
+    cancelScheduledDraftSave();
     performDraftSave(reason);
-  }, [performDraftSave]);
+  }, [cancelScheduledDraftSave, performDraftSave]);
 
   // Bind the browser lifecycle listeners *once*. Empty deps + ref-based
   // reads inside the handler are what keep this attach/detach out of
@@ -591,7 +943,8 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
 
   // Keep a browser-local recovery point while editing. The first save waits
   // until designs exist, so initial setup and remote restore are not captured
-  // as accidental blank drafts.
+  // as accidental blank drafts; after that an empty sheet *is* saved, because
+  // by then it means the customer deleted their work (see `draftSaveGated`).
   //
   // Two-stage coalescing:
   //   1. 750 ms debounce collapses bursts of state updates (typing, dragging,
@@ -605,15 +958,22 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   //      contends with an active user interaction. `setTimeout(0)` fallback
   //      preserves behavior on Safari.
   useEffect(() => {
-    if (draftRecoveryAvailable || isRecoveringDraft || isProcessing || designs.length === 0) return;
+    if (draftSaveGated) return;
 
+    // `manualHeightFloorRef` is read rather than depended on, and that is sound because every
+    // route that moves the floor also replaces the `designs` array: the height dropdown goes
+    // through `handleArtboardResize`, the delete handlers clear it while removing designs, and
+    // undo restores it while restoring designs. So this effect always re-runs after a floor
+    // change — and the floor being *inside* the signature is what makes the one case that
+    // changes nothing else (picking the height the sheet is already on) still reach disk.
     const signature = computeDraftSignature(
       profile.id,
       designs,
       artboardWidth,
       artboardHeight,
+      manualHeightFloorRef.current,
       quantity,
-      designGap ?? 0,
+      designGap,
       selectedDesignId,
       selectedDesignIds,
     );
@@ -621,39 +981,40 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
 
     if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
     draftSaveTimerRef.current = setTimeout(() => {
-      const idleCb = typeof window !== "undefined" && "requestIdleCallback" in window
-        ? window.requestIdleCallback.bind(window)
-        : (fn: () => void) => window.setTimeout(fn, 0);
+      const idleCb: (cb: IdleRequestCallback, opts?: IdleRequestOptions) => number =
+        typeof window !== "undefined" && "requestIdleCallback" in window
+          ? window.requestIdleCallback.bind(window)
+          : cb => window.setTimeout(() => cb({ didTimeout: true, timeRemaining: () => 0 }), 0);
       const cancelIdleCb = typeof window !== "undefined" && "cancelIdleCallback" in window
         ? window.cancelIdleCallback.bind(window)
         : (id: number) => window.clearTimeout(id);
       if (draftSaveIdleHandleRef.current != null) cancelIdleCb(draftSaveIdleHandleRef.current);
       draftSaveIdleHandleRef.current = idleCb(() => {
         draftSaveIdleHandleRef.current = null;
+        // Checked here rather than in `draftSaveGated` because the gate is a
+        // render-time value and the pause lives in a ref: this is the last point
+        // before the expensive part, and skipping it is the whole saving.
+        if (draftSaveBlockedByQuota(designs)) return;
         const { draft, files } = buildEditorDraft(
           profile.id,
           designs,
           artboardWidth,
           artboardHeight,
+          manualHeightFloorRef.current,
           quantity,
-          designGap ?? 0,
+          designGap,
           selectedDesignId,
           selectedDesignIds,
         );
-        const newFiles = files.filter(file => !draftFileKeysRef.current.has(file.key));
         // Optimistically mark the signature as saved. If the write fails we
-        // reset it so the next state change retries; if it succeeds we keep
-        // the file-key set aligned with what actually landed on disk.
+        // reset it so the next state change retries. Blobs already on disk are
+        // skipped inside the write transaction, so every file record can be
+        // handed over on every save.
         lastDraftSignatureRef.current = signature;
-        void saveCurrentEditorDraft(draft, newFiles)
-          .then(() => {
-            for (const file of newFiles) draftFileKeysRef.current.add(file.key);
-          })
-          .catch(error => {
-            lastDraftSignatureRef.current = null;
-            console.warn("[editor-draft] save failed", error);
-          });
-      }) as number;
+        void saveCurrentEditorDraft(draft, files).catch(error => {
+          draftSaveFailureRef.current(error, designs, "debounced");
+        });
+      }, { timeout: DRAFT_SAVE_IDLE_TIMEOUT_MS }) as number;
     }, 750);
     return () => {
       if (draftSaveTimerRef.current) {
@@ -666,6 +1027,8 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     artboardWidth,
     designGap,
     designs,
+    draftSaveBlockedByQuota,
+    draftSaveGated,
     draftRecoveryAvailable,
     isProcessing,
     isRecoveringDraft,
@@ -674,6 +1037,117 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     selectedDesignId,
     selectedDesignIds,
   ]);
+
+  /**
+   * Another tab has emptied the draft record and the whole blob store — the
+   * escape hatch on the crash screen, which is deliberately not ownership-gated
+   * because the crashed tab may be the non-owner and would otherwise be trapped
+   * (see `purgeEditorDraftStorage`).
+   *
+   * So this tab is the healthy one, working normally, whose record has just been
+   * deleted under it. Two things have to happen. The cached signature is now a
+   * lie — it says the current state is on disk when nothing is — and dropping it
+   * is what lets a save write again. And the save has to happen *now* rather than
+   * whenever the customer next touches something, because they may simply close
+   * the tab; `flushDraftSaveNow` re-writes the record and every blob, since the
+   * skip-what-is-already-there check in the write transaction finds an empty
+   * store. Then they are told, because their work was briefly gone and a silent
+   * repair is indistinguishable from not noticing.
+   */
+  useEffect(() => subscribeDraftPurge(() => {
+    lastDraftSignatureRef.current = null;
+    // Whatever was being offered has just been deleted, so the banner would
+    // recover nothing.
+    setDraftRecoveryAvailable(false);
+    const inputs = latestDraftInputsRef.current;
+    // A tab with an empty sheet has nothing to put back, and a non-owner never
+    // had anything on disk to lose.
+    if (!inputs || inputs.designs.length === 0 || !isDraftOwner()) return;
+    flushDraftSaveNow("peer purge");
+    toast({
+      title: t("toast.draftClearedElsewhere"),
+      description: t("toast.draftClearedElsewhereDesc"),
+      variant: "warning",
+    });
+  }), [flushDraftSaveNow, t, toast]);
+
+  // A sheet that reached the cart is no longer unsent work, so its draft stops
+  // being offered back. The storefront shell reports the outcome as
+  // `dtf-builder-cart-status`, and `done` is the only status that means the cart
+  // (or, in the edit flow, the saved design) actually took it — `handleAddToCart`
+  // returning means only that the payload was posted to the shell, so acting
+  // there would be optimistic and an upload that then fails, times out, or is
+  // rejected would have cost the customer their only copy. `error` and the stall
+  // watchdog deliberately leave the draft alone.
+  //
+  // `postMessage` is addressed to a *window*, not to a script, so before any of
+  // that: every frame, popup and third-party embed on the storefront page can
+  // deliver a message indistinguishable from the shell's. Both guards below sit
+  // ahead of every state change in this handler — including the signature write,
+  // which a rejected message would otherwise poison into claiming the live sheet
+  // was already saved.
+  useEffect(() => {
+    const onCartStatus = (event: MessageEvent) => {
+      const data = event.data as
+        | { type?: unknown; status?: unknown; requestId?: unknown }
+        | null
+        | undefined;
+      if (data?.type !== "dtf-builder-cart-status" || data.status !== "done") return;
+      // Who sent it: `event.source` is set by the browser and cannot be forged,
+      // so this excludes every window that is not our embedder.
+      if (!isTrustedShellMessage(event, "draft-clear")) return;
+      // Whether we asked: honoured only against a submit this tab actually made,
+      // which is what stops the genuine shell's own spontaneous or replayed
+      // `done` from counting. This is the primary defence — the origin half of
+      // the check above degrades to advisory on browsers without
+      // `location.ancestorOrigins`.
+      if (!isTrustedCartStatus(data.requestId, data.status)) return;
+      // Nothing may put the record back afterwards, and two writers could.
+      // One is a save that is scheduled but has not run — cancelled here. The
+      // other is the debounced effect re-running because this same status
+      // message drops `isProcessing` to false: starting add-to-cart cancelled
+      // the pending save for the current state, so the last-saved signature is
+      // stale and the effect would write it straight back. Claiming the
+      // submitted state as already-saved makes that re-run a no-op, while any
+      // *later* real edit still changes the signature and correctly begins a
+      // new draft.
+      cancelScheduledDraftSave();
+      const inputs = latestDraftInputsRef.current;
+      if (inputs) {
+        lastDraftSignatureRef.current = computeDraftSignature(
+          inputs.profileId,
+          inputs.designs,
+          inputs.artboardWidth,
+          inputs.artboardHeight,
+          inputs.manualHeightFloor,
+          inputs.quantity,
+          inputs.designGap,
+          inputs.selectedDesignId,
+          inputs.selectedDesignIds,
+        );
+      }
+      // Stamped, not deleted. `done` is the shell telling us the cart request
+      // came back — not that the order is paid for — so destroying the record
+      // here would take the sheet away at the exact moment the evidence is
+      // weakest, and a customer whose checkout then failed would have nothing.
+      // The stamp suppresses the recovery offer, which is the whole of what the
+      // customer should notice, and the record ages out through the ordinary
+      // 7-day expiry with its blobs. An explicit discard still deletes outright
+      // — see `discardEditorDraft`.
+      //
+      // Only the owning tab may write. A non-owner submitting its sheet would
+      // otherwise stamp the *other* tab's in-progress draft — and it has
+      // nothing of its own on disk to mark, since it was never saving.
+      if (isDraftOwner()) {
+        void markCurrentEditorDraftSubmitted().catch(error => {
+          console.warn("[editor-draft] marking the draft submitted failed", error);
+        });
+      }
+      setDraftRecoveryAvailable(false);
+    };
+    window.addEventListener("message", onCartStatus);
+    return () => window.removeEventListener("message", onCartStatus);
+  }, [cancelScheduledDraftSave]);
 
   useEffect(() => {
     if (!draftRecoveryAvailable || designs.length === 0 || isRecoveringDraft) return;
@@ -718,7 +1192,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       infoMap = new Map(currentDesigns.map(d => [d.id, d.imageInfo]));
       snapshotCacheRef.current = { designs: currentDesigns, json, infoMap };
     }
-    return { designsJson: json, selectedDesignId, imageInfoMap: infoMap, artboardWidth: artboardWidthRef.current, artboardHeight: artboardHeightRef.current };
+    return { designsJson: json, selectedDesignId, imageInfoMap: infoMap, artboardWidth: artboardWidthRef.current, artboardHeight: artboardHeightRef.current, manualHeightFloor: manualHeightFloorRef.current };
   }, [selectedDesignId]);
 
   const saveSnapshot = useCallback(() => {
@@ -792,6 +1266,9 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     }
     if (snap.artboardWidth !== undefined) setArtboardWidth(snap.artboardWidth);
     if (snap.artboardHeight !== undefined) setArtboardHeight(snap.artboardHeight);
+    // Restored unconditionally, and in step with the height above. Leaving the live value
+    // in place is what stranded a 120" floor on a sheet an undo had just put back to 60".
+    manualHeightFloorRef.current = snap.manualHeightFloor ?? null;
     setSelectedDesignIds(new Set());
     clearIsUndoRedo();
   }, [clearIsUndoRedo]);
@@ -820,14 +1297,29 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       : (selectedDesignId ? [selectedDesignId] : []);
     if (targetIds.length === 0) return;
     saveSnapshot();
-    const { removeBackgroundFromImage } = await import("@/lib/background-removal");
+    const { removeBackgroundFromImage, removeBackgroundFromCanvas } = await import("@/lib/background-removal");
+    const { applyEditAtPrintResolution, printSourceFieldsAfterEdit } = await import("@/lib/print-source-edit");
     const targetDesigns = designsRef.current.filter(d => targetIds.includes(d.id));
+
+    // Run the removal against the full-resolution print source so it reaches
+    // the printed sheet. Only designs with no separate print source fall back
+    // to editing the preview, where the preview *is* what prints.
     const results = await Promise.all(
-      targetDesigns.map(d => removeBackgroundFromImage(d.imageInfo.image, 75).catch(() => null))
+      targetDesigns.map(async (d): Promise<Partial<ImageInfo> | null> => {
+        const edited = await applyEditAtPrintResolution(
+          d.imageInfo,
+          d.widthInches,
+          d.heightInches,
+          canvas => removeBackgroundFromCanvas(canvas, 75),
+        ).catch(() => null);
+        if (edited) return printSourceFieldsAfterEdit(edited);
+        const image = await removeBackgroundFromImage(d.imageInfo.image, 75).catch(() => null);
+        return image ? { image } : null;
+      })
     );
     const updates = new Map<string, ImageInfo>();
     targetDesigns.forEach((d, i) => {
-      if (results[i]) updates.set(d.id, { ...d.imageInfo, image: results[i]! });
+      if (results[i]) updates.set(d.id, { ...d.imageInfo, ...results[i]! });
     });
     if (updates.size === 0) {
       toast({ title: "Remove failed", description: "Could not remove white background.", variant: "destructive" });
@@ -844,9 +1336,118 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     toast({ title: "White background removed", description: `Applied to ${updates.size} design${updates.size !== 1 ? "s" : ""}.` });
   }, [selectedDesignId, selectedDesignIds, saveSnapshot, setDesigns, toast, uiActions]);
 
-  const handleWandDelete = useCallback((nx: number, ny: number, designId: string) => {
+  const handleWandDelete = useCallback(async (nx: number, ny: number, designId: string) => {
     const design = designsRef.current.find(d => d.id === designId);
     if (!design) return;
+    // Read the slider value at click time so the callback identity
+    // doesn't depend on `wandTolerance` — the slider can drag freely
+    // without invalidating this `useCallback` or its downstream memos.
+    const { wandTolerance } = getToolSnapshot();
+    const maxDiff = Math.round((wandTolerance / 100) * 255);
+
+    // Normalised coordinates, so the same fill can run at whatever resolution
+    // the canvas happens to be — preview or full print source.
+    //
+    // Scanline fill: each step claims a whole horizontal run at once and only
+    // pushes one seed per adjacent run, rather than pushing every pixel. On a
+    // print-resolution source that is the difference between a stack of a few
+    // thousand entries and a queue of millions. A per-pixel queue was costing
+    // more than its own runtime in knock-on effects — holding hundreds of
+    // megabytes live made the PNG encode that follows several times slower.
+    //
+    // Erased pixels get alpha 0, and `matches` rejects anything transparent, so
+    // a filled pixel can never match again. That is what a `visited` array
+    // would have tracked, so there is no need to allocate one.
+    const floodFillDelete = (canvas: HTMLCanvasElement): boolean => {
+      const w = canvas.width, h = canvas.height;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx || !w || !h) return false;
+      const px = Math.min(Math.max(0, Math.round(nx * w)), w - 1);
+      const py = Math.min(Math.max(0, Math.round(ny * h)), h - 1);
+      const imageData = ctx.getImageData(0, 0, w, h);
+      const data = imageData.data;
+      const start = (py * w + px) * 4;
+      if (data[start + 3] < 10) return false;
+      const sr = data[start], sg = data[start + 1], sb = data[start + 2];
+
+      const matches = (pos: number): boolean => {
+        const idx = pos << 2;
+        if (data[idx + 3] < 10) return false;
+        const dr = data[idx] - sr, dg = data[idx + 1] - sg, db = data[idx + 2] - sb;
+        return (dr < 0 ? -dr : dr) <= maxDiff
+          && (dg < 0 ? -dg : dg) <= maxDiff
+          && (db < 0 ? -db : db) <= maxDiff;
+      };
+
+      let stack = new Int32Array(1024);
+      let sp = 0;
+      const push = (pos: number) => {
+        if (sp === stack.length) {
+          const grown = new Int32Array(stack.length * 2);
+          grown.set(stack);
+          stack = grown;
+        }
+        stack[sp++] = pos;
+      };
+
+      // Seed rows adjacent to a just-filled run, one push per contiguous run.
+      const seedRow = (rowStart: number, from: number, to: number) => {
+        let x = from;
+        while (x <= to) {
+          if (!matches(rowStart + x)) { x++; continue; }
+          push(rowStart + x);
+          while (x <= to && matches(rowStart + x)) x++;
+        }
+      };
+
+      push(py * w + px);
+      while (sp > 0) {
+        const pos = stack[--sp];
+        const y = (pos / w) | 0;
+        const rowStart = y * w;
+        // Another run may have swallowed this seed since it was pushed.
+        if (!matches(pos)) continue;
+
+        let left = pos - rowStart;
+        while (left > 0 && matches(rowStart + left - 1)) left--;
+        let right = pos - rowStart;
+        while (right < w - 1 && matches(rowStart + right + 1)) right++;
+
+        for (let x = left; x <= right; x++) data[((rowStart + x) << 2) + 3] = 0;
+
+        if (y > 0) seedRow(rowStart - w, left, right);
+        if (y < h - 1) seedRow(rowStart + w, left, right);
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+      return true;
+    };
+
+    const commit = (fields: Partial<ImageInfo>) => {
+      const nextInfo = { ...design.imageInfo, ...fields };
+      setDesigns(prev => prev.map(d => d.id === designId ? { ...d, imageInfo: nextInfo } : d));
+      if (selectedDesignId === designId) setImageInfo(nextInfo);
+    };
+
+    // Fill the full-resolution print source, so the erased area is actually
+    // absent from the printed sheet rather than just from the preview.
+    const { applyEditAtPrintResolution, printSourceFieldsAfterEdit } = await import("@/lib/print-source-edit");
+    let hit = true;
+    const edited = await applyEditAtPrintResolution(
+      design.imageInfo,
+      design.widthInches,
+      design.heightInches,
+      canvas => { hit = floodFillDelete(canvas); },
+    ).catch(() => null);
+    if (edited) {
+      // A tap on empty space is a no-op; don't burn an undo step on it.
+      if (!hit) return;
+      saveSnapshot();
+      commit(printSourceFieldsAfterEdit(edited));
+      return;
+    }
+
+    // No separate print source: the preview is what prints, so edit it directly.
     const src = design.imageInfo.image;
     const w = src.naturalWidth || src.width;
     const h = src.naturalHeight || src.height;
@@ -857,35 +1458,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return;
     ctx.drawImage(src, 0, 0);
-    const px = Math.min(Math.max(0, Math.round(nx * w)), w - 1);
-    const py = Math.min(Math.max(0, Math.round(ny * h)), h - 1);
-    const imageData = ctx.getImageData(0, 0, w, h);
-    const data = imageData.data;
-    const start = (py * w + px) * 4;
-    if (data[start + 3] < 10) return;
-    const sr = data[start], sg = data[start + 1], sb = data[start + 2];
-    // Read the slider value at click time so the callback identity
-    // doesn't depend on `wandTolerance` — the slider can drag freely
-    // without invalidating this `useCallback` or its downstream memos.
-    const { wandTolerance } = getToolSnapshot();
-    const maxDiff = Math.round((wandTolerance / 100) * 255);
-    const visited = new Uint8Array(w * h);
-    const queue = [py * w + px];
-    visited[py * w + px] = 1;
-    let qi = 0;
-    while (qi < queue.length) {
-      const pos = queue[qi++];
-      const idx = pos * 4;
-      if (data[idx + 3] < 10) continue;
-      if (Math.max(Math.abs(data[idx] - sr), Math.abs(data[idx + 1] - sg), Math.abs(data[idx + 2] - sb)) > maxDiff) continue;
-      data[idx + 3] = 0;
-      const x = pos % w, y = Math.floor(pos / w);
-      if (x > 0 && !visited[pos - 1]) { visited[pos - 1] = 1; queue.push(pos - 1); }
-      if (x < w - 1 && !visited[pos + 1]) { visited[pos + 1] = 1; queue.push(pos + 1); }
-      if (y > 0 && !visited[pos - w]) { visited[pos - w] = 1; queue.push(pos - w); }
-      if (y < h - 1 && !visited[pos + w]) { visited[pos + w] = 1; queue.push(pos + w); }
-    }
-    ctx.putImageData(imageData, 0, 0);
+    if (!floodFillDelete(canvas)) return;
     saveSnapshot();
     canvas.toBlob(blob => {
       if (!blob) return;
@@ -896,9 +1469,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       // pushes the tab over its memory ceiling. Revoke on load or error.
       nextImage.onload = () => {
         URL.revokeObjectURL(url);
-        const nextInfo = { ...design.imageInfo, image: nextImage };
-        setDesigns(prev => prev.map(d => d.id === designId ? { ...d, imageInfo: nextInfo } : d));
-        if (selectedDesignId === designId) setImageInfo(nextInfo);
+        commit({ image: nextImage });
       };
       nextImage.onerror = () => { URL.revokeObjectURL(url); };
       nextImage.src = url;
@@ -1710,10 +2281,14 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     if (remaining.length === 0) {
       setSelectedDesignId(null);
       setImageInfo(null);
+      clearManualHeightFloor();
     } else if (ids.includes(selectedDesignId ?? '')) {
       setSelectedDesignId(remaining[remaining.length - 1].id);
     }
-  }, [selectedDesignId, saveSnapshot]);
+    // Give back any film the deleted copies were holding open. Deferred so it measures the
+    // remaining designs; no snapshot, so the delete and the resize undo as one step.
+    setTimeout(() => shrinkSheetToFitRef.current(), 0);
+  }, [selectedDesignId, saveSnapshot, clearManualHeightFloor]);
 
   const handleDeleteDesign = useCallback((id: string) => {
     saveSnapshot();
@@ -1738,10 +2313,12 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     if (remaining.length === 0) {
       setSelectedDesignId(null);
       setImageInfo(null);
+      clearManualHeightFloor();
     } else if (selectedDesignId === id) {
       setSelectedDesignId(remaining[remaining.length - 1].id);
     }
-  }, [selectedDesignId, saveSnapshot]);
+    setTimeout(() => shrinkSheetToFitRef.current(), 0);
+  }, [selectedDesignId, saveSnapshot, clearManualHeightFloor]);
 
   const handleDeleteMulti = useCallback((ids: Set<string>) => {
     saveSnapshot();
@@ -1760,8 +2337,10 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     } else {
       setSelectedDesignId(null);
       setImageInfo(null);
+      clearManualHeightFloor();
     }
-  }, [saveSnapshot]);
+    setTimeout(() => shrinkSheetToFitRef.current(), 0);
+  }, [saveSnapshot, clearManualHeightFloor]);
 
   const handleRotate90 = useCallback(() => {
     if (!selectedDesignId) return;
@@ -1828,5 +2407,5 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
 
 
   // Base editor state; arrange/upload/export/cart hooks extend this bag in image-editor-provider.
-  return { onDesignUploaded, profile, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode, toast, t, lang, isMobile, isLgUp, imageInfo, setImageInfo, resizeSettings, setResizeSettings, isProcessing, setIsProcessing, isAddingToCart, setIsAddingToCart, isUpdateFlow, setIsUpdateFlow, addToCartProgressLabel, setAddToCartProgressLabel, exportProgressLabel, setExportProgressLabel, addToCartInFlightRef, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, refreshAddToCartStallTimeout, isUploading, setIsUploading, uploadProgress, setUploadProgress, artboardWidth, setArtboardWidth, artboardHeight, setArtboardHeight, artboardWidthRef, artboardHeightRef, contentFillCacheRef, handleAutoArrangeRef, quantity, setQuantity, designGap, setDesignGap, duplicateCount, setDuplicateCount, clampDuplicateCount, parseDuplicateCount, handleDuplicateCountKeyDown, designTransform, setDesignTransform, designs, setDesigns, selectedDesignId, setSelectedDesignId, selectedDesignIds, setSelectedDesignIds, clipboardRef, proportionalLock, setProportionalLock, designInfoRef, sidebarFileRef, headerUploadInputRef, canvasRef, downloadContainer, setDownloadContainer, fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer, copySpotSelectionsRef, pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo, mountedRef, designsRef, nudgeSnapshotSavedRef, nudgeTimeoutRef, thumbnailCacheRef, assetDataUrlCacheRef, restoredLayerAssetRef, multiDragAccumRef, multiResizeStartRef, multiRotateStartRef, snapshotCacheRef, getSnapshot, saveSnapshot, applySnapshot, handleUndo, handleRedo, handleInteractionEnd, handleRemoveWhiteBackground, handleWandDelete, selectedDesign, activeImageInfo, activeDesignTransform, activeWidthInches, activeHeightInches, activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, draftRecoveryAvailable, isRecoveringDraft, recoverEditorDraft, discardEditorDraft, rehydrateDesignImage, ensureDesignImagesAvailable, handleSelectDesign, handleMultiSelect, handleGroupSelected, handleUngroupSelected, selectedHasGroup, getLayerThumbnail, handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta, handleEffectiveSizeChange, isArtboardFull, handleDuplicateDesign, handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleCopySelected, handlePaste, handleDeleteGroup, handleDeleteDesign, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleCanvasContextMenu };
+  return { onDesignUploaded, profile, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode, toast, t, lang, isMobile, isLgUp, imageInfo, setImageInfo, resizeSettings, setResizeSettings, isProcessing, setIsProcessing, isAddingToCart, setIsAddingToCart, isUpdateFlow, setIsUpdateFlow, addToCartProgressLabel, setAddToCartProgressLabel, exportProgressLabel, setExportProgressLabel, addToCartInFlightRef, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, refreshAddToCartStallTimeout, isUploading, setIsUploading, uploadProgress, setUploadProgress, artboardWidth, setArtboardWidth, artboardHeight, setArtboardHeight, artboardWidthRef, artboardHeightRef, contentFillCacheRef, handleAutoArrangeRef, shrinkSheetToFitRef, manualHeightFloorRef, clearManualHeightFloor, quantity, setQuantity, designGap, setDesignGap, duplicateCount, setDuplicateCount, clampDuplicateCount, parseDuplicateCount, handleDuplicateCountKeyDown, designTransform, setDesignTransform, designs, setDesigns, selectedDesignId, setSelectedDesignId, selectedDesignIds, setSelectedDesignIds, clipboardRef, proportionalLock, setProportionalLock, designInfoRef, sidebarFileRef, headerUploadInputRef, canvasRef, downloadContainer, setDownloadContainer, fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer, copySpotSelectionsRef, pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo, mountedRef, designsRef, nudgeSnapshotSavedRef, nudgeTimeoutRef, thumbnailCacheRef, assetDataUrlCacheRef, restoredLayerAssetRef, multiDragAccumRef, multiResizeStartRef, multiRotateStartRef, snapshotCacheRef, getSnapshot, saveSnapshot, applySnapshot, handleUndo, handleRedo, handleInteractionEnd, handleRemoveWhiteBackground, handleWandDelete, selectedDesign, activeImageInfo, activeDesignTransform, activeWidthInches, activeHeightInches, activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, draftRecoveryAvailable, isRecoveringDraft, recoverEditorDraft, discardEditorDraft, rehydrateDesignImage, ensureDesignImagesAvailable, handleSelectDesign, handleMultiSelect, handleGroupSelected, handleUngroupSelected, selectedHasGroup, getLayerThumbnail, handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta, handleEffectiveSizeChange, isArtboardFull, handleDuplicateDesign, handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleCopySelected, handlePaste, handleDeleteGroup, handleDeleteDesign, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleCanvasContextMenu };
 }

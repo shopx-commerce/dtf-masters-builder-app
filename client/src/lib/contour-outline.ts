@@ -610,7 +610,7 @@ function bridgeTouchingContours(mask: Uint8Array, width: number, height: number,
 
 function createSilhouetteMask(image: HTMLImageElement): Uint8Array {
   const tempCanvas = document.createElement('canvas');
-  const tempCtx = tempCanvas.getContext('2d');
+  const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
   if (!tempCtx) return new Uint8Array(0);
 
   tempCanvas.width = image.width;
@@ -1618,7 +1618,7 @@ export function getContourPath(
   try {
     // Create scaled canvas for faster processing
     const tempCanvas = document.createElement('canvas');
-    const tempCtx = tempCanvas.getContext('2d');
+    const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
     if (!tempCtx) return null;
     
     tempCanvas.width = processWidth;
@@ -1878,7 +1878,7 @@ export async function downloadContourPDF(
         const flippedBgCanvas = document.createElement('canvas');
         flippedBgCanvas.width = bgCanvas.width;
         flippedBgCanvas.height = bgCanvas.height;
-        const flippedBgCtx = flippedBgCanvas.getContext('2d');
+        const flippedBgCtx = flippedBgCanvas.getContext('2d', { willReadFrequently: true });
         if (flippedBgCtx) {
           flippedBgCtx.translate(0, bgCanvas.height);
           flippedBgCtx.scale(1, -1);
@@ -1897,7 +1897,7 @@ export async function downloadContourPDF(
     const createDesignBlob = (): Promise<Blob> => {
       return new Promise((resolve, reject) => {
         const tempCanvas = document.createElement('canvas');
-        const tempCtx = tempCanvas.getContext('2d');
+        const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
         if (!tempCtx) {
           reject(new Error('Failed to get design canvas context'));
           return;
@@ -2183,7 +2183,7 @@ export async function generateContourPDFBase64(
       const flippedBgCanvas = document.createElement('canvas');
       flippedBgCanvas.width = bgCanvas.width;
       flippedBgCanvas.height = bgCanvas.height;
-      const flippedBgCtx = flippedBgCanvas.getContext('2d');
+      const flippedBgCtx = flippedBgCanvas.getContext('2d', { willReadFrequently: true });
       if (flippedBgCtx) {
         flippedBgCtx.translate(0, bgCanvas.height);
         flippedBgCtx.scale(1, -1);
@@ -2202,7 +2202,7 @@ export async function generateContourPDFBase64(
   const createDesignBlob = (): Promise<Blob> => {
     return new Promise((resolve, reject) => {
       const tempCanvas = document.createElement('canvas');
-      const tempCtx = tempCanvas.getContext('2d');
+      const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
       if (!tempCtx) {
         reject(new Error('Failed to get design canvas context'));
         return;

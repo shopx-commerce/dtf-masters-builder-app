@@ -45,7 +45,7 @@ function downloadBlob(blob: Blob, filename: string): void {
 
 async function imageToBlob(image: HTMLImageElement): Promise<Blob | null> {
   const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return null;
   
   canvas.width = image.width;

@@ -511,7 +511,7 @@ function createOptimizedSilhouetteMask(image: HTMLImageElement): MaskResult {
 
 function createMaskAtResolution(image: HTMLImageElement, targetWidth: number, targetHeight: number): Uint8Array {
   const tempCanvas = document.createElement('canvas');
-  const tempCtx = tempCanvas.getContext('2d');
+  const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
   if (!tempCtx) return new Uint8Array(0);
 
   tempCanvas.width = targetWidth;
@@ -1841,7 +1841,7 @@ export async function downloadContourPDF(
   
   // Create a canvas to get the image as PNG bytes
   const tempCanvas = document.createElement('canvas');
-  const tempCtx = tempCanvas.getContext('2d');
+  const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
   if (!tempCtx) return;
   
   tempCanvas.width = image.width;
@@ -2023,7 +2023,7 @@ export async function downloadShapePDF(
     imageCanvas = document.createElement('canvas');
     imageCanvas.width = image.width;
     imageCanvas.height = image.height;
-    const ctx = imageCanvas.getContext('2d');
+    const ctx = imageCanvas.getContext('2d', { willReadFrequently: true });
     if (ctx) ctx.drawImage(image, 0, 0);
   }
   
@@ -2194,7 +2194,7 @@ export async function generateContourPDFBase64(
   const page = pdfDoc.addPage([widthPts, heightPts]);
   
   const tempCanvas = document.createElement('canvas');
-  const tempCtx = tempCanvas.getContext('2d');
+  const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
   if (!tempCtx) return null;
   
   tempCanvas.width = image.width;
@@ -2328,7 +2328,7 @@ export async function generateShapePDFBase64(
     imageCanvas = document.createElement('canvas');
     imageCanvas.width = image.width;
     imageCanvas.height = image.height;
-    const ctx = imageCanvas.getContext('2d');
+    const ctx = imageCanvas.getContext('2d', { willReadFrequently: true });
     if (ctx) ctx.drawImage(image, 0, 0);
   }
   

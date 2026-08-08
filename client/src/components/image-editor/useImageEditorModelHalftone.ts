@@ -16,7 +16,7 @@ export function thresholdImageInfo(info: ImageInfo): Promise<ImageInfo | null> {
       if (!w || !h) { resolve(null); return; }
       const cvs = document.createElement('canvas');
       cvs.width = w; cvs.height = h;
-      const ctx = cvs.getContext('2d');
+      const ctx = cvs.getContext('2d', { willReadFrequently: true });
       if (!ctx) { resolve(null); return; }
       ctx.drawImage(src, 0, 0);
       const imgData = ctx.getImageData(0, 0, w, h);
@@ -40,6 +40,7 @@ export function thresholdImageInfo(info: ImageInfo): Promise<ImageInfo | null> {
 export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) {
   const {
     designs,
+    designsRef,
     selectedDesignId,
     selectedDesignIds,
     setDesigns,
@@ -202,25 +203,40 @@ export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) 
           img.onload = () => {
             URL.revokeObjectURL(url);
             if (halftoneJobRef.current.get(designId) === job) {
-              const newInfo: ImageInfo = { ...design.imageInfo, image: img };
               const halftoneSettings: HalftoneSettings = {
                 color: { r: tr, g: tg, b: tb },
                 strength,
               };
+              // The design is read live rather than from the `design` this call
+              // closed over. A screen takes long enough for the artwork to change
+              // underneath it — a crop, most obviously — and committing the stale
+              // `imageInfo` put the pre-crop pixels and print source back, so the
+              // crop silently reverted and the sheet printed uncropped.
+              const current = designsRef.current.find(d => d.id === designId);
+              // Screened from artwork this design no longer has. Whatever
+              // replaced it triggers its own rebuild, so drop this result rather
+              // than screen the sheet from stale pixels.
+              if (!current || (current.halftoneSourceImage ?? current.imageInfo.image) !== src) {
+                resolve();
+                return;
+              }
+              const newInfo: ImageInfo = { ...current.imageInfo, image: img };
               // halftoned: true  → export pipeline pre-cleans before drawing
               // alphaThresholded → nearest-neighbour scaling in export so
               //   bilinear interpolation cannot reintroduce semi-transparent
               //   edge pixels
-              setDesigns(prev => prev.map(d => d.id === designId
-                ? {
-                    ...d,
-                    imageInfo: newInfo,
-                    halftoned: true,
-                    halftoneSettings,
-                    halftoneSourceImage: src,
-                    alphaThresholded: true,
-                  }
-                : d));
+              setDesigns(prev => prev.map(d => {
+                if (d.id !== designId) return d;
+                if ((d.halftoneSourceImage ?? d.imageInfo.image) !== src) return d;
+                return {
+                  ...d,
+                  imageInfo: { ...d.imageInfo, image: img },
+                  halftoned: true,
+                  halftoneSettings,
+                  halftoneSourceImage: src,
+                  alphaThresholded: true,
+                };
+              }));
               if (selectedDesignId === designId) setImageInfo(newInfo);
             }
             resolve();
@@ -232,7 +248,7 @@ export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) 
     };
 
     void finish();
-  }, [designs, selectedDesignId, saveSnapshot, setDesigns, setImageInfo]);
+  }, [designs, designsRef, selectedDesignId, saveSnapshot, setDesigns, setImageInfo]);
 
   // The editor stores physical size separately from the pixels. Rebuild the
   // screen after a resize so the dot pitch remains 35 LPI at the new printed

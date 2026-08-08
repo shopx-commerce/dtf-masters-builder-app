@@ -6,6 +6,13 @@ export interface HistorySnapshot {
   imageInfoMap?: Map<string, unknown>;
   artboardWidth?: number;
   artboardHeight?: number;
+  /**
+   * Height the customer had picked by hand at this point, which auto-shrink treats as a
+   * floor. Travels with `artboardHeight` because the two describe the same decision: a
+   * snapshot that restored one without the other would leave the sheet pinned to a size
+   * nobody chose, or silently un-pin one they did.
+   */
+  manualHeightFloor?: number | null;
 }
 
 const MAX_HISTORY = 50;

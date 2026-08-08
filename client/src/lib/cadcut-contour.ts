@@ -106,7 +106,7 @@ function createOptimizedAlphaMask(image: HTMLImageElement): OptimizedMaskResult 
 
 function createAlphaMaskAtResolution(image: HTMLImageElement, targetWidth: number, targetHeight: number): Uint8Array {
   const tempCanvas = document.createElement('canvas');
-  const tempCtx = tempCanvas.getContext('2d');
+  const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
   if (!tempCtx) return new Uint8Array(0);
 
   tempCanvas.width = targetWidth;

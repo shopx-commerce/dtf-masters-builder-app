@@ -15,7 +15,7 @@ export function checkCadCutBounds(
 ): CadCutBounds {
   // Create a simple canvas to analyze the image bounds
   const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d')!;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
   
   canvas.width = image.width;
   canvas.height = image.height;

@@ -1,23 +1,27 @@
 import UploadSection from "../upload-section";
-import { useMemo, useRef, useEffect, useCallback } from "react";
+import { useMemo, useRef, useState, useEffect, useCallback } from "react";
 import PreviewSection from "../preview-section";
 import ControlsSection from "../controls-section";
 import CropModal from "../crop-modal";
 import SizeInput from "./size-input";
 import EditorActionToolbar from "./editor-action-toolbar";
+import MobileToolSheet from "./mobile-tool-sheet";
 import { LayerRow, type LayerRowHandlers } from "./layer-row";
 import { UploadsPanel } from "./uploads-panel";
 import { useToast } from "@/hooks/use-toast";
+import { useKeyboardSafeFocus } from "@/hooks/use-keyboard-safe-focus";
+import { useMobileLayout, useShortViewport } from "@/hooks/use-layout-viewport";
 import { formatDimensions, formatLength, useMetric, getUnitSuffix } from "@/lib/format-length";
+import { formatVariantPriceForDisplay } from "@/lib/variant-price";
+import { useWandTolerance, useToolActions } from "@/state/tool-store";
 import {
-  ArrowDownLeft, ArrowDownRight, ArrowUpLeft, ArrowUpRight, Copy, ChevronDown, ChevronUp,
-  Droplets, FlipHorizontal2, FlipVertical2, Group, Layers, LayoutGrid, Link, Loader2, Minus, Plus, RotateCw,
-  Trash2, Undo2, Redo2, Ungroup, Unlink, XCircle,
+  ArrowDownLeft, ArrowDownRight, ArrowUpLeft, ArrowUpRight, Copy,
+  Droplets, Eraser, FlipHorizontal2, FlipVertical2, Group, Layers, LayoutGrid, Link, Loader2, Minus, Plus, RotateCw,
+  SlidersHorizontal, Sparkles, Trash2, Ungroup, Unlink, WandSparkles, X, XCircle,
 } from "lucide-react";
 import { useImageEditorContext } from "./image-editor-context";
 import {
   useContextMenu,
-  useMobilePanel,
   useShowDesignInfo,
   useSelectionZoomActive,
   usePanModeActive,
@@ -45,6 +49,34 @@ const HalftoneIcon = ({ className }: { className?: string }) => (
 );
 
 
+/**
+ * The tools in the phone's Design tools sheet, and the thing the bar offers to repeat.
+ *
+ * Naming them lets one list drive the grid, the "run it again" pill, and which tool is
+ * remembered, so a tool cannot appear in the sheet and be missing from the pill.
+ */
+type DesignToolId =
+  | "whiteBg"
+  | "wand"
+  | "cleanAlpha"
+  | "cleanAlphaAll"
+  | "flipH"
+  | "flipV"
+  | "upscale"
+  | "halftone"
+  | "autoArrange";
+
+interface DesignTool {
+  id: DesignToolId;
+  label: string;
+  title: string;
+  Icon: React.ComponentType<{ className?: string }>;
+  /** Grid button colours. The pill borrows the same palette so the two read as one control. */
+  tone: string;
+  pillTone: string;
+  disabled: boolean;
+  run: () => void;
+}
 
 export default function ImageEditorView() {
   const {
@@ -67,18 +99,98 @@ export default function ImageEditorView() {
     handleEffectiveSizeChange, handleResizeChange, handleDuplicateDesign,
     handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleSetGroupCount,
     handleDeleteDesign, handleDeleteGroup, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleAlignCorner,
-    handleAutoArrange, handleArtboardResize, handleThresholdAlpha,
+    handleAutoArrange, handleArtboardHeightPick, handleThresholdAlpha,
     handleThresholdAlphaAll, handleCropDesign, handleCropApply, handleDownload, handleAddToCart,
     handleApplyHalftone, handleOpenHalftoneMenu, halftoneStrength, setHalftoneStrength,
     halftoneMenuOpen, setHalftoneMenuOpen, halftoneTopColors,
     handleRemoveWhiteBackground, handleWandDelete,
     handleCanvasContextMenu, handleInteractionEnd, handleUndo, handleRedo, canUndo, canRedo,
+    handleIncreaseQuality, isUpscaling, upscaleProgress, canIncreaseQuality,
     handleAutoArrangeRef, actionToolbarProps, getLayerThumbnail, setDesignGap, setDuplicateCount,
     parseDuplicateCount, handleDuplicateCountKeyDown, clampDuplicateCount, setArtboardWidth,
     setArtboardHeight, setQuantity, draftRecoveryAvailable, isRecoveringDraft,
     recoverEditorDraft, discardEditorDraft,
   } = useImageEditorContext();
   const { toast } = useToast();
+  // Which layout to render, as distinct from `isMobile` (which stays "is this a
+  // small touch device" and drives target sizing in `preview-section` and the
+  // fixed bottom bar in `controls-section`).
+  //
+  // Two things separate them. A phone on its side is 844×390: wide enough to
+  // leave the mobile layout, too short for the desktop one, whose sidebar is
+  // `w-full` until `lg` and pushes the canvas ~790px down a viewport that cannot
+  // scroll. And inside the storefront iframe `window.innerWidth` is the iframe's
+  // width, not the device's, so a padded theme container can hand a tablet the
+  // phone layout — the shell can correct that over `dtf-builder-shell-config`.
+  // See `hooks/use-layout-viewport.ts`.
+  const mobileLayout = useMobileLayout();
+  const shortViewport = useShortViewport();
+  // The phone presents one surface — canvas, persistent bar, contextual sheet.
+  // Everything the old Controls panel held that is not contextual to a
+  // selection now lives behind this, summoned over the canvas rather than
+  // taking layout width or height from it.
+  const [layersOpen, setLayersOpen] = useState(false);
+  /**
+   * The phone's home for everything that changes how a design *looks*.
+   *
+   * These controls existed before this sheet, in the contextual one, behind its
+   * half and full detents — which meant they only appeared if you happened to
+   * drag a sheet upward, and most customers never did. Summoning them by name
+   * from the persistent bar is the whole point; the contextual sheet is left to
+   * sizing, which is what a tap on a design is usually about.
+   */
+  const [designToolsOpen, setDesignToolsOpen] = useState(false);
+  const [toolsCollapseSignal, setToolsCollapseSignal] = useState(0);
+  /**
+   * Where the canvas's backdrop-colour swatches land on the phone: the right-hand end of the
+   * view bar, which is on screen for the whole session.
+   */
+  const [backdropSwatchHost, setBackdropSwatchHost] = useState<HTMLDivElement | null>(null);
+  /**
+   * Get out of the way and show what just happened.
+   *
+   * Every tool in the sheet changes the artwork, and the artwork is behind the
+   * sheet. Dropping to the strip and fitting the view to the design that
+   * changed turns "I pressed something" into "I can see what it did". `focusSelected`
+   * is the canvas' own Focus control, reached through the handle.
+   */
+  const focusSelectedRef = useRef<(() => void) | null>(null);
+  const registerCanvasFocus = useCallback((focus: () => void) => {
+    focusSelectedRef.current = focus;
+  }, []);
+  const minimiseToolsAndFocus = useCallback(() => {
+    setToolsCollapseSignal((n) => n + 1);
+    focusSelectedRef.current?.();
+  }, []);
+  /**
+   * The tool the customer reached for last, kept so the bar can offer it again.
+   *
+   * Most of these apply once and finish — there is no mode to display afterwards — but
+   * running the same tool over several designs in a row is the common way a sheet gets
+   * cleaned up, and doing that meant reopening the sheet each time. The one exception is the
+   * wand, which is a real mode; when it is armed it takes the slot regardless of this.
+   */
+  const [lastToolId, setLastToolId] = useState<DesignToolId | null>(null);
+  /**
+   * The halftone options open below the six tool buttons, which on a phone puts
+   * them past the bottom of the sheet's own scroll — the customer taps Halftone
+   * and nothing appears to happen. Pulling the panel into view is the whole
+   * difference between the control working and seeming broken.
+   */
+  const halftonePanelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!halftoneMenuOpen || !designToolsOpen) return;
+    // After the panel has been laid out, or there is nothing to scroll to.
+    const frame = requestAnimationFrame(() => {
+      halftonePanelRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [halftoneMenuOpen, designToolsOpen]);
+  const wandTolerance = useWandTolerance();
+  const { setWandTolerance } = useToolActions();
+  // Lifts a focused field clear of the software keyboard. Inert unless the
+  // visual viewport actually shrinks, so desktop is untouched.
+  useKeyboardSafeFocus();
   const handleAddFromUploads = useCallback(async (file: File) => {
     await processSidebarFile(file);
   }, [processSidebarFile]);
@@ -92,7 +204,9 @@ export default function ImageEditorView() {
   // Now the model is untouched and only this view (plus the specific
   // consumers below) re-renders when they change.
   const contextMenu = useContextMenu();
-  const mobilePanel = useMobilePanel();
+  // `mobilePanel` is no longer read here: the phone has one surface, so there
+  // is nothing to flip between. The store field and its writers stay because
+  // `useImageEditorModelUploadCrop` still sets it after an upload.
   const showDesignInfo = useShowDesignInfo();
   const selectionZoomActive = useSelectionZoomActive();
   const panModeActive = usePanModeActive();
@@ -178,9 +292,12 @@ export default function ImageEditorView() {
   //     boolean that would invalidate the callback on every toggle). We
   //     read it imperatively via `useUiStore.getState()` at click time so
   //     the callback identity stays permanently stable.
+  // Picking a height from the dropdown is the one height change the customer makes on
+  // purpose, so it goes through `handleArtboardHeightPick`, which records it as the floor
+  // auto-shrink will not drop below.
   const handleArtboardHeightChange = useCallback(
-    (h: number) => handleArtboardResize(artboardWidth, h),
-    [handleArtboardResize, artboardWidth],
+    (h: number) => handleArtboardHeightPick(h),
+    [handleArtboardHeightPick],
   );
   const handleWandDeleteToggle = useCallback(() => {
     const prev = useUiStore.getState().wandDeleteModeActive;
@@ -229,6 +346,211 @@ export default function ImageEditorView() {
       getLayerThumbnail: (design) => layerHandlersLiveRef.current.getLayerThumbnail(design),
     }),
     [handleAutoArrangeRef],
+  );
+
+  /**
+   * Shared by the desktop sidebar's layers card and the phone's layers sheet.
+   *
+   * Built only when one of those two is actually showing it, and memoised on the rows
+   * themselves. Hoisting this out of the sidebar's `showDesignInfo` conditional so both arms
+   * could share it quietly made it unconditional: the phone, which does not render the
+   * sidebar at all, went from paying nothing for these elements to rebuilding all of them on
+   * every view render, including every frame of a drag and with the layers sheet shut.
+   */
+  const layerListVisible = showDesignInfo || layersOpen;
+  const layerListItems = useMemo(
+    () =>
+      layerListVisible
+        ? layerRows.map((row) => {
+            const rowKey = `${row.baseName}::${row.sizeKey}`;
+            return <LayerRow key={rowKey} rowKey={rowKey} row={row} handlers={layerHandlers} />;
+          })
+        : null,
+    [layerListVisible, layerRows, layerHandlers],
+  );
+
+  /**
+   * Built only for the phone, which is the only layout with a Design tools sheet — the
+   * desktop toolbar spells these out across the top of the editor instead.
+   *
+   * Every entry closes over the handler it runs, so the grid below is a `.map` and the bar's
+   * pill is a lookup. `runTool` is what both go through, so using a tool from either place
+   * records it the same way.
+   */
+  const designTools: DesignTool[] = !mobileLayout ? [] : [
+    {
+      id: "whiteBg",
+      label: t("editor.whiteBg"),
+      title: t("editor.whiteBgTitle"),
+      Icon: Eraser,
+      tone: "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100",
+      pillTone: "border-amber-300 bg-amber-50 text-amber-700",
+      disabled: !selectedDesignId,
+      run: handleRemoveWhiteBackground,
+    },
+    {
+      id: "wand",
+      label: t("editor.magicWand"),
+      title: t("editor.magicWandTitle"),
+      Icon: WandSparkles,
+      tone: "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-600 hover:bg-fuchsia-100",
+      pillTone: "border-fuchsia-300 bg-fuchsia-50 text-fuchsia-700",
+      disabled: !selectedDesignId,
+      run: handleWandDeleteToggle,
+    },
+    {
+      id: "cleanAlpha",
+      label: t("editor.cleanAlpha"),
+      title: t("editor.cleanAlphaTitle"),
+      Icon: Droplets,
+      tone: "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]",
+      pillTone: "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]",
+      disabled: !selectedDesignId && selectedDesignIds.size === 0,
+      run: handleThresholdAlpha,
+    },
+    {
+      id: "cleanAlphaAll",
+      label: t("editor.cleanAlphaAll"),
+      title: t("editor.cleanAlphaAllTitle"),
+      Icon: Droplets,
+      tone: "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]",
+      pillTone: "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]",
+      disabled: designs.length === 0,
+      run: handleThresholdAlphaAll,
+    },
+    {
+      id: "flipH",
+      label: t("editor.flipH"),
+      title: t("editor.flipH"),
+      Icon: FlipHorizontal2,
+      tone: "border-gray-300 bg-white text-gray-700 hover:bg-gray-100",
+      pillTone: "border-gray-300 bg-white text-gray-700",
+      disabled: !selectedDesignId,
+      run: handleFlipX,
+    },
+    {
+      id: "flipV",
+      label: t("editor.flipV"),
+      title: t("editor.flipV"),
+      Icon: FlipVertical2,
+      tone: "border-gray-300 bg-white text-gray-700 hover:bg-gray-100",
+      pillTone: "border-gray-300 bg-white text-gray-700",
+      disabled: !selectedDesignId,
+      run: handleFlipY,
+    },
+    /* Auto-Arrange sits with the tools now rather than in the bar. Imports and copy-count
+       changes already arrange as they land, so pressing it is the exception rather than the
+       routine, and it was holding the only labelled slot on the row. */
+    {
+      id: "autoArrange",
+      label: t("editor.autoArrange"),
+      title: selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll"),
+      Icon: LayoutGrid,
+      tone: "border-pink-600 bg-pink-500 text-black hover:bg-pink-600",
+      pillTone: "border-pink-600 bg-pink-500 text-black",
+      disabled: designs.length < 2 && selectedDesignIds.size < 2,
+      run: () => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2, fullRepack: true }),
+    },
+    ...(canIncreaseQuality
+      ? [{
+          id: "upscale" as const,
+          label: isUpscaling && upscaleProgress !== null
+            ? `${Math.round(upscaleProgress * 100)}%`
+            : t("editor.increaseQuality"),
+          title: t("editor.increaseQuality"),
+          Icon: Sparkles,
+          tone: "border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100",
+          pillTone: "border-violet-300 bg-violet-50 text-violet-700",
+          disabled: !selectedDesignId || isUpscaling,
+          run: () => { void handleIncreaseQuality(2); },
+        }]
+      : []),
+    ...(halftoneEnabled
+      ? [{
+          id: "halftone" as const,
+          label: t("editor.halftone"),
+          title: t("editor.halftoneTitle"),
+          Icon: HalftoneIcon,
+          tone: halftoneMenuOpen
+            ? "border-amber-600 bg-amber-500 text-white"
+            : "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100",
+          pillTone: "border-amber-300 bg-amber-50 text-amber-700",
+          disabled: !selectedDesignId && selectedDesignIds.size === 0,
+          /* Its options render inside the sheet, so repeating it from the pill has to bring
+             the sheet back up or the menu would open somewhere nobody can see. */
+          run: () => { setDesignToolsOpen(true); setLayersOpen(false); handleOpenHalftoneMenu(); },
+        }]
+      : []),
+  ];
+
+  /**
+   * Halftone is the one tool that opens options instead of applying, so it must not collapse
+   * the sheet it just drew them into.
+   */
+  const runTool = (tool: DesignTool) => {
+    setLastToolId(tool.id);
+    tool.run();
+    if (tool.id !== "halftone") minimiseToolsAndFocus();
+  };
+
+  const lastTool = lastToolId ? designTools.find((tool) => tool.id === lastToolId) ?? null : null;
+
+  /**
+   * Whether the phone's action bar is showing a tool in its right-hand slot, and so whether
+   * the Design tools button has to give up its label to make room. Mirrors the condition the
+   * slot itself renders under, so the two can never disagree.
+   */
+  const activeToolShown = wandDeleteModeActive || !!lastTool;
+
+  /**
+   * One element, rendered into exactly one of the two arms.
+   *
+   * On desktop it is the sidebar's first card. On the phone it is mounted
+   * `hidden`: its two inline cards (gangsheet size, White BG / Magic Wand)
+   * are re-laid-out for touch elsewhere in the mobile arm, but the component
+   * itself must stay mounted because the download / add-to-cart bar and both
+   * fluorescent panels are `createPortal` children of it, and `display: none`
+   * on a React ancestor does not reach a portal's DOM parent.
+   */
+  const controlsSection = (
+    <ControlsSection
+      resizeSettings={activeResizeSettings}
+      onResizeChange={handleResizeChange}
+      onDownload={handleDownload}
+      isProcessing={isProcessing}
+      exportProgressLabel={exportProgressLabel}
+      imageInfo={activeImageInfo}
+      artboardWidth={artboardWidth}
+      artboardHeight={artboardHeight}
+      onArtboardHeightChange={handleArtboardHeightChange}
+      downloadContainer={downloadContainer}
+      designCount={designs.length}
+      gangsheetHeights={GANGSHEET_HEIGHTS}
+      recommendedArtboardHeight={recommendedArtboardHeight}
+      downloadFormat={profile.downloadFormat}
+      enableFluorescent={profile.enableFluorescent}
+      selectedDesignId={selectedDesignId}
+      onSpotPreviewChange={setSpotPreviewData}
+      fluorPanelContainer={fluorPanelContainer}
+      copySpotSelectionsRef={copySpotSelectionsRef}
+      onActiveChannelChange={setActiveSpotChannel}
+      wandAssignRef={wandAssignRef}
+      panModeActive={panModeActive}
+      onPanModeChange={setPanModeActive}
+      clearActiveChannelRef={clearActiveChannelRef}
+      quantity={quantity}
+      onQuantityChange={setQuantity}
+      shopifyVariants={shopifyVariants}
+      onAddToCart={handleAddToCart}
+      hasVariantId={!!(initialVariantId || shopifyVariants?.length)}
+      isAddingToCart={isAddingToCart}
+      addToCartLabel={isEditMode ? "Update Design" : undefined}
+      addingStatusLabel={isEditMode ? "Updating" : undefined}
+      lockGangsheetSize={isEditMode}
+      onRemoveWhiteBackground={handleRemoveWhiteBackground}
+      wandDeleteActive={wandDeleteModeActive}
+      onWandDeleteToggle={handleWandDeleteToggle}
+    />
   );
 
   if (!activeImageInfo && !embedFromShopify) {
@@ -309,14 +631,18 @@ export default function ImageEditorView() {
                 onBatchStart={handleBatchStart}
                 imageInfo={null}
               />
-              {/* Uploads library — re-add previously uploaded files to a fresh sheet */}
-              <div className="mt-4 w-full max-w-xl mx-auto">
-                <UploadsPanel
-                  t={t}
-                  onAddFile={handleAddFromUploads}
-                  onUnavailable={handleUploadUnavailable}
-                />
-              </div>
+              {/* Uploads library — re-add previously uploaded files to a fresh
+                  sheet. Desktop only: upload history is off the phone
+                  entirely, here as well as in the editor. */}
+              {!mobileLayout && (
+                <div className="mt-4 w-full max-w-xl mx-auto">
+                  <UploadsPanel
+                    t={t}
+                    onAddFile={handleAddFromUploads}
+                    onUnavailable={handleUploadUnavailable}
+                  />
+                </div>
+              )}
             </>
           )}
         </div>
@@ -326,6 +652,10 @@ export default function ImageEditorView() {
 
   return (
     <div
+      /* `isMobile`, not `mobileLayout`: this reserve exists solely to clear the
+         bottom bar that `controls-section` pins with `position: fixed`, and that
+         is gated on `useIsMobile()`. The two must agree or the bar covers
+         content. */
       className={`h-full flex flex-col ${isMobile ? "pb-16" : ""} relative`}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
@@ -374,76 +704,21 @@ export default function ImageEditorView() {
             </div>
           </div>
         )}
-        {isMobile && (
-          <div className="flex-shrink-0 border-b border-gray-200 bg-white px-2 py-1.5">
-            <div className="grid grid-cols-2 gap-1.5">
-              <button
-                type="button"
-                onClick={() => {
-                  setMobilePanel("controls");
-                  setWandDeleteModeActive(false);
-                }}
-                className={`rounded px-2 py-1 text-xs font-bold tracking-wide transition-colors ${mobilePanel === "controls" ? "bg-violet-600 text-white shadow-md shadow-violet-200" : "bg-violet-100 text-violet-400"}`}
-              >
-                🎛️ Controls
-              </button>
-              <button
-                type="button"
-                onClick={() => setMobilePanel("preview")}
-                className={`rounded px-2 py-1 text-xs font-bold tracking-wide transition-colors ${mobilePanel === "preview" ? "bg-cyan-500 text-white shadow-md shadow-cyan-200" : "bg-cyan-100 text-cyan-400"}`}
-              >
-                👁️ Preview
-              </button>
-            </div>
-          </div>
-        )}
-        <div
-          className={isMobile ? "flex min-h-0 flex-1 flex-row transition-transform duration-300 ease-out" : "flex-1 min-h-0 flex flex-col lg:flex-row"}
-          style={isMobile ? { transform: mobilePanel === "preview" ? "translateX(-100%)" : "translateX(0)" } : undefined}
-        >
-      {/* Left sidebar - Layers + Settings */}
-      <div className={`flex-shrink-0 w-full lg:w-[320px] xl:w-[340px] border-r border-gray-200 bg-white overflow-x-hidden ${isMobile ? "" : "overflow-y-auto"}`}>
+        <div className="flex-1 min-h-0 flex flex-row">
+      {/* Left sidebar - Layers + Settings.
+          Desktop and tablet only. The phone used to render this `w-full`
+          beside the canvas and slide between the two with a `translateX`,
+          which parked ~30 controls off the left edge of the viewport; every
+          one of them now has a home in the mobile arm below. `ControlsSection`
+          still mounts on the phone (see the hidden host further down) because
+          the download / add-to-cart bar and the fluorescent panels are its
+          portals. */}
+      {!mobileLayout && (
+      <div className="flex-shrink-0 border-r border-gray-200 bg-white overflow-x-hidden w-[320px] xl:w-[340px] overflow-y-auto">
         <div className="p-2.5 space-y-2">
-          <ControlsSection
-            resizeSettings={activeResizeSettings}
-            onResizeChange={handleResizeChange}
-            onDownload={handleDownload}
-            isProcessing={isProcessing}
-            exportProgressLabel={exportProgressLabel}
-            imageInfo={activeImageInfo}
-            artboardWidth={artboardWidth}
-            artboardHeight={artboardHeight}
-            onArtboardHeightChange={handleArtboardHeightChange}
-            downloadContainer={downloadContainer}
-            designCount={designs.length}
-            gangsheetHeights={GANGSHEET_HEIGHTS}
-            recommendedArtboardHeight={recommendedArtboardHeight}
-            downloadFormat={profile.downloadFormat}
-            enableFluorescent={profile.enableFluorescent}
-            selectedDesignId={selectedDesignId}
-            onSpotPreviewChange={setSpotPreviewData}
-            fluorPanelContainer={fluorPanelContainer}
-            copySpotSelectionsRef={copySpotSelectionsRef}
-            onActiveChannelChange={setActiveSpotChannel}
-            wandAssignRef={wandAssignRef}
-            panModeActive={panModeActive}
-            onPanModeChange={setPanModeActive}
-            clearActiveChannelRef={clearActiveChannelRef}
-            quantity={quantity}
-            onQuantityChange={setQuantity}
-            shopifyVariants={shopifyVariants}
-            onAddToCart={handleAddToCart}
-            hasVariantId={!!(initialVariantId || shopifyVariants?.length)}
-            isAddingToCart={isAddingToCart}
-            addToCartLabel={isEditMode ? "Update Design" : undefined}
-            addingStatusLabel={isEditMode ? "Updating" : undefined}
-            lockGangsheetSize={isEditMode}
-            onRemoveWhiteBackground={handleRemoveWhiteBackground}
-            wandDeleteActive={wandDeleteModeActive}
-            onWandDeleteToggle={handleWandDeleteToggle}
-          />
+          {controlsSection}
 
-           {!isMobile && halftoneEnabled && (
+           {!mobileLayout && halftoneEnabled && (
              <div className="relative rounded-lg border border-amber-200 bg-amber-50/40 p-2">
                <button
                  onClick={handleOpenHalftoneMenu}
@@ -531,8 +806,12 @@ export default function ImageEditorView() {
                 />
               </div>
               {showDesignInfo && (
+                /* The short cap exists so a one- or two-layer list does not
+                   reserve empty space. A touch row is 152px against 87px for a
+                   mouse, so 180px shows barely one of them; the coarse cap is
+                   sized to fit two. */
                 <div
-                  className={`layers-scroll border-t border-gray-200 overflow-y-scroll ${layerRows.length > 2 ? 'max-h-[400px]' : 'max-h-[180px]'}`}
+                  className={`layers-scroll border-t border-gray-200 overflow-y-scroll ${layerRows.length > 2 ? 'max-h-[400px]' : 'max-h-[180px] coarse:max-h-[320px]'}`}
                   style={{
                     scrollbarWidth: 'thin',
                     scrollbarColor: '#9ca3af transparent',
@@ -544,23 +823,15 @@ export default function ImageEditorView() {
                     .layers-scroll::-webkit-scrollbar-thumb { background: #9ca3af; border-radius: 4px; }
                     .layers-scroll::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
                   `}</style>
-                  {layerRows.map((row) => {
-                    const rowKey = `${row.baseName}::${row.sizeKey}`;
-                    return (
-                      <LayerRow
-                        key={rowKey}
-                        rowKey={rowKey}
-                        row={row}
-                        handlers={layerHandlers}
-                      />
-                    );
-                  })}
+                  {layerListItems}
                 </div>
               )}
             </div>
           )}
 
-          {/* Uploads library panel — previously uploaded files, re-addable */}
+          {/* Uploads library panel — previously uploaded files, re-addable.
+              Desktop only: on the phone the library was the thing "Add
+              Designs" routed through, and it is gone from that arm entirely. */}
           <UploadsPanel
             t={t}
             onAddFile={handleAddFromUploads}
@@ -568,23 +839,88 @@ export default function ImageEditorView() {
           />
         </div>
       </div>
+      )}
 
       {/* Right area - Canvas workspace */}
-      <div className={`min-w-0 flex flex-col ${isMobile ? "w-full flex-shrink-0" : "flex-1 h-full overflow-hidden"}`}>
-        {!isMobile && <EditorActionToolbar {...actionToolbarProps} />}
+      <div className={`min-w-0 flex flex-col ${mobileLayout ? "w-full flex-shrink-0" : "flex-1 h-full overflow-hidden"}`}>
+        {/* The toolbar's own mobile/desktop arms have to match the layout it is
+            rendered into, so the bag's device-level `isMobile` is overridden. */}
+        {!mobileLayout && <EditorActionToolbar {...actionToolbarProps} isMobile={mobileLayout} />}
 
         {/* Preview Canvas */}
-        {isMobile ? (
+        {mobileLayout ? (
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="flex min-h-0 flex-1">
-            <div className="min-h-0 min-w-0 h-full pl-1.5 basis-[53%] shrink-0 flex flex-col">
-              <div className="flex-shrink-0 flex items-center gap-0.5 bg-white border-b border-gray-200 px-2 py-1">
-                <button onClick={handleRotate90} disabled={!selectedDesignId} className="h-8 w-8 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30" title={t("editor.rotate")}><RotateCw className="mx-auto h-4 w-4" /></button>
-                <button onClick={() => handleAlignCorner('tl')} disabled={!selectedDesignId} className="h-8 w-8 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30" title={t("editor.alignTL")}><ArrowUpLeft className="mx-auto h-4 w-4" /></button>
-                <button onClick={() => handleAlignCorner('tr')} disabled={!selectedDesignId} className="h-8 w-8 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30" title={t("editor.alignTR")}><ArrowUpRight className="mx-auto h-4 w-4" /></button>
-                <button onClick={() => handleAlignCorner('bl')} disabled={!selectedDesignId} className="h-8 w-8 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30" title={t("editor.alignBL")}><ArrowDownLeft className="mx-auto h-4 w-4" /></button>
-                <button onClick={() => handleAlignCorner('br')} disabled={!selectedDesignId} className="h-8 w-8 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30" title={t("editor.alignBR")}><ArrowDownRight className="mx-auto h-4 w-4" /></button>
+              {/* Portal host. Renders nothing itself — see the note on
+                  `controlsSection`. */}
+              <div className="hidden" aria-hidden="true">{controlsSection}</div>
+
+              {/* View bar.
+                  Undo and Redo carry their names here rather than riding the
+                  action bar as bare glyphs. The undo glyph is a curved arrow
+                  and so is the rotate handle, and customers were reading the
+                  first as the second — a labelled button is the only fix that
+                  survives someone who has never used the editor before. The
+                  glyphs are gone rather than merely accompanied by the word,
+                  which both settles the question and is what makes the row fit
+                  in Spanish: "Deshacer" and "Rehacer" with icons overran the
+                  390px edge by 75px even after everything else was trimmed.
+
+                  They sit up here because two labels cost ~126px and the
+                  action bar below had none spare. This row did, once the five
+                  backdrop swatches moved into the design tools sheet, and it
+                  moved up with them so the labels have somewhere to be. Net
+                  effect on canvas height is a wash: one row left the bottom,
+                  one arrived at the top.
+
+                  Above the canvas rather than floating over it because the
+                  empty band this appears to occupy is only empty for a short
+                  sheet at default zoom — pick a 36in gangsheet, or zoom in,
+                  and anything floating there is sitting on the artwork. */}
+              <div
+                className="flex flex-shrink-0 items-center gap-1 overflow-x-auto border-b border-gray-200 bg-gray-100 py-1 pl-2 pr-1 [scrollbar-width:thin]"
+                data-testid="mobile-view-bar"
+              >
+                <button
+                  type="button"
+                  onClick={handleUndo}
+                  disabled={!canUndo()}
+                  className="flex h-9 flex-shrink-0 items-center gap-1 whitespace-nowrap rounded border border-gray-300 bg-white px-1.5 text-[12px] font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:pointer-events-none disabled:opacity-30 coarse:h-11"
+                  title={t("editor.undo")}
+                >
+                  {t("editor.undoShort")}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRedo}
+                  disabled={!canRedo()}
+                  className="flex h-9 flex-shrink-0 items-center gap-1 whitespace-nowrap rounded border border-gray-300 bg-white px-1.5 text-[12px] font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:pointer-events-none disabled:opacity-30 coarse:h-11"
+                  title={t("editor.redo")}
+                >
+                  {t("editor.redoShort")}
+                </button>
+                <div className="h-5 w-px flex-shrink-0 bg-gray-300" />
+                {/* Reset / zoom / focus portal in here from the canvas. */}
+                <div ref={setMobileToolbarContainer} className="flex min-w-0 flex-1 items-center" data-testid="mobile-canvas-toolbar" />
+                {/* The backdrop the canvas draws behind the artwork.
+                    
+                    Back at the right-hand end of this bar, where the zoom
+                    controls leave about 150px unused. It spent a while in the
+                    Design tools sheet, which put a viewing preference two taps
+                    deep behind a panel about editing the artwork — and hid it
+                    entirely unless that panel happened to be open. Everything
+                    else in this bar changes how you are looking at the sheet
+                    rather than what is on it, which is exactly what choosing a
+                    garment colour to preview against does.
+
+                    `PreviewSection` owns the colour and portals the swatches
+                    into this box. */}
+                <div ref={setBackdropSwatchHost} className="flex flex-shrink-0 items-center pl-1" />
               </div>
+
+              {/* Full-bleed canvas. The sheet below overlays it rather than
+                  sitting beside it, because `PreviewSection` sizes the
+                  gangsheet from this box and anything that takes width or
+                  height here comes straight off the artwork. */}
               <div className="relative min-h-0 min-w-0 flex-1">
                 <PreviewSection
                   ref={canvasRef}
@@ -613,187 +949,626 @@ export default function ImageEditorView() {
                   selectionZoomActive={selectionZoomActive}
                   onSelectionZoomChange={handleSelectionZoomChange}
                   bottomToolbarContainer={mobileToolbarContainer}
+                  backdropSwatchContainer={backdropSwatchHost}
                    wandDeleteActive={wandDeleteModeActive}
                    onWandDeleteTap={handleWandDelete}
                    onWandDeactivate={handleWandDeactivate}
+                   onRegisterFocus={registerCanvasFocus}
                 />
-              </div>
-            </div>
 
-            <div className="min-h-0 h-full basis-[47%] shrink-0 border-l border-gray-200 bg-gray-100 p-2">
-              <div className="flex h-full flex-col gap-2 overflow-y-auto">
-                <button onClick={handleThresholdAlpha} disabled={!selectedDesignId && selectedDesignIds.size === 0} className={`flex items-center justify-center gap-1 rounded-md border px-2 py-2 text-[11px] font-medium transition-all ${selectedDesignId || selectedDesignIds.size > 0 ? "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`} title={t("editor.cleanAlphaTitle")}><Droplets className="h-3 w-3" />{t("editor.cleanAlpha")}</button>
-                <button onClick={handleThresholdAlphaAll} disabled={designs.length === 0} className={`flex items-center justify-center gap-1 rounded-md border px-2 py-2 text-[11px] font-medium transition-all ${designs.length > 0 ? "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`} title={t("editor.cleanAlphaAllTitle")}><Droplets className="h-3 w-3" />{t("editor.cleanAlphaAll")}</button>
-                {halftoneEnabled && (
-                  <div className="relative">
-                    <button
-                      onClick={handleOpenHalftoneMenu}
-                      disabled={!selectedDesignId && selectedDesignIds.size === 0}
-                      className={`flex w-full items-center justify-center gap-1 rounded-md border px-2 py-2 text-[11px] font-medium transition-all ${selectedDesignId || selectedDesignIds.size > 0 ? "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`}
-                      title="Halftone: convert design colours to halftone dots for dark-garment DTF"
-                    >
-                      <HalftoneIcon className="h-3 w-3" />Halftone
-                    </button>
-                    {halftoneMenuOpen && (selectedDesignId || selectedDesignIds.size > 0) && (
-                      <div className="absolute left-0 top-full z-50 mt-1 w-48 rounded-md border border-gray-200 bg-white p-2 shadow-lg">
-                        <p className="mb-1 text-[11px] font-semibold text-gray-700 uppercase tracking-wide">Strength</p>
-                        <div className="mb-2 flex gap-1">
-                          {(['light','balanced','strong'] as const).map(s => (
-                            <button key={s} onClick={() => setHalftoneStrength(s)}
-                              className={`flex-1 text-[11px] py-1 rounded border font-medium capitalize transition-colors ${halftoneStrength === s ? 'bg-amber-500 text-white border-amber-600' : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-amber-50'}`}>
-                              {s}
-                            </button>
-                          ))}
+                {/* Contextual tools. Nothing selected means no sheet at all, so
+                    the controls cost zero canvas for as long as they are of no
+                    use. Every row below is `flex-nowrap` + `justify-start`:
+                    wrapping would silently eat canvas, and a centred row that
+                    overflows spills off the left edge where no scroll reaches. */}
+                <MobileToolSheet
+                  /* All three sheets are `bottom-0 z-40`; only one is ever
+                     mounted so they cannot stack. Closing either summoned sheet
+                     brings the contextual one straight back. */
+                  open={!!selectedDesignId && !layersOpen && !designToolsOpen}
+                  handleLabel={t("editor.toolSheetHandle")}
+                  handleAccessory={
+                    <>
+                      {/* Lives here rather than inside the size panel below, where
+                          desktop puts it. The panel has to fit two fields and four
+                          stepper buttons across 374px and this badge was the 34px
+                          that pushed the height stepper off the edge. The handle
+                          strip is already where the sheet's status goes. */}
+                      {selectedDesignIds.size > 1 && (
+                        <span
+                          className="inline-flex rounded-full border border-cyan-500 bg-cyan-50 px-1.5 py-0.5 text-[11px] font-bold leading-none tabular-nums text-cyan-700"
+                          title={t("editor.resizeAppliesToAll", { count: selectedDesignIds.size })}
+                        >
+                          ×{selectedDesignIds.size}
+                        </span>
+                      )}
+                      <span
+                        className={`inline-flex rounded px-1.5 py-0.5 text-[11px] font-bold leading-none ${effectiveDPI < 277 ? "border border-amber-400 bg-amber-100 text-amber-700" : "border border-emerald-700 bg-emerald-100 text-emerald-700"}`}
+                        title={t("editor.effectiveRes", { dpi: effectiveDPI })}
+                      >
+                        {effectiveDPI} DPI
+                      </span>
+                    </>
+                  }
+                >
+                  {(level) => (
+                    <>
+                      {/* The same tinted panel the desktop toolbar uses, for the
+                          same reason: it makes the white fields the highest-contrast
+                          thing on the sheet, so the size control is findable without
+                          any explanatory copy. The phone needs it more than desktop
+                          does — this sheet is the only place a size can be typed. */}
+                      {/* Sized to the device rather than to its contents. Every
+                          part of this row except the two number fields is a fixed
+                          touch target, so the fields are what flexes; see `fluid`
+                          in `SizeInput`. `overflow-x-auto` stays as the floor for
+                          a viewport too narrow even for that, but no phone in
+                          normal use should reach it now.
+
+                          Flexing has a ceiling as well as a floor: this sheet is
+                          also the tablet's sizing control, and a 1024px iPad gave
+                          each field 372px of width to hold four characters. Past
+                          about 200px per field the extra width is not legibility,
+                          it just makes the number look lost, so the leftover goes
+                          to the margins instead. */}
+                      <div className="mx-auto flex w-full max-w-[480px] flex-nowrap items-center justify-center gap-0.5 overflow-x-auto rounded-lg border-2 border-cyan-500 bg-cyan-100 px-1 py-1 shadow-sm">
+                        <div className="flex min-w-0 max-w-[200px] flex-1 items-center gap-0.5">
+                          <span className="flex-shrink-0 text-[12px] font-bold leading-none text-cyan-900">W</span>
+                          <SizeInput fluid value={activeResizeSettings.widthInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("width", v)} title={useMetric(lang) ? t("editor.widthTitleCm") : t("editor.widthTitle")} max={artboardWidth} lang={lang} />
+                          {/* The unit label is the first thing to drop when the row
+                              runs out of room. `cm` is two characters where the inch
+                              mark is one, and carrying it below ~430px squeezed the
+                              field under the width its own digits need: a customer
+                              in Spanish saw 18.06 render as 18.0. The sheet's
+                              dimension label still states the unit. */}
+                          <span className={`flex-shrink-0 text-[11px] font-semibold text-cyan-900 ${useMetric(lang) ? "max-[430px]:hidden" : ""}`}>{getUnitSuffix(activeResizeSettings.widthInches * activeDesignTransform.s, lang)}</span>
                         </div>
                         <button
-                          onClick={() => { setHalftoneMenuOpen(false); const id = selectedDesignId ?? [...selectedDesignIds][0]; if (id) handleApplyHalftone(id, 0, 0, 0, halftoneStrength); }}
-                          className="mb-1 w-full rounded bg-gray-900 px-2 py-1.5 text-[11px] font-medium text-white hover:bg-gray-700"
+                          type="button"
+                          onClick={() => setProportionalLock((v) => !v)}
+                          className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded transition-colors coarse:h-11 coarse:w-9 max-[380px]:coarse:!w-8 ${proportionalLock ? "bg-white text-cyan-600 shadow-sm" : "text-cyan-700/70 hover:bg-white/70"}`}
+                          title={proportionalLock ? t("editor.proportionsLocked") : t("editor.proportionsUnlocked")}
                         >
-                          ⬛ Black garment
+                          {proportionalLock ? <Link className="h-3.5 w-3.5 coarse:h-4 coarse:w-4" /> : <Unlink className="h-3.5 w-3.5 coarse:h-4 coarse:w-4" />}
                         </button>
-                        {halftoneTopColors.length > 0 && (
-                          <div className="mt-1 space-y-1">
-                            <p className="text-[11px] font-semibold text-gray-700 uppercase tracking-wide">Colour garment</p>
-                            {halftoneTopColors.map((c, i) => (
-                              <button key={i}
-                                onClick={() => { setHalftoneMenuOpen(false); const id = selectedDesignId ?? [...selectedDesignIds][0]; if (id) handleApplyHalftone(id, c.r, c.g, c.b, halftoneStrength); }}
-                                className="flex w-full items-center gap-2 rounded px-2 py-1 text-[11px] hover:bg-gray-100"
+                        <div className="flex min-w-0 max-w-[200px] flex-1 items-center gap-0.5">
+                          <span className="flex-shrink-0 text-[12px] font-bold leading-none text-cyan-900">H</span>
+                          <SizeInput fluid value={activeResizeSettings.heightInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("height", v)} title={useMetric(lang) ? t("editor.heightTitleCm") : t("editor.heightTitle")} max={artboardHeight} lang={lang} />
+                          <span className={`flex-shrink-0 text-[11px] font-semibold text-cyan-900 ${useMetric(lang) ? "max-[430px]:hidden" : ""}`}>{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>
+                        </div>
+                      </div>
+
+                      {level !== "peek" && (
+                        <>
+                          <div className="flex flex-nowrap items-center justify-start gap-0.5 overflow-x-auto">
+                            <button onClick={handleRotate90} disabled={!selectedDesignId} className="h-8 w-8 flex-shrink-0 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.rotate")}><RotateCw className="mx-auto h-4 w-4" /></button>
+                            <button onClick={() => handleAlignCorner('tl')} disabled={!selectedDesignId} className="h-8 w-8 flex-shrink-0 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.alignTL")}><ArrowUpLeft className="mx-auto h-4 w-4" /></button>
+                            <button onClick={() => handleAlignCorner('tr')} disabled={!selectedDesignId} className="h-8 w-8 flex-shrink-0 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.alignTR")}><ArrowUpRight className="mx-auto h-4 w-4" /></button>
+                            <button onClick={() => handleAlignCorner('bl')} disabled={!selectedDesignId} className="h-8 w-8 flex-shrink-0 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.alignBL")}><ArrowDownLeft className="mx-auto h-4 w-4" /></button>
+                            <button onClick={() => handleAlignCorner('br')} disabled={!selectedDesignId} className="h-8 w-8 flex-shrink-0 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.alignBR")}><ArrowDownRight className="mx-auto h-4 w-4" /></button>
+                          </div>
+
+                          <div className="flex flex-nowrap items-center justify-start gap-2 overflow-x-auto">
+                            <button
+                              onClick={() => handleDuplicateDesign(duplicateCount)}
+                              disabled={!selectedDesignId}
+                              className={`flex-shrink-0 rounded-md px-2 py-2 text-[11px] font-medium transition-all coarse:min-h-[44px] ${selectedDesignId ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#7C3AED]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`}
+                              title={t("editor.duplicate")}
+                            >
+                              <span className="inline-flex w-full items-center justify-center gap-1 text-center whitespace-nowrap leading-snug">
+                                <Copy className="h-3.5 w-3.5 flex-shrink-0" />
+                                <span>{t("editor.duplicate").replace(/ \(.*/, "")}</span>
+                              </span>
+                            </button>
+                            {/* Hit area and glyph are separate boxes on a coarse
+                                pointer, the same trade `size-input.tsx` and
+                                `layer-row.tsx` make: the two chevrons keep their
+                                12px bezels and get 44x44 boxes around them, which
+                                is why the stepper leaves the input's right edge
+                                and becomes a sibling column. Copy count multiplies
+                                material consumption, so a mis-tap here costs film
+                                by the sheet. */}
+                            <div className="flex flex-shrink-0 items-center gap-px">
+                              {/* 46 rather than 44: the 1px border is part of
+                                  this box, and the field inside it is what the
+                                  finger actually lands on. */}
+                              <div className="h-[28px] w-10 overflow-hidden rounded border border-gray-300 bg-white focus-within:border-cyan-500 coarse:h-[46px] coarse:w-14">
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={duplicateCount}
+                                  onChange={(e) => setDuplicateCount(parseDuplicateCount(e.target.value))}
+                                  onKeyDown={handleDuplicateCountKeyDown}
+                                  disabled={!selectedDesignId}
+                                  /* 16px on any touch screen so iOS does not auto-zoom on
+                                     focus — same reasoning as `size-input.tsx`. Gated on the
+                                     pointer rather than on the width breakpoint, so a tablet
+                                     in this layout is covered too. */
+                                  className="w-full h-full text-center text-[12px] coarse:text-[16px] font-semibold leading-none p-0 bg-white outline-none disabled:opacity-30 disabled:pointer-events-none"
+                                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                  title={t("editor.copyCount")}
+                                />
+                              </div>
+                              <div className="flex flex-col gap-[3px] coarse:gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev + 1))}
+                                  disabled={!selectedDesignId || duplicateCount >= 99}
+                                  className="group flex h-3.5 w-4 items-center justify-center disabled:opacity-30 disabled:pointer-events-none coarse:h-11 coarse:w-11"
+                                  title={t("editor.increaseCopies")}
+                                  aria-label={t("editor.increaseCopies")}
+                                >
+                                  {/* Same bezel and same −/+ as the layers and size
+                                      steppers — this one kept chevrons on both pointers
+                                      and was the odd one out of the three. */}
+                                  <span className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-50 text-gray-600 group-hover:bg-gray-100">
+                                    <Plus className="h-3 w-3" strokeWidth={3} />
+                                  </span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev - 1))}
+                                  disabled={!selectedDesignId || duplicateCount <= 1}
+                                  className="group flex h-3.5 w-4 items-center justify-center disabled:opacity-30 disabled:pointer-events-none coarse:h-11 coarse:w-11"
+                                  title={t("editor.decreaseCopies")}
+                                  aria-label={t("editor.decreaseCopies")}
+                                >
+                                  <span className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-50 text-gray-600 group-hover:bg-gray-100">
+                                    <Minus className="h-3 w-3" strokeWidth={3} />
+                                  </span>
+                                </button>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => handleDuplicateAndArrange(duplicateCount)}
+                              disabled={!selectedDesignId}
+                               className={`flex-shrink-0 rounded-md px-2 py-2 text-[12px] font-semibold transition-all coarse:min-h-[44px] ${selectedDesignId ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#0891B2]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`}
+                              title={t("editor.duplicateArrange")}
+                            >
+                              <span className="inline-flex w-full items-center justify-center gap-1 text-center whitespace-nowrap leading-snug">
+                                <Copy className="h-3.5 w-3.5 flex-shrink-0" />
+                                <span>{t("editor.duplicateArrange")}</span>
+                              </span>
+                            </button>
+                          </div>
+
+                        </>
+                      )}
+
+                      {level === "full" && designs.length >= 2 && (
+                        <div className="flex flex-nowrap items-center justify-start gap-1 overflow-x-auto">
+                           <span className="flex-shrink-0 text-[11px] font-medium text-gray-700">{t("editor.margin")}</span>
+                          <select
+                            value={designGap === undefined ? "auto" : String(designGap)}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              const newGap = v === "auto" ? undefined : parseFloat(v);
+                              setDesignGap(newGap);
+                              setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true, fullRepack: true }), 0);
+                            }}
+                             className="h-8 flex-shrink-0 px-1.5 bg-gray-100 border border-gray-300 rounded text-[12px] coarse:text-[16px] coarse:h-11 font-medium text-gray-800 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
+                            title={useMetric(lang) ? t("editor.marginGapCm") : t("editor.marginGap")}
+                          >
+                            <option value="auto">{t("editor.marginAuto")}</option>
+                            <option value="0.0625">{useMetric(lang) ? formatLength(0.0625, lang) : "1/16″"}</option>
+                            <option value="0.125">{useMetric(lang) ? formatLength(0.125, lang) : "1/8″"}</option>
+                            <option value="0.25">{useMetric(lang) ? formatLength(0.25, lang) : "1/4″"}</option>
+                            <option value="0.5">{useMetric(lang) ? formatLength(0.5, lang) : "1/2″"}</option>
+                            <option value="1">{useMetric(lang) ? formatLength(1, lang) : "1″"}</option>
+                          </select>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </MobileToolSheet>
+
+                {/* Summoned layers panel. Same overlay semantics as the tool
+                    sheet — `absolute bottom-0` inside the canvas box, so the
+                    box itself never changes size and `PreviewSection` never
+                    re-fits the artwork. `sizing="fill"` because a list has no
+                    natural peek height to measure. */}
+                <MobileToolSheet
+                  open={layersOpen}
+                  testId="mobile-layers-sheet"
+                  /* Content-sized, not fill. A fill-sized sheet picks its height
+                     from the space available rather than the list in it, so one
+                     layer got a 610px sheet holding 193px of content and 373px
+                     of white — the panel read as enormous because it was. Sized
+                     to content it is as tall as the rows it has, and a list long
+                     enough to exceed the ceiling scrolls, which is the only case
+                     fill was protecting against.
+
+                     The 56px of canvas the tool sheet reserves is also dropped
+                     to 16: that reservation keeps artwork visible while you
+                     resize it, and a list has no such tie. Landscape leaves this
+                     box ~228px, so those 40px are the difference between showing
+                     a row and showing none. */
+                  minCanvasStripPx={16}
+                  handleLabel={t("editor.layersSheetHandle")}
+                  handleLeading={
+                    <button
+                      type="button"
+                      /* The handle above owns pointer events for dragging, so
+                         this has to claim its own before they reach it. */
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => { e.stopPropagation(); setLayersOpen(false); }}
+                      className="flex h-11 w-11 items-center justify-center rounded text-gray-500 hover:bg-gray-100 hover:text-gray-900"
+                      title={t("editor.closeLayers")}
+                      aria-label={t("editor.closeLayers")}
+                    >
+                      <X className="h-6 w-6" />
+                    </button>
+                  }
+                >
+                  {() => (
+                    <>
+                      <div className="flex flex-nowrap items-center justify-start gap-2 overflow-x-auto">
+                        <Layers className="h-5 w-5 flex-shrink-0 text-cyan-500" strokeWidth={2.25} />
+                        <span className="flex-shrink-0 text-[13px] font-semibold text-gray-800">{t("editor.layers")}</span>
+                        <span className="flex-shrink-0 rounded-full bg-cyan-100 px-2 py-0.5 text-[12px] font-bold tabular-nums text-cyan-700">{designs.length}</span>
+                        {/* Straight to the file picker. The uploads library it
+                            used to sit beside is not mounted on this arm. */}
+                        <button
+                          type="button"
+                          onClick={() => sidebarFileRef.current?.click()}
+                          className="flex min-h-10 flex-shrink-0 items-center gap-1 whitespace-nowrap rounded-lg border border-cyan-600 bg-cyan-500 px-3 py-2 text-[12px] font-bold text-white shadow-md shadow-cyan-500/25 transition-all hover:bg-cyan-600 active:scale-[0.98] coarse:min-h-[44px]"
+                          title={t("editor.addDesignTitle")}
+                          data-testid="mobile-add-designs"
+                        >
+                          <Plus className="h-4 w-4 flex-shrink-0" strokeWidth={2.5} />
+                          <span>{t("editor.addDesigns")}</span>
+                        </button>
+                        <input
+                          ref={sidebarFileRef}
+                          type="file"
+                          className="hidden"
+                          accept=".png,.jpg,.jpeg,.webp,.pdf,image/png,image/jpeg,image/webp,application/pdf"
+                          multiple
+                          onChange={handleSidebarFileChange}
+                        />
+                      </div>
+
+                      {/* No `max-height` of its own: the sheet is already a
+                          scroller, and a second one nested inside it makes the
+                          list a trap for a thumb that meant to drag the sheet. */}
+                      {/* `data-mobile-layers` drives the `layersheet:` variant
+                          that grows `LayerRow`'s targets to 44px here without
+                          moving the same rows in the desktop sidebar, which an
+                          iPad also renders on a touch screen. */}
+                      {/* `divide-y` replaces separation the desktop row gets for
+                          free from its 20px of vertical padding. With that
+                          padding cut to 8 here, two unselected rows would
+                          otherwise run together into one block of text. */}
+                      <div data-mobile-layers className="divide-y divide-gray-200 rounded-lg border border-gray-200">{layerListItems}</div>
+
+                      {/* Gangsheet size and price. Document-level rather
+                          than contextual, and it trails the panel rather
+                          than leading it: in landscape the sheet is only
+                          ~123px tall, and 61px of that spent here meant a
+                          panel called Layers opened showing none. A native
+                          `select` rather than the desktop combobox: it
+                          raises the OS picker, and it cannot be clipped by
+                          the sheet's own scroll the way a popover can. */}
+                      <div className="flex flex-nowrap items-center justify-start gap-1.5 overflow-x-auto border-t border-gray-200 pt-2">
+                        <Layers className="h-4 w-4 flex-shrink-0 text-cyan-500" />
+                        <span className="flex-shrink-0 text-[12px] font-semibold text-gray-900">{t("controls.gangsheetSize")}</span>
+                        <span className="flex-shrink-0 text-[12px] font-semibold tabular-nums text-gray-800">{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
+                        <span className="flex-shrink-0 text-[12px] text-gray-700">×</span>
+                        {isEditMode ? (
+                          <span className="flex-shrink-0 rounded border border-gray-200 bg-gray-100 px-2 py-1 text-[12px] font-semibold tabular-nums text-gray-900">
+                            {formatLength(artboardHeight, lang)}{lang === "en" ? '"' : ""}
+                          </span>
+                        ) : (
+                          <select
+                            value={String(artboardHeight)}
+                            onChange={(e) => handleArtboardHeightChange(parseFloat(e.target.value))}
+                            /* Fixed width on purpose: a native select is as
+                               wide as its longest option, and the recommended
+                               entry carries a "(current bounds)" suffix that
+                               would otherwise stretch this to twice the row.
+                               The suffix is suppressed on the selected entry —
+                               see below — so the collapsed control never has to
+                               render it and this width is always enough. */
+                            className="h-8 w-[5.5rem] flex-shrink-0 cursor-pointer rounded border border-gray-300 bg-gray-100 px-1.5 text-[12px] font-semibold tabular-nums text-gray-900 outline-none transition-colors hover:border-gray-400 focus:border-cyan-500 coarse:h-11 coarse:w-[6.5rem] coarse:text-[16px]"
+                            title={t("controls.gangsheetSize")}
+                            data-testid="mobile-gangsheet-height"
+                          >
+                            {GANGSHEET_HEIGHTS.map((h) => (
+                              <option key={h} value={String(h)}>
+                                {formatLength(h, lang)}{lang === "en" ? '"' : ""}
+                                {/* A closed native select shows the selected option's own
+                                    text, and this one is too narrow for the suffix — it
+                                    rendered as `12.00" (c`, cut mid-word. The hint only
+                                    means anything as advice not yet taken, so the entry
+                                    that is already selected drops it and the long form is
+                                    left to the open list, which is free to be wider. */}
+                                {recommendedArtboardHeight === h && artboardHeight !== h
+                                  ? ` (${t("controls.currentBounds")})`
+                                  : ""}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        {selectedVariantPrice != null && (
+                          <span className="flex-shrink-0 whitespace-nowrap rounded-full border border-emerald-600 bg-white px-2 py-0.5 text-[11px] font-bold leading-tight tabular-nums text-emerald-600">
+                            {formatVariantPriceForDisplay(selectedVariantPrice)}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Fluorescent spot-colour panels portal here on this
+                          arm; on desktop they go to the sidebar. */}
+                      {profile.enableFluorescent && <div ref={setFluorPanelContainer} />}
+                    </>
+                  )}
+                </MobileToolSheet>
+
+                {/* Everything that changes how a design looks.
+                    Never `peek`: that is the collapsed strip this sheet drops
+                    to after a tool runs, so opening there would show the
+                    customer the minimised state of a panel they just asked for.
+                    Sideways it opens all the way, because `half` of a 228px box
+                    is 160px and showed four of the eight tools. */}
+                <MobileToolSheet
+                  open={designToolsOpen}
+                  testId="mobile-design-tools-sheet"
+                  /* A fixed grid of tools, not a list, so it has a real height
+                     to be measured against. Without this the sheet takes its
+                     60% whatever is in it, which on a tablet — where the eight
+                     tools reflow from four rows into two — is most of a screen
+                     of white sitting on top of the artwork. */
+                  fitContent
+                  initialDetent={shortViewport ? "full" : "half"}
+                  collapseSignal={toolsCollapseSignal}
+                  minCanvasStripPx={16}
+                  handleLabel={t("editor.designToolsHandle")}
+                  handleLeading={
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setDesignToolsOpen(false); }}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      className="flex h-11 w-11 items-center justify-center text-gray-500 hover:text-gray-800"
+                      aria-label={t("editor.closeDesignTools")}
+                      title={t("editor.closeDesignTools")}
+                    >
+                      <X className="h-6 w-6" />
+                    </button>
+                  }
+                >
+                  {(level) => (
+                    <>
+                      {/* The strip used to become the magic wand's control panel
+                          whenever the wand was armed. The action bar carries the
+                          tolerance and the off switch now, permanently and whether
+                          this sheet is open or shut, so all that is left to say
+                          here is what to do next — and arming the wand collapses
+                          the sheet to exactly this height, which is the moment
+                          that sentence is worth reading. It is text rather than a
+                          button because the handle strip above already expands the
+                          sheet, and a second target for that job in the same 44px
+                          band is how you get a tap that does nothing. */}
+                      {level === "peek" && (
+                        <p className={`px-1 py-0.5 text-center text-[11px] font-medium ${wandDeleteModeActive ? "text-fuchsia-700" : "text-gray-500"}`}>
+                          {wandDeleteModeActive ? t("editor.wandActiveHint") : t("editor.designToolsExpand")}
+                        </p>
+                      )}
+
+                      {level !== "peek" && (
+                        <>
+                          {!selectedDesignId && selectedDesignIds.size === 0 && (
+                            <p className="px-1 text-[11px] font-medium text-gray-500">{t("editor.selectDesignFirst")}</p>
+                          )}
+
+                          {/* Fluid rather than a fixed two columns: sideways
+                              this sheet is 844px wide, and two columns spent
+                              that on 400px-wide buttons while pushing half the
+                              tools below the fold of a 160px sheet. Auto-fit
+                              gives four columns there and still two at 390px.
+                              170 rather than 150 because at five columns the
+                              cells were 161px and French truncated "Retourner
+                              Horizontalement"; four cells of 207 fit it, and
+                              eight buttons still come to two rows either way. */}
+                          <div className="grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-1.5">
+                            {designTools.map((tool) => (
+                              <button
+                                key={tool.id}
+                                type="button"
+                                onClick={() => runTool(tool)}
+                                disabled={tool.disabled}
+                                className={`flex items-center justify-center gap-1 whitespace-nowrap rounded-md border px-2 py-2 text-[11px] font-medium transition-all disabled:pointer-events-none disabled:opacity-30 coarse:min-h-[44px] ${tool.tone}`}
+                                title={tool.title}
+                                aria-expanded={tool.id === "halftone" ? halftoneMenuOpen : undefined}
                               >
-                                <span className="h-3.5 w-3.5 flex-shrink-0 rounded-full border border-gray-200" style={{ background: c.hex }} />
-                                <span className="truncate text-gray-700">{c.name ?? c.hex}</span>
+                                <tool.Icon className="h-3.5 w-3.5 flex-shrink-0" />
+                                <span className="truncate">{tool.label}</span>
                               </button>
                             ))}
                           </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
+
+                          {/* Inline below the grid, not the popover the desktop
+                              uses: a popover anchored inside a sheet that owns
+                              its own scroll is clipped by it, and there is no
+                              room above to escape into. Outside the grid so the
+                              closed panel is two rows of buttons and nothing
+                              else — sideways that is the difference between the
+                              whole set fitting and half of it being below the
+                              fold. */}
+                          {halftoneEnabled && halftoneMenuOpen && (selectedDesignId || selectedDesignIds.size > 0) && (
+                            <div ref={halftonePanelRef} className="rounded-md border border-amber-200 bg-amber-50/60 p-1.5">
+                                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-600">{t("editor.halftoneStrength")}</p>
+                                  <div className="mb-1.5 flex gap-1">
+                                    {([
+                                      ["light", t("editor.halftoneLight")],
+                                      ["balanced", t("editor.halftoneBalanced")],
+                                      ["strong", t("editor.halftoneStrong")],
+                                    ] as const).map(([s, label]) => (
+                                      <button
+                                        key={s}
+                                        type="button"
+                                        onClick={() => setHalftoneStrength(s)}
+                                        aria-pressed={halftoneStrength === s}
+                                        className={`flex-1 rounded border px-1 py-1 text-[11px] font-medium transition-colors coarse:min-h-[44px] ${halftoneStrength === s ? "border-amber-600 bg-amber-500 text-white" : "border-gray-200 bg-white text-gray-700 hover:bg-amber-50"}`}
+                                      >
+                                        {label}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-600">{t("editor.halftoneChooseGarment")}</p>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setHalftoneMenuOpen(false);
+                                      const id = selectedDesignId ?? [...selectedDesignIds][0];
+                                      if (id) handleApplyHalftone(id, 0, 0, 0, halftoneStrength);
+                                      minimiseToolsAndFocus();
+                                    }}
+                                    className="mb-1 flex w-full items-center gap-2 rounded bg-gray-900 px-2 py-1.5 text-[11px] font-medium text-white hover:bg-gray-700 coarse:min-h-[44px]"
+                                  >
+                                    <span className="h-3.5 w-3.5 flex-shrink-0 rounded-full border border-gray-600 bg-black" />
+                                    <span className="truncate">{t("editor.halftoneBlackGarment")}</span>
+                                  </button>
+                                  {halftoneTopColors.map((c, i) => (
+                                    <button
+                                      key={i}
+                                      type="button"
+                                      onClick={() => {
+                                        setHalftoneMenuOpen(false);
+                                        const id = selectedDesignId ?? [...selectedDesignIds][0];
+                                        if (id) handleApplyHalftone(id, c.r, c.g, c.b, halftoneStrength);
+                                        minimiseToolsAndFocus();
+                                      }}
+                                      className="flex w-full items-center gap-2 rounded px-2 py-1 text-[11px] hover:bg-white coarse:min-h-[44px]"
+                                    >
+                                      <span className="h-3.5 w-3.5 flex-shrink-0 rounded-full border border-gray-300" style={{ background: c.hex }} />
+                                      <span className="truncate text-gray-700">{c.name ?? c.hex}</span>
+                                    </button>
+                                  ))}
+                            </div>
+                          )}
+
+                        </>
+                      )}
+                    </>
+                  )}
+                </MobileToolSheet>
+              </div>
+
+            {/* Action bar. Everything here changes the sheet; the view bar at
+                the top changes only how you are looking at it. Undo and Redo
+                were here until they were given labels and moved up there, which
+                is also what left this row the width for Auto-Arrange to keep
+                its name. */}
+            <div className="flex flex-shrink-0 flex-nowrap items-center justify-start gap-1.5 overflow-x-auto border-t border-gray-200 bg-white px-2 py-0" data-testid="mobile-persistent-bar">
+              {/* Leftmost because it is the only route to the layers list, the
+                  gangsheet size and Add Designs; if a longer translation makes
+                  this row scroll, the control that must never be the one out
+                  of reach is this one. Icon-only, like its three neighbours —
+                  a text label costs ~50px the row does not have. */}
+              <button
+                type="button"
+                onClick={() => { setLayersOpen((v) => !v); setDesignToolsOpen(false); }}
+                className={`relative h-8 w-8 flex-shrink-0 rounded border transition-colors coarse:h-11 coarse:w-11 ${layersOpen ? "border-cyan-600 bg-cyan-500 text-white" : "border-gray-300 bg-white text-gray-600 hover:bg-gray-100 hover:text-gray-900"}`}
+                title={layersOpen ? t("editor.closeLayers") : t("editor.openLayers")}
+                aria-label={layersOpen ? t("editor.closeLayers") : t("editor.openLayers")}
+                aria-expanded={layersOpen}
+                data-testid="mobile-layers-toggle"
+              >
+                <Layers className="mx-auto h-4 w-4" />
+                {designs.length > 0 && (
+                  <span className={`pointer-events-none absolute -right-1 -top-1 min-w-[16px] rounded-full px-1 text-[10px] font-bold leading-4 tabular-nums ${layersOpen ? "bg-white text-cyan-700" : "bg-cyan-500 text-white"}`}>
+                    {designs.length}
+                  </span>
                 )}
-                <div className={`rounded-md border border-gray-200 bg-white p-2 ${isMobile ? "mx-auto" : ""}`}>
-                  <div className="flex flex-col gap-2">
-                    <button
-                      onClick={() => handleDuplicateDesign(duplicateCount)}
-                      disabled={!selectedDesignId}
-                      className={`w-full rounded-md px-2 py-2 text-[11px] font-medium transition-all ${selectedDesignId ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#7C3AED]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`}
-                      title={t("editor.duplicate")}
-                    >
-                      <span className="inline-flex w-full items-center justify-center gap-1 text-center whitespace-normal break-words leading-snug">
-                        <Copy className="h-3.5 w-3.5 flex-shrink-0" />
-                        <span>{t("editor.duplicate").replace(/ \(.*/, "")}</span>
-                      </span>
-                    </button>
-                    <div className="relative w-10 h-[28px] lg:h-[24px] mx-auto rounded border border-gray-300 bg-white overflow-hidden focus-within:border-cyan-500">
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        value={duplicateCount}
-                        onChange={(e) => setDuplicateCount(parseDuplicateCount(e.target.value))}
-                        onKeyDown={handleDuplicateCountKeyDown}
-                        disabled={!selectedDesignId}
-                         className="w-full h-full text-center text-[12px] font-semibold leading-none p-0 pr-3 bg-white outline-none disabled:opacity-30 disabled:pointer-events-none"
-                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                        title="Number of copies"
-                      />
-                      <div className="absolute right-0 top-0 h-full w-3 border-l border-gray-300 overflow-hidden rounded-r">
-                        <button
-                          type="button"
-                          onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev + 1))}
-                          disabled={!selectedDesignId || duplicateCount >= 99}
-                          className="h-1/2 w-full flex items-center justify-center border-b border-gray-300 bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
-                          title="Increase copies"
-                        >
-                          <ChevronUp className="w-2.5 h-2.5 text-gray-600" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev - 1))}
-                          disabled={!selectedDesignId || duplicateCount <= 1}
-                          className="h-1/2 w-full flex items-center justify-center bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
-                          title="Decrease copies"
-                        >
-                          <ChevronDown className="w-2.5 h-2.5 text-gray-600" />
-                        </button>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleDuplicateAndArrange(duplicateCount)}
-                      disabled={!selectedDesignId}
-                       className={`w-full rounded-md px-2 py-2 text-[12px] font-semibold transition-all ${selectedDesignId ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#0891B2]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`}
-                      title={t("editor.duplicateArrange")}
-                    >
-                      <span className="inline-flex w-full items-center justify-center gap-1 text-center whitespace-normal break-words leading-snug">
-                        <Copy className="h-3.5 w-3.5 flex-shrink-0" />
-                        <span>{t("editor.duplicateArrange")}</span>
-                      </span>
-                    </button>
-                    {designs.length >= 2 && (
-                      <div className="mt-1 flex items-center justify-center gap-1">
-                         <span className="text-[11px] font-medium text-gray-700">{t("editor.margin")}</span>
-                        <select
-                          value={designGap === undefined ? "auto" : String(designGap)}
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            const newGap = v === "auto" ? undefined : parseFloat(v);
-                            setDesignGap(newGap);
-                            setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true }), 0);
-                          }}
-                           className="h-8 px-1.5 bg-gray-100 border border-gray-300 rounded text-[12px] font-medium text-gray-800 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
-                          title={useMetric(lang) ? t("editor.marginGapCm") : t("editor.marginGap")}
-                        >
-                          <option value="auto">{t("editor.marginAuto")}</option>
-                          <option value="0.0625">{useMetric(lang) ? formatLength(0.0625, lang) : "1/16″"}</option>
-                          <option value="0.125">{useMetric(lang) ? formatLength(0.125, lang) : "1/8″"}</option>
-                          <option value="0.25">{useMetric(lang) ? formatLength(0.25, lang) : "1/4″"}</option>
-                          <option value="0.5">{useMetric(lang) ? formatLength(0.5, lang) : "1/2″"}</option>
-                          <option value="1">{useMetric(lang) ? formatLength(1, lang) : "1″"}</option>
-                        </select>
-                      </div>
-                    )}
-                  </div>
-                </div>
-                <span className={`mx-auto inline-flex rounded px-2 py-1 text-[11px] font-bold ${effectiveDPI < 277 ? "border border-amber-400 bg-amber-100 text-amber-700" : "border border-emerald-700 bg-emerald-100 text-emerald-700"}`} title={t("editor.effectiveRes", { dpi: effectiveDPI })}>{effectiveDPI} DPI</span>
-                <div className={`rounded-md border border-gray-200 bg-white p-2 ${isMobile ? "mx-auto w-fit max-w-full" : ""}`}>
-                  <div className="mx-auto mb-1 inline-flex items-center justify-center gap-1">
-                    <span className="text-[12px] font-bold text-gray-800">W</span>
-                    <SizeInput value={activeResizeSettings.widthInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("width", v)} title={useMetric(lang) ? t("editor.widthTitleCm") : t("editor.widthTitle")} max={artboardWidth} lang={lang} />
-                    <span className="text-[11px] font-medium text-gray-700">{getUnitSuffix(activeResizeSettings.widthInches * activeDesignTransform.s, lang)}</span>
-                  </div>
+              </button>
+              <button onClick={() => { if (selectedDesignIds.size > 1) handleDeleteMulti(selectedDesignIds); else if (selectedDesignId) handleDeleteDesign(selectedDesignId); }} disabled={!selectedDesignId} className="h-8 w-8 flex-shrink-0 rounded border border-red-200 bg-white text-red-500 transition-colors hover:bg-red-50 hover:text-red-600 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.delete")}><Trash2 className="mx-auto h-4 w-4" /></button>
+              {/* Labelled, and holding the slot Auto-Arrange used to. Everything
+                  that changes how a design looks is behind this one button, so
+                  an icon alone asked the customer to guess; Auto-Arrange gave up
+                  the name because imports and copy-count changes already arrange
+                  as they land, which makes pressing it the exception. It moved
+                  into the list this opens.
+
+                  The name is only there while the slot to its right is empty.
+                  Once a tool is in play that slot holds the wand's tolerance,
+                  readout and off switch, and the two together do not fit a
+                  360px phone — the off switch was the part that fell off the
+                  end, which is the worst possible thing to lose. Dropping to an
+                  icon buys back ~60px, and it is only ever the second label on
+                  the row: whatever took the slot is named there instead. */}
+              <button
+                type="button"
+                onClick={() => { setDesignToolsOpen((v) => !v); setLayersOpen(false); }}
+                className={`flex flex-shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-md border text-[12px] font-semibold transition-colors ${activeToolShown ? "h-8 w-8 coarse:h-11 coarse:w-11" : "min-h-[36px] px-2 py-1 coarse:min-h-[44px]"} ${designToolsOpen ? "border-cyan-600 bg-cyan-500 text-white" : "border-gray-300 bg-white text-gray-700 hover:bg-gray-100"}`}
+                title={t("editor.designTools")}
+                /* Carried explicitly because the visible name goes away above. */
+                aria-label={t("editor.designTools")}
+                aria-expanded={designToolsOpen}
+                data-testid="mobile-design-tools-toggle"
+              >
+                <SlidersHorizontal className={activeToolShown ? "h-4 w-4 flex-shrink-0" : "h-3.5 w-3.5 flex-shrink-0"} />
+                {!activeToolShown && t("editor.designTools")}
+              </button>
+
+              {/* Whatever tool the customer is in the middle of.
+                  
+                  The wand takes it whenever it is armed, because it is a mode
+                  rather than an edit: it stays on until switched off, and its
+                  tolerance is the thing you adjust between taps. Otherwise the
+                  slot offers the last tool again, which is how a sheet actually
+                  gets cleaned up — the same tool over one design after another,
+                  which used to mean reopening the sheet every time. Switching the
+                  wand off leaves it here too, so re-arming it on the next design
+                  is one tap.
+
+                  This is the only off switch for the wand outside the sheet, and
+                  deliberately not on the Design tools button itself: that button
+                  opens and closes a panel and should not also cancel what the
+                  panel started. */}
+              {wandDeleteModeActive ? (
+                <div className="flex min-h-[36px] flex-shrink-0 items-center gap-1 rounded-md border border-fuchsia-400 bg-fuchsia-50 pl-1.5 pr-1 coarse:min-h-[44px]" data-testid="mobile-active-tool">
+                  <WandSparkles className="h-3.5 w-3.5 flex-shrink-0 text-fuchsia-600" aria-hidden="true" />
+                  {/* Deliberately stubby. Four controls plus a label have to share
+                      what is left of 390px after Layers, Delete and Design tools,
+                      and of the four this is the one that degrades gracefully:
+                      tolerance is a coarse setting with a live readout beside it
+                      and the full-width slider still in the sheet. Letting it have
+                      the room it wants pushed Turn off past the right edge, and
+                      the way out of a mode is the last thing that should need a
+                      sideways scroll to reach. */}
+                  <input
+                    type="range"
+                    min="1"
+                    max="100"
+                    value={wandTolerance}
+                    onChange={(e) => setWandTolerance(Number(e.target.value))}
+                    className="w-12 flex-shrink-0 accent-fuchsia-600"
+                    aria-label={t("editor.wandTolerance")}
+                    title={t("editor.wandTolerance")}
+                  />
+                  <span className="w-5 flex-shrink-0 text-right text-[11px] font-semibold tabular-nums text-fuchsia-800">{wandTolerance}</span>
                   <button
                     type="button"
-                    onClick={() => setProportionalLock((v) => !v)}
-                    className="mx-auto mb-1 flex h-5 w-5 items-center justify-center rounded text-cyan-500 hover:bg-cyan-50"
-                    title={proportionalLock ? t("editor.proportionsLocked") : t("editor.proportionsUnlocked")}
+                    onClick={handleWandDeleteToggle}
+                    className="flex-shrink-0 rounded bg-fuchsia-600 px-1.5 py-1 text-[11px] font-bold text-white transition-colors hover:bg-fuchsia-700 coarse:min-h-[36px]"
+                    title={t("editor.wandTurnOff")}
                   >
-                    {proportionalLock ? <Link className="h-3.5 w-3.5" /> : <Unlink className="h-3.5 w-3.5" />}
+                    {t("editor.wandTurnOff")}
                   </button>
-                  <div className="mx-auto inline-flex items-center justify-center gap-1">
-                    <span className="text-[12px] font-bold text-gray-800">H</span>
-                    <SizeInput value={activeResizeSettings.heightInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("height", v)} title={useMetric(lang) ? t("editor.heightTitleCm") : t("editor.heightTitle")} max={artboardHeight} lang={lang} />
-                    <span className="text-[11px] font-medium text-gray-700">{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>
-                  </div>
                 </div>
+              ) : lastTool ? (
                 <button
-                  onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2 })}
-                  disabled={designs.length < 2 && selectedDesignIds.size < 2}
-                   className={`mx-auto flex min-h-[36px] items-center justify-center gap-1 rounded-md px-2 py-1 text-[12px] font-semibold transition-colors ${
-                    designs.length >= 2 || selectedDesignIds.size >= 2
-                      ? "border border-pink-600 bg-pink-500 text-black shadow-md shadow-pink-500/25 hover:bg-pink-600"
-                      : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"
-                  }`}
-                  title={selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll")}
+                  type="button"
+                  onClick={() => runTool(lastTool)}
+                  disabled={lastTool.disabled}
+                  className={`flex min-h-[36px] flex-shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-md border px-2 py-1 text-[12px] font-semibold transition-colors disabled:pointer-events-none disabled:opacity-30 coarse:min-h-[44px] ${lastTool.pillTone}`}
+                  title={t("editor.applyAgain", { tool: lastTool.label })}
+                  data-testid="mobile-active-tool"
                 >
-                  <LayoutGrid className="h-3.5 w-3.5 flex-shrink-0" />
-                  {t("editor.autoArrange")}
+                  <lastTool.Icon className="h-3.5 w-3.5 flex-shrink-0" />
+                  {lastTool.label}
                 </button>
-                <div className="mt-auto mx-auto flex items-center gap-1 rounded-md border border-gray-200 bg-white p-1">
-                <button onClick={handleUndo} disabled={!canUndo()} className="h-8 w-8 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30" title={t("editor.undo")}><Undo2 className="mx-auto h-4 w-4" /></button>
-                <button onClick={handleRedo} disabled={!canRedo()} className="h-8 w-8 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30" title={t("editor.redo")}><Redo2 className="mx-auto h-4 w-4" /></button>
-                <button onClick={() => { if (selectedDesignIds.size > 1) handleDeleteMulti(selectedDesignIds); else if (selectedDesignId) handleDeleteDesign(selectedDesignId); }} disabled={!selectedDesignId} className="h-8 w-8 rounded border border-red-200 bg-white text-red-500 transition-colors hover:bg-red-50 hover:text-red-600 disabled:pointer-events-none disabled:opacity-30" title={t("editor.delete")}><Trash2 className="mx-auto h-4 w-4" /></button>
-              </div>
-              </div>
+              ) : null}
             </div>
-            </div>
-            <div ref={setMobileToolbarContainer} className="flex-shrink-0" />
           </div>
         ) : (
           <div className="flex-1 min-h-0 relative">
