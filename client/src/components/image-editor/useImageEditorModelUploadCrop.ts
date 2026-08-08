@@ -1,18 +1,18 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { cropImageToContent, cropImageToContentAsync, isOpaqueRasterUpload } from "@/lib/image-crop";
-import { parsePDF, type ParsedPDFData } from "@/lib/pdf-parser";
-import {
-  parseSVG,
-  isSVGFile,
-  isEPSFile,
-  SvgTooComplexError,
-  VectorFileTooLargeError,
-  type ParsedSVGData,
-} from "@/lib/svg-parser";
+// `pdf-parser` and `svg-parser` are imported for their types only, and loaded
+// with `await import` at the point a vector file is actually parsed. They carry
+// the pdf.js engine and DOMPurify at module scope, which is roughly a third of
+// the main bundle, and a session that only ever uploads PNGs never needs either.
+// `vector-file` holds the cheap half — the file-kind predicates and the typed
+// rejection — so the upload path can recognise and reject a vector eagerly.
+import type { ParsedPDFData } from "@/lib/pdf-parser";
+import type { ParsedSVGData } from "@/lib/svg-parser";
+import { isSVGFile, isEPSFile, SvgTooComplexError } from "@/lib/vector-file";
 import { SvgRasterTimeoutError } from "@/lib/svg-raster";
 import { trimVectorImport } from "@/lib/vector-trim";
 import { runWithConcurrency, resolveUploadConcurrency } from "@/lib/upload-queue";
-import { checkFileSizeBudget, checkPixelBudget } from "@/lib/image-budget";
+import { checkFileSizeBudget, checkPixelBudget, VectorFileTooLargeError } from "@/lib/image-budget";
 import {
   describeBudgetRejection,
   importRasterForEditor,
@@ -768,6 +768,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
     if (isPdf) {
       try {
         setIsUploading(true);
+        const { parsePDF } = await import("@/lib/pdf-parser");
         const pdfData = await parsePDF(file);
         void saveUploadToLibrary(file);
         await handlePDFUpload(file, pdfData);
@@ -808,6 +809,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
     if (isSVGFile(file)) {
       try {
         setIsUploading(true);
+        const { parseSVG } = await import("@/lib/svg-parser");
         const svgData = await parseSVG(file);
         // Safe here and not a line earlier: see the note above the raster save.
         void saveUploadToLibrary(file);
@@ -911,6 +913,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
       return (async () => {
         try {
           setIsUploading(true);
+          const { parseSVG } = await import("@/lib/svg-parser");
           const svgData = await parseSVG(file);
           void saveUploadToLibrary(file);
           await handleSVGUpload(file, svgData);
@@ -965,6 +968,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
       return (async () => {
         try {
           setIsUploading(true);
+          const { parsePDF } = await import("@/lib/pdf-parser");
           const pdfData = await parsePDF(file);
           void saveUploadToLibrary(file);
           await handlePDFUpload(file, pdfData);

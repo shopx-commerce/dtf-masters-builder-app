@@ -29,9 +29,7 @@
 
 import { fitWithinMegapixels } from "./image-budget";
 import { vectorExportMaxEdge, SVG_EXPORT_RASTER_TIMEOUT_MS } from "./vector-raster-limits";
-import { rasteriseSvgToPngBlob } from "./svg-parser";
 import { SvgRasterTimeoutError } from "./svg-raster";
-import { rasterisePdfPageToPngBlob } from "./pdf-parser";
 import { cropPngBlobToInkBox } from "./vector-trim";
 import type { ImageInfo } from "./types";
 
@@ -68,6 +66,12 @@ async function rasteriseAtSize(
   const w = Math.max(1, Math.round(pageW * scale));
   const h = Math.max(1, Math.round(pageH * scale));
 
+  // The two rasterisers are loaded here rather than at module scope because
+  // this module is reachable from the editor's static graph — the upload hook
+  // and the crop modal both need `hasVectorPrintSource` on first render — and
+  // the parsers behind them are DOMPurify and the whole pdf.js engine. Only a
+  // sheet that actually holds vector artwork gets this far, so only that
+  // session pays for them.
   let page: Blob | null = null;
   if (info.svgSource) {
     // Export is the dangerous size, not import. A file that previews in 2.4 s at
@@ -75,10 +79,12 @@ async function rasteriseAtSize(
     // filter chain over the same area reached 38 s — a frozen checkout, which
     // costs the order rather than just the upload. Same isolated-frame path and
     // the same real timeout as import, with a budget scaled to the pixel count.
+    const { rasteriseSvgToPngBlob } = await import("./svg-parser");
     page = await rasteriseSvgToPngBlob(info.svgSource, w, h, {
       timeoutMs: SVG_EXPORT_RASTER_TIMEOUT_MS,
     });
   } else if (info.originalPdfData && info.originalPdfData.byteLength > 0) {
+    const { rasterisePdfPageToPngBlob } = await import("./pdf-parser");
     page = await rasterisePdfPageToPngBlob(info.originalPdfData, w, h, maxEdge);
   }
   if (!page || !box) return page;

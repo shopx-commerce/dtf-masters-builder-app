@@ -73,27 +73,13 @@ import {
   type SvgExpansionReport,
 } from "./svg-expansion";
 import { rasteriseSvgToPngBlobSafe, type RasteriseOptions } from "./svg-raster";
+import { SvgTooComplexError, isSVGFile, isEPSFile } from "./vector-file";
 
-/**
- * Rejected before any renderer saw it, because resolving its references would
- * ask for more primitives than a real design ever contains.
- *
- * `translationKey` is the string the caller should show. The `message` is an
- * English fallback for logs, not for the customer.
- */
-export class SvgTooComplexError extends Error {
-  readonly code = "svg_too_complex";
-  readonly translationKey = "toast.svgTooComplexDesc";
-  readonly titleKey = "toast.svgTooComplex";
-  constructor(readonly report: SvgExpansionReport) {
-    super(
-      `SVG expands to ~${report.effectivePrimitives.toLocaleString()} rendered shapes ` +
-        `(${report.expansionFactor}x its source of ${report.sourcePrimitives.toLocaleString()}); ` +
-        `limit hit: ${report.reason}`,
-    );
-    this.name = "SvgTooComplexError";
-  }
-}
+// Re-exported so callers that already hold this module keep their existing
+// imports. Callers that only need these — the upload path deciding whether a
+// file is a vector at all, or naming the error it caught — should import them
+// from `./vector-file` directly, which does not pull DOMPurify in with them.
+export { SvgTooComplexError, isSVGFile, isEPSFile };
 
 export { VectorFileTooLargeError } from "./image-budget";
 
@@ -747,18 +733,4 @@ export async function parseSVG(file: File): Promise<ParsedSVGData> {
     sourceExpansion,
     dimensionSource: dims.source,
   };
-}
-
-export function isSVGFile(file: File): boolean {
-  return file.type === "image/svg+xml" || file.name.toLowerCase().endsWith(".svg");
-}
-
-export function isEPSFile(file: File): boolean {
-  const t = file.type.toLowerCase();
-  return (
-    file.name.toLowerCase().endsWith(".eps") ||
-    t === "application/postscript" ||
-    t === "application/eps" ||
-    t === "application/x-eps"
-  );
 }
