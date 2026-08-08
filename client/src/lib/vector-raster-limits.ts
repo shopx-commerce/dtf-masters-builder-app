@@ -17,7 +17,7 @@
  */
 
 import { IOS_SAFE_CANVAS_DIM } from "./image-budget";
-import { isMobileUserAgent } from "./upload-queue";
+import { isMobileDevice } from "./upload-queue";
 
 /** Print DPI vector artwork targets, matching `RASTER_DPI_FALLBACK`. */
 export const VECTOR_TARGET_DPI = 300;
@@ -30,7 +30,7 @@ export const VECTOR_TARGET_DPI = 300;
 const DESKTOP_VECTOR_MAX_EDGE = 8192;
 
 export function vectorExportMaxEdge(): number {
-  return isMobileUserAgent() ? IOS_SAFE_CANVAS_DIM : DESKTOP_VECTOR_MAX_EDGE;
+  return isMobileDevice() ? IOS_SAFE_CANVAS_DIM : DESKTOP_VECTOR_MAX_EDGE;
 }
 
 /**

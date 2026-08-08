@@ -6,6 +6,7 @@ import {
   exportPngWithWorker,
   getExportMemoryWarning,
   injectPngDpi,
+  resolveExportDpi,
 } from "./utils";
 import type { ImageEditorBagAfterUploadCrop } from "./image-editor-hook-bag.types";
 import { thresholdImageInfo } from "./useImageEditorModelHalftone";
@@ -218,27 +219,23 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
           });
         }
 
-        let exportDpi: number;
-        if (useWorker) {
-          exportDpi = EXPORT_DPI;
-        } else {
-          const MAX_FALLBACK_PIXELS = 80_000_000;
-          const MAX_FALLBACK_DIM = 12_000;
-          const dpiByArea = Math.sqrt(MAX_FALLBACK_PIXELS / Math.max(1e-6, artboardWidth * artboardHeight));
-          const dpiByDim = Math.min(MAX_FALLBACK_DIM / artboardWidth, MAX_FALLBACK_DIM / artboardHeight);
-          exportDpi = Math.min(EXPORT_DPI, dpiByArea, dpiByDim);
-          if (exportDpi < EXPORT_DPI) {
-            toast({
-              title: t("toast.largeSheet"),
-              description: t("toast.largeSheetDesc", { dpi: Math.floor(exportDpi) }),
-            });
-          }
-          if (!canUseMemoryEfficientPngExport()) {
-            toast({
-              title: t("toast.exportCompatibilityWarning"),
-              description: t("toast.exportCompatibilityWarningDesc"),
-            });
-          }
+        // A download can be downgraded and still be useful — the customer sees
+        // the toast and knows what they got. The cart path makes the opposite
+        // call on the same numbers, because nobody inspects a production file
+        // before it is printed.
+        const resolved = resolveExportDpi(artboardWidth, artboardHeight, useWorker);
+        const exportDpi = resolved.dpi;
+        if (resolved.clamped) {
+          toast({
+            title: t("toast.largeSheet"),
+            description: t("toast.largeSheetDesc", { dpi: Math.floor(exportDpi) }),
+          });
+        }
+        if (!useWorker) {
+          toast({
+            title: t("toast.exportCompatibilityWarning"),
+            description: t("toast.exportCompatibilityWarningDesc"),
+          });
         }
 
         const outW = Math.max(1, Math.round(artboardWidth * exportDpi));

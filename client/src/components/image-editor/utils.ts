@@ -1,4 +1,6 @@
 import { hasCleanAlpha } from "@/lib/image-crop";
+import { IOS_SAFE_CANVAS_DIM, SAFARI_MAX_CANVAS_AREA } from "@/lib/image-budget";
+import { isMobileDevice } from "@/lib/upload-queue";
 import { inkInset, type NestMask } from "@/lib/nest-core";
 import { DEFAULT_SHEET_MARGIN, fitHeightForBand, type InkBand } from "@/lib/sheet-fit";
 import { getDesignNestMask } from "@/lib/nest-mask";
@@ -130,6 +132,61 @@ export function canUseMemoryEfficientPngExport(): boolean {
     && typeof OffscreenCanvas !== "undefined"
     && typeof createImageBitmap === "function"
     && typeof CompressionStream !== "undefined";
+}
+
+/**
+ * Below this, a production file is not worth printing. Used to decide whether a
+ * device that cannot render at full DPI should quietly downgrade or refuse.
+ */
+export const MIN_PRODUCTION_DPI = 150;
+
+export type ResolvedExportDpi = {
+  dpi: number;
+  /** True when the sheet would not fit and the DPI had to come down. */
+  clamped: boolean;
+  /** True when the reduction goes below what is worth sending to a printer. */
+  belowPrintQuality: boolean;
+};
+
+/**
+ * The DPI this device can actually render a sheet of this size at.
+ *
+ * The streaming worker never materialises the whole sheet, so it always gets
+ * the full 300. Only the fallback, which allocates one canvas for the entire
+ * gangsheet, has to be talked down.
+ *
+ * Shared because it did not used to be. The download button clamped and the
+ * cart button did not, so the same 22 x 120 inch sheet that downloaded fine
+ * asked Add to Cart for a 6600 x 36000 canvas — 237 MP, about 950 MB — on the
+ * main thread. Two callers with the same constraint and one of them guarded is
+ * a bug waiting to be reintroduced, so there is now one place to change.
+ *
+ * The mobile budget is Safari's canvas area rather than a generous desktop
+ * figure, because the desktop 80 MP allowance is itself five times what iOS
+ * will return a bitmap for.
+ */
+export function resolveExportDpi(
+  artboardWidthInches: number,
+  artboardHeightInches: number,
+  useWorker: boolean,
+): ResolvedExportDpi {
+  if (useWorker) return { dpi: EXPORT_DPI, clamped: false, belowPrintQuality: false };
+
+  const mobile = isMobileDevice();
+  const maxPixels = mobile ? SAFARI_MAX_CANVAS_AREA : 80_000_000;
+  const maxEdge = mobile ? IOS_SAFE_CANVAS_DIM : 12_000;
+
+  const w = Math.max(1e-6, artboardWidthInches);
+  const h = Math.max(1e-6, artboardHeightInches);
+  const dpiByArea = Math.sqrt(maxPixels / (w * h));
+  const dpiByEdge = Math.min(maxEdge / w, maxEdge / h);
+  const dpi = Math.min(EXPORT_DPI, dpiByArea, dpiByEdge);
+
+  return {
+    dpi,
+    clamped: dpi < EXPORT_DPI,
+    belowPrintQuality: dpi < MIN_PRODUCTION_DPI,
+  };
 }
 
 export function getExportMemoryWarning(): string | null {

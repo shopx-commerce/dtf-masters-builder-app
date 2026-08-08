@@ -271,6 +271,7 @@ export const es: Record<string, string> = {
   "toast.exportCompatibilityWarning": "Advertencia de compatibilidad del navegador",
   "toast.exportCompatibilityWarningDesc": "Este navegador no puede usar la ruta de exportación eficiente en memoria. Las hojas grandes pueden tardar más o fallar.",
   "toast.exportMemoryWarning": "Poca memoria disponible en el navegador",
+  "toast.sheetTooLargeForDevice": "Este dispositivo no puede preparar un archivo de impresión para una hoja de este tamaño. Tu trabajo está guardado: termina este pedido en una computadora o usa una hoja más corta.",
   "toast.downloadFailed": "Error en descarga",
   "toast.downloadFailedDesc": "Por favor intenta de nuevo.",
   "toast.upscaleStarted": "Aumentando calidad de imagen",

@@ -7,6 +7,7 @@ import {
   exportPngWithWorker,
   getExportMemoryWarning,
   injectPngDpi,
+  resolveExportDpi,
 } from "./utils";
 import type { ImageEditorBagAfterExport } from "./image-editor-hook-bag.types";
 import type { InitialDesignState } from "./types";
@@ -280,10 +281,31 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         const exportDesignsSource = currentDesigns.map(d =>
           cleaned.has(d.id) ? { ...d, imageInfo: cleaned.get(d.id)! } : d,
         );
-        const exportDpi = EXPORT_DPI;
+        const useWorker = canUseMemoryEfficientPngExport();
+
+        // Without the worker this path allocates the whole gangsheet as one
+        // canvas: 6600 x 36000 for a 22 x 120 inch sheet, around 950 MB, on the
+        // main thread. That reliably kills a tab on iOS, which is exactly where
+        // the worker is missing — `OffscreenCanvas` and `CompressionStream` both
+        // arrive in Safari 16.4, so everything older lands here.
+        //
+        // Unlike the download button this refuses rather than quietly dropping
+        // the DPI. A downgraded download is a file the customer can look at; a
+        // downgraded order is a blurry print nobody sees until it ships, and on
+        // a sheet this size the fit works out near 80 DPI.
+        const resolved = resolveExportDpi(artboardWidth, artboardHeight, useWorker);
+        if (resolved.belowPrintQuality) {
+          throw new Error(t("toast.sheetTooLargeForDevice"));
+        }
+        if (resolved.clamped) {
+          toast({
+            title: t("toast.largeSheet"),
+            description: t("toast.largeSheetDesc", { dpi: Math.floor(resolved.dpi) }),
+          });
+        }
+        const exportDpi = resolved.dpi;
         const outW = Math.max(1, Math.round(artboardWidth * exportDpi));
         const outH = Math.max(1, Math.round(artboardHeight * exportDpi));
-        const useWorker = canUseMemoryEfficientPngExport();
         const memoryWarning = getExportMemoryWarning();
         if (memoryWarning) {
           toast({

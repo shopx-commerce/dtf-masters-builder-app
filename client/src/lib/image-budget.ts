@@ -39,6 +39,17 @@ export const PREPARE_PREVIEW_MAX_EDGE = 4096;
  *  handled by decoding `exportBlob` directly at print time. */
 export const IOS_SAFE_CANVAS_DIM = 4096;
 
+/**
+ * Safari's ceiling on a single canvas as an *area* rather than an edge.
+ *
+ * The edge cap above is the safe way to size a square-ish canvas, but it says
+ * nothing about a long thin one: a 6600 x 4096 export strip keeps both edges
+ * under 8192 and is still 27 MP, well over what Safari will hand back. Any
+ * canvas whose shape is driven by the sheet rather than by a single dimension
+ * has to be checked against this instead.
+ */
+export const SAFARI_MAX_CANVAS_AREA = IOS_SAFE_CANVAS_DIM * IOS_SAFE_CANVAS_DIM;
+
 export type BudgetOutcome =
   | { ok: true; mode: "inline" | "prepare"; megapixels: number }
   | { ok: false; reason: "too_many_pixels" | "unreadable_dimensions" | "file_too_large"; megapixels: number };

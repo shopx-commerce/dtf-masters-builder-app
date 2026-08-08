@@ -271,6 +271,7 @@ export const fr: Record<string, string> = {
   "toast.exportCompatibilityWarning": "Avertissement de compatibilité du navigateur",
   "toast.exportCompatibilityWarningDesc": "Ce navigateur ne peut pas utiliser l'export optimisé pour la mémoire. Les grandes feuilles peuvent être plus lentes ou échouer.",
   "toast.exportMemoryWarning": "Mémoire disponible faible dans le navigateur",
+  "toast.sheetTooLargeForDevice": "Cet appareil ne peut pas préparer un fichier d'impression pour une feuille de cette taille. Votre travail est enregistré : terminez cette commande sur un ordinateur ou utilisez une feuille plus courte.",
   "toast.downloadFailed": "Échec du téléchargement",
   "toast.downloadFailedDesc": "Veuillez réessayer.",
   "toast.upscaleStarted": "Amélioration de la qualité",

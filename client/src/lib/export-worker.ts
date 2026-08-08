@@ -1,3 +1,5 @@
+import { SAFARI_MAX_CANVAS_AREA } from "./image-budget";
+
 interface DesignExportData {
   widthInches: number;
   heightInches: number;
@@ -69,7 +71,32 @@ function makeStampKey(d: DesignExportData, drawW: number, drawH: number): string
 // Keep temporary export canvases bounded for tall sheets. This only changes
 // internal batching; output dimensions, DPI, placement, and pixel quality are
 // unchanged.
-const STRIP_HEIGHT = 4096;
+const MAX_STRIP_HEIGHT = 4096;
+
+/**
+ * Floor on the strip height, so a pathological sheet width cannot reduce this
+ * to a handful of rows and spend all its time on per-strip overhead.
+ */
+const MIN_STRIP_HEIGHT = 256;
+
+/**
+ * How tall a strip may be for a sheet of this width.
+ *
+ * Strips bound the height of the temporary canvas, but nothing bounded its
+ * width, which is the full sheet at export DPI. At a fixed 4096 that made the
+ * area *worse* the wider the sheet: a 22 inch sheet at 300 DPI is 6600 px
+ * across, so the strip was 27 MP against Safari's 16.8 MP ceiling — over the
+ * limit for every sheet width sold, and only ever safe below 13.65 inches.
+ *
+ * Deriving the height from the width holds the area under the cap instead:
+ * 2542 rows at 22 inches, 2282 at 24.5, and the full 4096 for anything narrow
+ * enough to afford it. Output is unaffected — strips are tiles of the same
+ * render, so this changes only how many passes it takes.
+ */
+function stripHeightFor(outW: number): number {
+  const byArea = Math.floor(SAFARI_MAX_CANVAS_AREA / Math.max(1, outW));
+  return Math.max(MIN_STRIP_HEIGHT, Math.min(MAX_STRIP_HEIGHT, byArea));
+}
 const BATCH_ROWS = 1024;
 const MAX_IDAT_BYTES = 2 * 1024 * 1024;
 
@@ -519,11 +546,12 @@ async function buildPngStreaming(input: ExportInput): Promise<Uint8Array> {
 
   let stripCanvas: OffscreenCanvas | null = null;
   let stripCtx: OffscreenCanvasRenderingContext2D | null = null;
-  const totalStrips = Math.max(1, Math.ceil(outH / STRIP_HEIGHT));
+  const stripHeight = stripHeightFor(outW);
+  const totalStrips = Math.max(1, Math.ceil(outH / stripHeight));
   let completedStrips = 0;
 
-  for (let stripY = 0; stripY < outH; stripY += STRIP_HEIGHT) {
-    const stripH = Math.min(STRIP_HEIGHT, outH - stripY);
+  for (let stripY = 0; stripY < outH; stripY += stripHeight) {
+    const stripH = Math.min(stripHeight, outH - stripY);
 
     if (!stripHasContent(designBounds, stripY, stripH)) {
       await writeEmptyRows(writer, outW, stripH, emptyRow, filteredRowLen);

@@ -21,7 +21,7 @@
  * do: while a job is running, that worker is answering to nobody else.
  */
 
-import { isMobileUserAgent } from "./upload-queue";
+import { isMobileDevice } from "./upload-queue";
 
 /**
  * Ceiling on pool width. Beyond roughly this many concurrent pixel passes the
@@ -50,7 +50,7 @@ const DEFAULT_JOB_TIMEOUT_MS = 60_000;
  */
 export function resolveWorkerPoolSize(desired: number): number {
   if (desired <= 1) return 1;
-  if (isMobileUserAgent()) return 1;
+  if (isMobileDevice()) return 1;
   const cores = navigator.hardwareConcurrency || 4;
   // Leave a core for the main thread so parallel work does not make the UI worse.
   return Math.max(1, Math.min(desired, cores - 1, MAX_POOL_SIZE));

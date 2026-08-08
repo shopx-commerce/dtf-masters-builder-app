@@ -33,11 +33,28 @@ export interface RunWithConcurrencyOptions<T> {
   yieldBetweenItems?: boolean;
 }
 
-/** Detect a mobile-class device via userAgent (best-effort). */
-export function isMobileUserAgent(): boolean {
+/**
+ * Detect a mobile-class device — one with a small memory budget and a hard
+ * canvas ceiling — so callers can pick a budget that will not kill the tab.
+ *
+ * The user agent alone cannot answer this, and the gap is not an edge case.
+ * Since iPadOS 13, Safari sends a desktop-class user agent that is
+ * byte-identical to a Mac's: no `iPad`, no `Mobile`. Every iPad therefore read
+ * as a desktop machine here and took desktop canvas and concurrency budgets on
+ * a device with a fraction of a Mac's memory and a quarter of its canvas
+ * ceiling. `maxTouchPoints` closes it, because no Mac has a touch screen — a
+ * `Macintosh` agent reporting touch points is an iPad.
+ *
+ * Deliberately not a plain `(pointer: coarse)` or touch test. Those also match
+ * a Windows laptop with a touch screen, which has neither the memory limit nor
+ * the 4096 px canvas cap this is used to avoid, and would be needlessly
+ * throttled.
+ */
+export function isMobileDevice(): boolean {
   if (typeof navigator === "undefined") return false;
   const ua = navigator.userAgent ?? "";
-  return /iPhone|iPad|iPod|Android|Mobile|Windows Phone/i.test(ua);
+  if (/iPhone|iPad|iPod|Android|Mobile|Windows Phone/i.test(ua)) return true;
+  return /Macintosh/.test(ua) && (navigator.maxTouchPoints ?? 0) > 1;
 }
 
 /**
@@ -51,7 +68,7 @@ export function isMobileUserAgent(): boolean {
  * memory-rich but core-poor machine does not oversubscribe.
  */
 export function resolveUploadConcurrency(): number {
-  if (isMobileUserAgent()) return 1;
+  if (isMobileDevice()) return 1;
   if (typeof navigator === "undefined") return 2;
 
   // Not in every browser's typings, and absent on Safari and Firefox.
