@@ -105,3 +105,20 @@ function getServerSnapshot(): boolean {
 export function useMobileLayout(): boolean {
   return React.useSyncExternalStore(subscribe, readMobileLayout, getServerSnapshot);
 }
+
+function readShortViewport(): boolean {
+  const height = window.innerHeight;
+  return height > 0 && height < SHORT_VIEWPORT_BREAKPOINT;
+}
+
+/**
+ * A viewport too short to spend height freely — in practice a phone on its side.
+ *
+ * Height only, and always from the real `window`, for the reason given above: a
+ * shell can correct our width but it cannot make the screen taller. Sheets use
+ * this to decide how much of themselves to open, since the detent that shows
+ * their content in portrait shows a quarter of it here.
+ */
+export function useShortViewport(): boolean {
+  return React.useSyncExternalStore(subscribe, readShortViewport, getServerSnapshot);
+}

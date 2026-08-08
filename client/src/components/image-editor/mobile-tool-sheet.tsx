@@ -89,6 +89,19 @@ interface MobileToolSheetProps {
   /** Detent the sheet opens at. */
   initialDetent?: SheetDetent;
   /**
+   * Collapses the sheet to `peek` whenever this number changes.
+   *
+   * A signal rather than a controlled `detent` prop because the detent is
+   * genuinely owned here — the drag handler writes it on every frame — and
+   * lifting it would make the parent responsible for driving an animation it
+   * knows nothing about. All the parent needs to say is "get out of the way
+   * now", which is what a bumped counter says.
+   *
+   * The caller uses it when a tool has done something the customer needs to
+   * see on the artwork: the sheet drops to its strip and the canvas comes back.
+   */
+  collapseSignal?: number;
+  /**
    * Interactive slot at the left of the handle strip, for a close button.
    * Unlike `handleAccessory` this one receives pointer events, so anything put
    * here must stop propagation or it will also start a drag.
@@ -125,6 +138,7 @@ export default function MobileToolSheet({
   testId = "mobile-tool-sheet",
   sizing = "content",
   initialDetent = "peek",
+  collapseSignal = 0,
   minCanvasStripPx = MIN_CANVAS_STRIP_PX,
   handleLeading,
   handleAccessory,
@@ -156,6 +170,18 @@ export default function MobileToolSheet({
       setExpanded(false);
     };
   }, [open, initialDetent]);
+
+  // Skips the first run: the initial value is a starting point, not a request
+  // to collapse, and honouring it would override `initialDetent`.
+  const firstCollapse = useRef(true);
+  useEffect(() => {
+    if (firstCollapse.current) {
+      firstCollapse.current = false;
+      return;
+    }
+    setDetent("peek");
+    setDragH(null);
+  }, [collapseSignal]);
 
   // The sheet's own containing block gives the half/full extents.
   useLayoutEffect(() => {

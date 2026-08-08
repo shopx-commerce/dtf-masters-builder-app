@@ -205,11 +205,18 @@ interface PreviewSectionProps {
   wandDeleteActive?: boolean;
   onWandDeleteTap?: (nx: number, ny: number, designId: string) => void;
   onWandDeactivate?: () => void;
+  /**
+   * Called once with a function that fits the view to the selected design —
+   * the Focus button's action, made available to the parent.
+   *
+   * Must be referentially stable, since it is an effect dependency.
+   */
+  onRegisterFocus?: (focus: () => void) => void;
   bottomToolbarContainer?: HTMLElement | null;
 }
 
 const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
-  ({ imageInfo, resizeSettings, artboardWidth = 24.5, artboardHeight = 12, designTransform, onTransformChange, designs = [], selectedDesignId, selectedDesignIds = new Set(), onSelectDesign, onMultiSelect, onMultiDragDelta, onMultiResizeDelta, onMultiRotateDelta, onDuplicateSelected, onInteractionEnd, onExpandArtboard, onDesignContextMenu, spotPreviewData, activeSpotChannel, onWandTap, panModeActive = false, onPanModeChange, selectionZoomActive: selectionZoomActiveProp, onSelectionZoomChange, bottomToolbarContainer, wandDeleteActive = false, onWandDeleteTap, onWandDeactivate }, ref) => {
+  ({ imageInfo, resizeSettings, artboardWidth = 24.5, artboardHeight = 12, designTransform, onTransformChange, designs = [], selectedDesignId, selectedDesignIds = new Set(), onSelectDesign, onMultiSelect, onMultiDragDelta, onMultiResizeDelta, onMultiRotateDelta, onDuplicateSelected, onInteractionEnd, onExpandArtboard, onDesignContextMenu, spotPreviewData, activeSpotChannel, onWandTap, panModeActive = false, onPanModeChange, selectionZoomActive: selectionZoomActiveProp, onSelectionZoomChange, bottomToolbarContainer, wandDeleteActive = false, onWandDeleteTap, onWandDeactivate, onRegisterFocus }, ref) => {
     const { toast } = useToast();
     const { t, lang } = useLanguage();
     const isMobile = useIsMobile();
@@ -2532,6 +2539,13 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       setMoveMode(true);
     }, [selectedDesignId, designs, artboardWidth, artboardHeight, clampPanValue]);
 
+    /**
+     * Read by the imperative handle, which is built once and so cannot close
+     * over `zoomToSelected` directly without freezing the first selection.
+     */
+    const zoomToSelectedRef = useRef(zoomToSelected);
+    zoomToSelectedRef.current = zoomToSelected;
+
     // Pointer-capture based scrollbar drag — self-contained, no global listeners needed.
     const handleScrollbarPointerDown = useCallback((axis: 'x' | 'y', e: React.PointerEvent<HTMLDivElement>, isThumb: boolean) => {
       if (selectionZoomActiveRef.current) return;
@@ -2944,6 +2958,21 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       };
       return canvas;
     }, []);
+
+    /**
+     * Hand the parent the same action the Focus button performs — fit the view
+     * to the selected design.
+     *
+     * Registered through a callback rather than hung off the imperative handle
+     * above, which is built once with no dependencies and captures
+     * `canvasRef.current` before this canvas exists; it resolves to `null` and
+     * never re-runs, so anything attached there is unreachable. An effect runs
+     * after the canvas is mounted and re-registers whenever the parent's
+     * callback changes.
+     */
+    useEffect(() => {
+      onRegisterFocus?.(() => zoomToSelectedRef.current());
+    }, [onRegisterFocus]);
 
     const getCheckerboardPattern = (ctx: CanvasRenderingContext2D, w: number, h: number): CanvasPattern | null => {
       if (checkerboardPatternRef.current?.width === w && checkerboardPatternRef.current?.height === h) {
