@@ -49,6 +49,16 @@ interface MobileToolSheetProps {
   /** Accessible name for the drag handle. */
   handleLabel: string;
   /**
+   * Status pinned to the right of the grip, visible at every detent.
+   *
+   * The handle strip is a centred 36px grip in a full-width row, so most of it
+   * is dead space, and a read-only badge parked there costs no height and does
+   * not compete with the sizing row for the width that metric units need. It
+   * must stay non-interactive: a drag begun anywhere on this strip has to reach
+   * the handle beneath it.
+   */
+  handleAccessory?: ReactNode;
+  /**
    * Rendered for the detent currently on screen. Content above the live detent
    * is not rendered rather than merely hidden, so a collapsed sheet cannot hold
    * a control that scrolling could still reach.
@@ -63,7 +73,7 @@ interface MobileToolSheetProps {
  * and any layout height taken here would shrink it, which is the whole reason
  * the two-column phone layout was replaced.
  */
-export default function MobileToolSheet({ open, handleLabel, children }: MobileToolSheetProps) {
+export default function MobileToolSheet({ open, handleLabel, handleAccessory, children }: MobileToolSheetProps) {
   const sheetRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [detent, setDetent] = useState<SheetDetent>("peek");
@@ -274,10 +284,15 @@ export default function MobileToolSheet({ open, handleLabel, children }: MobileT
             advance();
           }
         }}
-        className="flex flex-shrink-0 cursor-grab items-center justify-center active:cursor-grabbing"
+        className="relative flex flex-shrink-0 cursor-grab items-center justify-center active:cursor-grabbing"
         style={{ height: HANDLE_H, touchAction: "none" }}
       >
         <span className="block h-1 w-9 rounded-full bg-gray-300" />
+        {handleAccessory && (
+          <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2">
+            {handleAccessory}
+          </span>
+        )}
       </div>
       <div
         data-testid="mobile-tool-sheet-scroll"

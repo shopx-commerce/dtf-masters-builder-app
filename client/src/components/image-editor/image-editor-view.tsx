@@ -653,7 +653,18 @@ export default function ImageEditorView() {
                     use. Every row below is `flex-nowrap` + `justify-start`:
                     wrapping would silently eat canvas, and a centred row that
                     overflows spills off the left edge where no scroll reaches. */}
-                <MobileToolSheet open={!!selectedDesignId} handleLabel={t("editor.toolSheetHandle")}>
+                <MobileToolSheet
+                  open={!!selectedDesignId}
+                  handleLabel={t("editor.toolSheetHandle")}
+                  handleAccessory={
+                    <span
+                      className={`inline-flex rounded px-1.5 py-0.5 text-[11px] font-bold leading-none ${effectiveDPI < 277 ? "border border-amber-400 bg-amber-100 text-amber-700" : "border border-emerald-700 bg-emerald-100 text-emerald-700"}`}
+                      title={t("editor.effectiveRes", { dpi: effectiveDPI })}
+                    >
+                      {effectiveDPI} DPI
+                    </span>
+                  }
+                >
                   {(level) => (
                     <>
                       <div className="flex flex-nowrap items-center justify-start gap-1 overflow-x-auto rounded-md border border-gray-200 bg-white px-1 py-1">
@@ -675,7 +686,6 @@ export default function ImageEditorView() {
                           <SizeInput value={activeResizeSettings.heightInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("height", v)} title={useMetric(lang) ? t("editor.heightTitleCm") : t("editor.heightTitle")} max={artboardHeight} lang={lang} />
                           <span className="text-[11px] font-medium text-gray-700">{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>
                         </div>
-                        <span className={`inline-flex flex-shrink-0 rounded px-2 py-1 text-[11px] font-bold ${effectiveDPI < 277 ? "border border-amber-400 bg-amber-100 text-amber-700" : "border border-emerald-700 bg-emerald-100 text-emerald-700"}`} title={t("editor.effectiveRes", { dpi: effectiveDPI })}>{effectiveDPI} DPI</span>
                       </div>
 
                       {level !== "peek" && (
