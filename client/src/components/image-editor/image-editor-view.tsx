@@ -964,13 +964,54 @@ export default function ImageEditorView() {
                 >
                   {() => (
                     <>
-                      {/* Gangsheet size and price. Document-level rather than
-                          contextual, and the one control that sets what the
-                          customer pays, so it leads the panel. A native
-                          `select` rather than the desktop combobox: it raises
-                          the OS picker, and it cannot be clipped by the
-                          sheet's own scroll the way a rendered popover can. */}
-                      <div className="flex flex-nowrap items-center justify-start gap-1.5 overflow-x-auto border-b border-gray-200 pb-2">
+                      <div className="flex flex-nowrap items-center justify-start gap-2 overflow-x-auto">
+                        <Layers className="h-5 w-5 flex-shrink-0 text-cyan-500" strokeWidth={2.25} />
+                        <span className="flex-shrink-0 text-[13px] font-semibold text-gray-800">{t("editor.layers")}</span>
+                        <span className="flex-shrink-0 rounded-full bg-cyan-100 px-2 py-0.5 text-[12px] font-bold tabular-nums text-cyan-700">{designs.length}</span>
+                        {/* Straight to the file picker. The uploads library it
+                            used to sit beside is not mounted on this arm. */}
+                        <button
+                          type="button"
+                          onClick={() => sidebarFileRef.current?.click()}
+                          className="flex min-h-10 flex-shrink-0 items-center gap-1 whitespace-nowrap rounded-lg border border-cyan-600 bg-cyan-500 px-3 py-2 text-[12px] font-bold text-white shadow-md shadow-cyan-500/25 transition-all hover:bg-cyan-600 active:scale-[0.98] coarse:min-h-[44px]"
+                          title={t("editor.addDesignTitle")}
+                          data-testid="mobile-add-designs"
+                        >
+                          <Plus className="h-4 w-4 flex-shrink-0" strokeWidth={2.5} />
+                          <span>{t("editor.addDesigns")}</span>
+                        </button>
+                        <input
+                          ref={sidebarFileRef}
+                          type="file"
+                          className="hidden"
+                          accept=".png,.jpg,.jpeg,.webp,.pdf,image/png,image/jpeg,image/webp,application/pdf"
+                          multiple
+                          onChange={handleSidebarFileChange}
+                        />
+                      </div>
+
+                      {/* No `max-height` of its own: the sheet is already a
+                          scroller, and a second one nested inside it makes the
+                          list a trap for a thumb that meant to drag the sheet. */}
+                      {/* `data-mobile-layers` drives the `layersheet:` variant
+                          that grows `LayerRow`'s targets to 44px here without
+                          moving the same rows in the desktop sidebar, which an
+                          iPad also renders on a touch screen. */}
+                      {/* `divide-y` replaces separation the desktop row gets for
+                          free from its 20px of vertical padding. With that
+                          padding cut to 8 here, two unselected rows would
+                          otherwise run together into one block of text. */}
+                      <div data-mobile-layers className="divide-y divide-gray-200 rounded-lg border border-gray-200">{layerListItems}</div>
+
+                      {/* Gangsheet size and price. Document-level rather
+                          than contextual, and it trails the panel rather
+                          than leading it: in landscape the sheet is only
+                          ~123px tall, and 61px of that spent here meant a
+                          panel called Layers opened showing none. A native
+                          `select` rather than the desktop combobox: it
+                          raises the OS picker, and it cannot be clipped by
+                          the sheet's own scroll the way a popover can. */}
+                      <div className="flex flex-nowrap items-center justify-start gap-1.5 overflow-x-auto border-t border-gray-200 pt-2">
                         <Layers className="h-4 w-4 flex-shrink-0 text-cyan-500" />
                         <span className="flex-shrink-0 text-[12px] font-semibold text-gray-900">{t("controls.gangsheetSize")}</span>
                         <span className="flex-shrink-0 text-[12px] font-semibold tabular-nums text-gray-800">{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
@@ -1016,45 +1057,6 @@ export default function ImageEditorView() {
                           </span>
                         )}
                       </div>
-
-                      <div className="flex flex-nowrap items-center justify-start gap-2 overflow-x-auto">
-                        <Layers className="h-5 w-5 flex-shrink-0 text-cyan-500" strokeWidth={2.25} />
-                        <span className="flex-shrink-0 text-[13px] font-semibold text-gray-800">{t("editor.layers")}</span>
-                        <span className="flex-shrink-0 rounded-full bg-cyan-100 px-2 py-0.5 text-[12px] font-bold tabular-nums text-cyan-700">{designs.length}</span>
-                        {/* Straight to the file picker. The uploads library it
-                            used to sit beside is not mounted on this arm. */}
-                        <button
-                          type="button"
-                          onClick={() => sidebarFileRef.current?.click()}
-                          className="flex min-h-10 flex-shrink-0 items-center gap-1 whitespace-nowrap rounded-lg border border-cyan-600 bg-cyan-500 px-3 py-2 text-[12px] font-bold text-white shadow-md shadow-cyan-500/25 transition-all hover:bg-cyan-600 active:scale-[0.98] coarse:min-h-[44px]"
-                          title={t("editor.addDesignTitle")}
-                          data-testid="mobile-add-designs"
-                        >
-                          <Plus className="h-4 w-4 flex-shrink-0" strokeWidth={2.5} />
-                          <span>{t("editor.addDesigns")}</span>
-                        </button>
-                        <input
-                          ref={sidebarFileRef}
-                          type="file"
-                          className="hidden"
-                          accept=".png,.jpg,.jpeg,.webp,.pdf,image/png,image/jpeg,image/webp,application/pdf"
-                          multiple
-                          onChange={handleSidebarFileChange}
-                        />
-                      </div>
-
-                      {/* No `max-height` of its own: the sheet is already a
-                          scroller, and a second one nested inside it makes the
-                          list a trap for a thumb that meant to drag the sheet. */}
-                      {/* `data-mobile-layers` drives the `layersheet:` variant
-                          that grows `LayerRow`'s targets to 44px here without
-                          moving the same rows in the desktop sidebar, which an
-                          iPad also renders on a touch screen. */}
-                      {/* `divide-y` replaces separation the desktop row gets for
-                          free from its 20px of vertical padding. With that
-                          padding cut to 8 here, two unselected rows would
-                          otherwise run together into one block of text. */}
-                      <div data-mobile-layers className="divide-y divide-gray-200 rounded-lg border border-gray-200">{layerListItems}</div>
 
                       {/* Fluorescent spot-colour panels portal here on this
                           arm; on desktop they go to the sidebar. */}

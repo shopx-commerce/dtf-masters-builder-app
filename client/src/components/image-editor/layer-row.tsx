@@ -390,7 +390,7 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
               }
               e.stopPropagation();
             }}
-            title="Click to set exact copy count"
+            title={t("editor.copyCount")}
           />
           {/*
             Hit area and glyph are separate boxes, exactly as in
@@ -418,9 +418,9 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => handlers.handleSetGroupCount(row, count + 1)}
               disabled={count >= 200}
-              aria-label="Increase copies"
+              aria-label={t("editor.increaseCopies")}
               className="group flex h-3.5 w-4 items-center justify-center disabled:opacity-30 coarse:h-11 coarse:w-11 layersheet:order-last"
-              title="Increase copies"
+              title={t("editor.increaseCopies")}
             >
               {/* The bezel grows on the phone while the 44px box around it does
                   not. Laid out flat, a 16x14 mark adrift in a 44px target reads
@@ -436,9 +436,9 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => handlers.handleSetGroupCount(row, count - 1)}
               disabled={count <= 1}
-              aria-label="Decrease copies"
+              aria-label={t("editor.decreaseCopies")}
               className="group flex h-3.5 w-4 items-center justify-center disabled:opacity-30 coarse:h-11 coarse:w-11 layersheet:order-first"
-              title="Decrease copies"
+              title={t("editor.decreaseCopies")}
             >
               <span className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors group-hover:bg-cyan-100 group-hover:text-cyan-600 group-active:bg-cyan-200 layersheet:h-8 layersheet:w-8 layersheet:border-gray-400 layersheet:text-gray-700">
                 <ChevronDown className="h-3 w-3 layersheet:h-5 layersheet:w-5" strokeWidth={3} />
@@ -449,10 +449,16 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
         <button
           onClick={handleDuplicateAndArrange}
           className="inline-flex h-7 min-w-0 flex-1 items-center justify-center gap-1 rounded-md border border-fuchsia-400 bg-fuchsia-100 px-1.5 text-[9px] font-bold text-fuchsia-800 shadow-sm shadow-fuchsia-500/20 transition-colors hover:bg-fuchsia-200 layersheet:h-11"
-          title="Duplicate & Arrange"
+          title={t("editor.duplicateArrange")}
         >
-          <Copy className="h-3 w-3" />
-          <span className="whitespace-nowrap">Duplicate &amp; Arrange</span>
+          {/* Hidden on the phone, where the 16px it occupies is the difference
+              between the French label fitting and being cut to "Dupliquer et
+              Organi…". A written label does not need an icon to repeat it. */}
+          <Copy className="h-3 w-3 flex-shrink-0 layersheet:hidden" />
+          {/* Truncates rather than wrapping or overflowing, so a language with
+              a longer string than the English this row was sized against
+              degrades to an ellipsis instead of breaking the layout. */}
+          <span className="truncate">{t("editor.duplicateArrange")}</span>
         </button>
       </div>
       {/* Hit area and glyph are separate boxes on the phone, as everywhere else
