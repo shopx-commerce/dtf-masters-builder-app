@@ -63,6 +63,7 @@ export const es: Record<string, string> = {
   "editor.draftDiscard": "Descartar",
   "editor.draftRecover": "Recuperar borrador",
   "editor.draftRecovering": "Recuperando...",
+  "editor.toolSheetHandle": "Panel de herramientas — arrastra o toca para ver más",
   "editor.autoArrange": "Auto-Organizar",
   "editor.autoArrangeAll": "Organizar automáticamente todos los diseños en la hoja",
   "editor.autoArrangeSelected": "Organizar solo los diseños seleccionados",

@@ -63,6 +63,7 @@ export const en: Record<string, string> = {
   "editor.draftDiscard": "Discard",
   "editor.draftRecover": "Recover draft",
   "editor.draftRecovering": "Recovering...",
+  "editor.toolSheetHandle": "Tool panel — drag or tap to show more",
   "editor.autoArrange": "Auto-Arrange",
   "editor.autoArrangeAll": "Auto-arrange all designs on gangsheet",
   "editor.autoArrangeSelected": "Arrange selected designs only",

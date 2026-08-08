@@ -109,7 +109,20 @@ function handleShellConfig(event: MessageEvent): void {
   for (const notify of insetSubscribers) notify();
 }
 
-function subscribeShellKeyboardInset(onChange: () => void): () => void {
+/**
+ * The shell's last accepted keyboard inset, or `null` if it has never posted
+ * one. Exported for the mobile tool sheet, which cannot be rescued by the
+ * mechanism below — see `MIN_KEYBOARD_INSET_PX` and the walk in `sync`: every
+ * scrolling ancestor of a field inside a bottom-anchored sheet *starts* below
+ * the keyboard, so there is no height to take away. The sheet moves itself
+ * instead, and reads the inset from here so it agrees with this hook rather
+ * than repeating its trust checks.
+ */
+export function getShellKeyboardInset(): number | null {
+  return shellKeyboardInset;
+}
+
+export function subscribeShellKeyboardInset(onChange: () => void): () => void {
   if (!listeningForShellConfig) {
     listeningForShellConfig = true;
     window.addEventListener("message", handleShellConfig);

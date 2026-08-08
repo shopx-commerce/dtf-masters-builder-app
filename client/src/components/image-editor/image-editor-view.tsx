@@ -5,6 +5,7 @@ import ControlsSection from "../controls-section";
 import CropModal from "../crop-modal";
 import SizeInput from "./size-input";
 import EditorActionToolbar from "./editor-action-toolbar";
+import MobileToolSheet from "./mobile-tool-sheet";
 import { LayerRow, type LayerRowHandlers } from "./layer-row";
 import { UploadsPanel } from "./uploads-panel";
 import { useToast } from "@/hooks/use-toast";
@@ -610,15 +611,10 @@ export default function ImageEditorView() {
         {/* Preview Canvas */}
         {mobileLayout ? (
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="flex min-h-0 flex-1">
-            <div className="min-h-0 min-w-0 h-full pl-1.5 basis-[53%] shrink-0 flex flex-col">
-              <div className="flex-shrink-0 flex items-center gap-0.5 bg-white border-b border-gray-200 px-2 py-1">
-                <button onClick={handleRotate90} disabled={!selectedDesignId} className="h-8 w-8 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30" title={t("editor.rotate")}><RotateCw className="mx-auto h-4 w-4" /></button>
-                <button onClick={() => handleAlignCorner('tl')} disabled={!selectedDesignId} className="h-8 w-8 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30" title={t("editor.alignTL")}><ArrowUpLeft className="mx-auto h-4 w-4" /></button>
-                <button onClick={() => handleAlignCorner('tr')} disabled={!selectedDesignId} className="h-8 w-8 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30" title={t("editor.alignTR")}><ArrowUpRight className="mx-auto h-4 w-4" /></button>
-                <button onClick={() => handleAlignCorner('bl')} disabled={!selectedDesignId} className="h-8 w-8 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30" title={t("editor.alignBL")}><ArrowDownLeft className="mx-auto h-4 w-4" /></button>
-                <button onClick={() => handleAlignCorner('br')} disabled={!selectedDesignId} className="h-8 w-8 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30" title={t("editor.alignBR")}><ArrowDownRight className="mx-auto h-4 w-4" /></button>
-              </div>
+              {/* Full-bleed canvas. The sheet below overlays it rather than
+                  sitting beside it, because `PreviewSection` sizes the
+                  gangsheet from this box and anything that takes width or
+                  height here comes straight off the artwork. */}
               <div className="relative min-h-0 min-w-0 flex-1">
                 <PreviewSection
                   ref={canvasRef}
@@ -651,185 +647,220 @@ export default function ImageEditorView() {
                    onWandDeleteTap={handleWandDelete}
                    onWandDeactivate={handleWandDeactivate}
                 />
-              </div>
-            </div>
 
-            <div className="min-h-0 h-full basis-[47%] shrink-0 border-l border-gray-200 bg-gray-100 p-2">
-              <div className="flex h-full flex-col gap-2 overflow-y-auto">
-                <button onClick={handleThresholdAlpha} disabled={!selectedDesignId && selectedDesignIds.size === 0} className={`flex items-center justify-center gap-1 rounded-md border px-2 py-2 text-[11px] font-medium transition-all ${selectedDesignId || selectedDesignIds.size > 0 ? "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`} title={t("editor.cleanAlphaTitle")}><Droplets className="h-3 w-3" />{t("editor.cleanAlpha")}</button>
-                <button onClick={handleThresholdAlphaAll} disabled={designs.length === 0} className={`flex items-center justify-center gap-1 rounded-md border px-2 py-2 text-[11px] font-medium transition-all ${designs.length > 0 ? "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`} title={t("editor.cleanAlphaAllTitle")}><Droplets className="h-3 w-3" />{t("editor.cleanAlphaAll")}</button>
-                {halftoneEnabled && (
-                  <div className="relative">
-                    <button
-                      onClick={handleOpenHalftoneMenu}
-                      disabled={!selectedDesignId && selectedDesignIds.size === 0}
-                      className={`flex w-full items-center justify-center gap-1 rounded-md border px-2 py-2 text-[11px] font-medium transition-all ${selectedDesignId || selectedDesignIds.size > 0 ? "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`}
-                      title="Halftone: convert design colours to halftone dots for dark-garment DTF"
-                    >
-                      <HalftoneIcon className="h-3 w-3" />Halftone
-                    </button>
-                    {halftoneMenuOpen && (selectedDesignId || selectedDesignIds.size > 0) && (
-                      <div className="absolute left-0 top-full z-50 mt-1 w-48 rounded-md border border-gray-200 bg-white p-2 shadow-lg">
-                        <p className="mb-1 text-[11px] font-semibold text-gray-700 uppercase tracking-wide">Strength</p>
-                        <div className="mb-2 flex gap-1">
-                          {(['light','balanced','strong'] as const).map(s => (
-                            <button key={s} onClick={() => setHalftoneStrength(s)}
-                              className={`flex-1 text-[11px] py-1 rounded border font-medium capitalize transition-colors ${halftoneStrength === s ? 'bg-amber-500 text-white border-amber-600' : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-amber-50'}`}>
-                              {s}
-                            </button>
-                          ))}
+                {/* Contextual tools. Nothing selected means no sheet at all, so
+                    the controls cost zero canvas for as long as they are of no
+                    use. Every row below is `flex-nowrap` + `justify-start`:
+                    wrapping would silently eat canvas, and a centred row that
+                    overflows spills off the left edge where no scroll reaches. */}
+                <MobileToolSheet open={!!selectedDesignId} handleLabel={t("editor.toolSheetHandle")}>
+                  {(level) => (
+                    <>
+                      <div className="flex flex-nowrap items-center justify-start gap-1 overflow-x-auto rounded-md border border-gray-200 bg-white px-1 py-1">
+                        <div className="inline-flex flex-shrink-0 items-center gap-0.5">
+                          <span className="text-[12px] font-bold text-gray-800">W</span>
+                          <SizeInput value={activeResizeSettings.widthInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("width", v)} title={useMetric(lang) ? t("editor.widthTitleCm") : t("editor.widthTitle")} max={artboardWidth} lang={lang} />
+                          <span className="text-[11px] font-medium text-gray-700">{getUnitSuffix(activeResizeSettings.widthInches * activeDesignTransform.s, lang)}</span>
                         </div>
                         <button
-                          onClick={() => { setHalftoneMenuOpen(false); const id = selectedDesignId ?? [...selectedDesignIds][0]; if (id) handleApplyHalftone(id, 0, 0, 0, halftoneStrength); }}
-                          className="mb-1 w-full rounded bg-gray-900 px-2 py-1.5 text-[11px] font-medium text-white hover:bg-gray-700"
+                          type="button"
+                          onClick={() => setProportionalLock((v) => !v)}
+                          className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded text-cyan-500 hover:bg-cyan-50 coarse:h-11 coarse:w-11"
+                          title={proportionalLock ? t("editor.proportionsLocked") : t("editor.proportionsUnlocked")}
                         >
-                          ⬛ Black garment
+                          {proportionalLock ? <Link className="h-3.5 w-3.5" /> : <Unlink className="h-3.5 w-3.5" />}
                         </button>
-                        {halftoneTopColors.length > 0 && (
-                          <div className="mt-1 space-y-1">
-                            <p className="text-[11px] font-semibold text-gray-700 uppercase tracking-wide">Colour garment</p>
-                            {halftoneTopColors.map((c, i) => (
-                              <button key={i}
-                                onClick={() => { setHalftoneMenuOpen(false); const id = selectedDesignId ?? [...selectedDesignIds][0]; if (id) handleApplyHalftone(id, c.r, c.g, c.b, halftoneStrength); }}
-                                className="flex w-full items-center gap-2 rounded px-2 py-1 text-[11px] hover:bg-gray-100"
-                              >
-                                <span className="h-3.5 w-3.5 flex-shrink-0 rounded-full border border-gray-200" style={{ background: c.hex }} />
-                                <span className="truncate text-gray-700">{c.name ?? c.hex}</span>
-                              </button>
-                            ))}
+                        <div className="inline-flex flex-shrink-0 items-center gap-0.5">
+                          <span className="text-[12px] font-bold text-gray-800">H</span>
+                          <SizeInput value={activeResizeSettings.heightInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("height", v)} title={useMetric(lang) ? t("editor.heightTitleCm") : t("editor.heightTitle")} max={artboardHeight} lang={lang} />
+                          <span className="text-[11px] font-medium text-gray-700">{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>
+                        </div>
+                        <span className={`inline-flex flex-shrink-0 rounded px-2 py-1 text-[11px] font-bold ${effectiveDPI < 277 ? "border border-amber-400 bg-amber-100 text-amber-700" : "border border-emerald-700 bg-emerald-100 text-emerald-700"}`} title={t("editor.effectiveRes", { dpi: effectiveDPI })}>{effectiveDPI} DPI</span>
+                      </div>
+
+                      {level !== "peek" && (
+                        <>
+                          <div className="flex flex-nowrap items-center justify-start gap-0.5 overflow-x-auto">
+                            <button onClick={handleRotate90} disabled={!selectedDesignId} className="h-8 w-8 flex-shrink-0 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.rotate")}><RotateCw className="mx-auto h-4 w-4" /></button>
+                            <button onClick={() => handleAlignCorner('tl')} disabled={!selectedDesignId} className="h-8 w-8 flex-shrink-0 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.alignTL")}><ArrowUpLeft className="mx-auto h-4 w-4" /></button>
+                            <button onClick={() => handleAlignCorner('tr')} disabled={!selectedDesignId} className="h-8 w-8 flex-shrink-0 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.alignTR")}><ArrowUpRight className="mx-auto h-4 w-4" /></button>
+                            <button onClick={() => handleAlignCorner('bl')} disabled={!selectedDesignId} className="h-8 w-8 flex-shrink-0 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.alignBL")}><ArrowDownLeft className="mx-auto h-4 w-4" /></button>
+                            <button onClick={() => handleAlignCorner('br')} disabled={!selectedDesignId} className="h-8 w-8 flex-shrink-0 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.alignBR")}><ArrowDownRight className="mx-auto h-4 w-4" /></button>
                           </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-                <div className={`rounded-md border border-gray-200 bg-white p-2 ${mobileLayout ? "mx-auto" : ""}`}>
-                  <div className="flex flex-col gap-2">
-                    <button
-                      onClick={() => handleDuplicateDesign(duplicateCount)}
-                      disabled={!selectedDesignId}
-                      className={`w-full rounded-md px-2 py-2 text-[11px] font-medium transition-all ${selectedDesignId ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#7C3AED]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`}
-                      title={t("editor.duplicate")}
-                    >
-                      <span className="inline-flex w-full items-center justify-center gap-1 text-center whitespace-normal break-words leading-snug">
-                        <Copy className="h-3.5 w-3.5 flex-shrink-0" />
-                        <span>{t("editor.duplicate").replace(/ \(.*/, "")}</span>
-                      </span>
-                    </button>
-                    <div className="relative w-10 h-[28px] lg:h-[24px] mx-auto rounded border border-gray-300 bg-white overflow-hidden focus-within:border-cyan-500">
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        value={duplicateCount}
-                        onChange={(e) => setDuplicateCount(parseDuplicateCount(e.target.value))}
-                        onKeyDown={handleDuplicateCountKeyDown}
-                        disabled={!selectedDesignId}
-                        /* 16px on any touch screen so iOS does not auto-zoom on
-                           focus — same reasoning as `size-input.tsx`. Gated on the
-                           pointer rather than on the width breakpoint, so a tablet
-                           in this layout is covered too. */
-                         className="w-full h-full text-center text-[12px] coarse:text-[16px] font-semibold leading-none p-0 pr-3 bg-white outline-none disabled:opacity-30 disabled:pointer-events-none"
-                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                        title="Number of copies"
-                      />
-                      <div className="absolute right-0 top-0 h-full w-3 border-l border-gray-300 overflow-hidden rounded-r">
-                        <button
-                          type="button"
-                          onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev + 1))}
-                          disabled={!selectedDesignId || duplicateCount >= 99}
-                          className="h-1/2 w-full flex items-center justify-center border-b border-gray-300 bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
-                          title="Increase copies"
-                        >
-                          <ChevronUp className="w-2.5 h-2.5 text-gray-600" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev - 1))}
-                          disabled={!selectedDesignId || duplicateCount <= 1}
-                          className="h-1/2 w-full flex items-center justify-center bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
-                          title="Decrease copies"
-                        >
-                          <ChevronDown className="w-2.5 h-2.5 text-gray-600" />
-                        </button>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleDuplicateAndArrange(duplicateCount)}
-                      disabled={!selectedDesignId}
-                       className={`w-full rounded-md px-2 py-2 text-[12px] font-semibold transition-all ${selectedDesignId ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#0891B2]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`}
-                      title={t("editor.duplicateArrange")}
-                    >
-                      <span className="inline-flex w-full items-center justify-center gap-1 text-center whitespace-normal break-words leading-snug">
-                        <Copy className="h-3.5 w-3.5 flex-shrink-0" />
-                        <span>{t("editor.duplicateArrange")}</span>
-                      </span>
-                    </button>
-                    {designs.length >= 2 && (
-                      <div className="mt-1 flex items-center justify-center gap-1">
-                         <span className="text-[11px] font-medium text-gray-700">{t("editor.margin")}</span>
-                        <select
-                          value={designGap === undefined ? "auto" : String(designGap)}
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            const newGap = v === "auto" ? undefined : parseFloat(v);
-                            setDesignGap(newGap);
-                            setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true, fullRepack: true }), 0);
-                          }}
-                           className="h-8 px-1.5 bg-gray-100 border border-gray-300 rounded text-[12px] coarse:text-[16px] font-medium text-gray-800 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
-                          title={useMetric(lang) ? t("editor.marginGapCm") : t("editor.marginGap")}
-                        >
-                          <option value="auto">{t("editor.marginAuto")}</option>
-                          <option value="0.0625">{useMetric(lang) ? formatLength(0.0625, lang) : "1/16″"}</option>
-                          <option value="0.125">{useMetric(lang) ? formatLength(0.125, lang) : "1/8″"}</option>
-                          <option value="0.25">{useMetric(lang) ? formatLength(0.25, lang) : "1/4″"}</option>
-                          <option value="0.5">{useMetric(lang) ? formatLength(0.5, lang) : "1/2″"}</option>
-                          <option value="1">{useMetric(lang) ? formatLength(1, lang) : "1″"}</option>
-                        </select>
-                      </div>
-                    )}
-                  </div>
-                </div>
-                <span className={`mx-auto inline-flex rounded px-2 py-1 text-[11px] font-bold ${effectiveDPI < 277 ? "border border-amber-400 bg-amber-100 text-amber-700" : "border border-emerald-700 bg-emerald-100 text-emerald-700"}`} title={t("editor.effectiveRes", { dpi: effectiveDPI })}>{effectiveDPI} DPI</span>
-                <div className={`rounded-md border border-gray-200 bg-white p-2 ${mobileLayout ? "mx-auto w-fit max-w-full" : ""}`}>
-                  <div className="mx-auto mb-1 inline-flex items-center justify-center gap-1">
-                    <span className="text-[12px] font-bold text-gray-800">W</span>
-                    <SizeInput value={activeResizeSettings.widthInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("width", v)} title={useMetric(lang) ? t("editor.widthTitleCm") : t("editor.widthTitle")} max={artboardWidth} lang={lang} />
-                    <span className="text-[11px] font-medium text-gray-700">{getUnitSuffix(activeResizeSettings.widthInches * activeDesignTransform.s, lang)}</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setProportionalLock((v) => !v)}
-                    className="mx-auto mb-1 flex h-5 w-5 items-center justify-center rounded text-cyan-500 hover:bg-cyan-50"
-                    title={proportionalLock ? t("editor.proportionsLocked") : t("editor.proportionsUnlocked")}
-                  >
-                    {proportionalLock ? <Link className="h-3.5 w-3.5" /> : <Unlink className="h-3.5 w-3.5" />}
-                  </button>
-                  <div className="mx-auto inline-flex items-center justify-center gap-1">
-                    <span className="text-[12px] font-bold text-gray-800">H</span>
-                    <SizeInput value={activeResizeSettings.heightInches * activeDesignTransform.s} onCommit={(v) => handleEffectiveSizeChange("height", v)} title={useMetric(lang) ? t("editor.heightTitleCm") : t("editor.heightTitle")} max={artboardHeight} lang={lang} />
-                    <span className="text-[11px] font-medium text-gray-700">{getUnitSuffix(activeResizeSettings.heightInches * activeDesignTransform.s, lang)}</span>
-                  </div>
-                </div>
-                <button
-                  onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2, fullRepack: true })}
-                  disabled={designs.length < 2 && selectedDesignIds.size < 2}
-                   className={`mx-auto flex min-h-[36px] items-center justify-center gap-1 rounded-md px-2 py-1 text-[12px] font-semibold transition-colors ${
-                    designs.length >= 2 || selectedDesignIds.size >= 2
-                      ? "border border-pink-600 bg-pink-500 text-black shadow-md shadow-pink-500/25 hover:bg-pink-600"
-                      : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"
-                  }`}
-                  title={selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll")}
-                >
-                  <LayoutGrid className="h-3.5 w-3.5 flex-shrink-0" />
-                  {t("editor.autoArrange")}
-                </button>
-                <div className="mt-auto mx-auto flex items-center gap-1 rounded-md border border-gray-200 bg-white p-1">
-                <button onClick={handleUndo} disabled={!canUndo()} className="h-8 w-8 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30" title={t("editor.undo")}><Undo2 className="mx-auto h-4 w-4" /></button>
-                <button onClick={handleRedo} disabled={!canRedo()} className="h-8 w-8 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30" title={t("editor.redo")}><Redo2 className="mx-auto h-4 w-4" /></button>
-                <button onClick={() => { if (selectedDesignIds.size > 1) handleDeleteMulti(selectedDesignIds); else if (selectedDesignId) handleDeleteDesign(selectedDesignId); }} disabled={!selectedDesignId} className="h-8 w-8 rounded border border-red-200 bg-white text-red-500 transition-colors hover:bg-red-50 hover:text-red-600 disabled:pointer-events-none disabled:opacity-30" title={t("editor.delete")}><Trash2 className="mx-auto h-4 w-4" /></button>
+
+                          <div className="flex flex-nowrap items-center justify-start gap-2 overflow-x-auto">
+                            <button
+                              onClick={() => handleDuplicateDesign(duplicateCount)}
+                              disabled={!selectedDesignId}
+                              className={`flex-shrink-0 rounded-md px-2 py-2 text-[11px] font-medium transition-all coarse:min-h-[44px] ${selectedDesignId ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#7C3AED]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`}
+                              title={t("editor.duplicate")}
+                            >
+                              <span className="inline-flex w-full items-center justify-center gap-1 text-center whitespace-nowrap leading-snug">
+                                <Copy className="h-3.5 w-3.5 flex-shrink-0" />
+                                <span>{t("editor.duplicate").replace(/ \(.*/, "")}</span>
+                              </span>
+                            </button>
+                            <div className="relative h-[28px] w-10 flex-shrink-0 overflow-hidden rounded border border-gray-300 bg-white focus-within:border-cyan-500 coarse:h-11">
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                value={duplicateCount}
+                                onChange={(e) => setDuplicateCount(parseDuplicateCount(e.target.value))}
+                                onKeyDown={handleDuplicateCountKeyDown}
+                                disabled={!selectedDesignId}
+                                /* 16px on any touch screen so iOS does not auto-zoom on
+                                   focus — same reasoning as `size-input.tsx`. Gated on the
+                                   pointer rather than on the width breakpoint, so a tablet
+                                   in this layout is covered too. */
+                                 className="w-full h-full text-center text-[12px] coarse:text-[16px] font-semibold leading-none p-0 pr-3 bg-white outline-none disabled:opacity-30 disabled:pointer-events-none"
+                                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                title="Number of copies"
+                              />
+                              <div className="absolute right-0 top-0 h-full w-3 border-l border-gray-300 overflow-hidden rounded-r">
+                                <button
+                                  type="button"
+                                  onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev + 1))}
+                                  disabled={!selectedDesignId || duplicateCount >= 99}
+                                  className="h-1/2 w-full flex items-center justify-center border-b border-gray-300 bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
+                                  title="Increase copies"
+                                >
+                                  <ChevronUp className="w-2.5 h-2.5 text-gray-600" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev - 1))}
+                                  disabled={!selectedDesignId || duplicateCount <= 1}
+                                  className="h-1/2 w-full flex items-center justify-center bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
+                                  title="Decrease copies"
+                                >
+                                  <ChevronDown className="w-2.5 h-2.5 text-gray-600" />
+                                </button>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => handleDuplicateAndArrange(duplicateCount)}
+                              disabled={!selectedDesignId}
+                               className={`flex-shrink-0 rounded-md px-2 py-2 text-[12px] font-semibold transition-all coarse:min-h-[44px] ${selectedDesignId ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#0891B2]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`}
+                              title={t("editor.duplicateArrange")}
+                            >
+                              <span className="inline-flex w-full items-center justify-center gap-1 text-center whitespace-nowrap leading-snug">
+                                <Copy className="h-3.5 w-3.5 flex-shrink-0" />
+                                <span>{t("editor.duplicateArrange")}</span>
+                              </span>
+                            </button>
+                          </div>
+
+                          <div className="flex flex-nowrap items-center justify-start gap-2 overflow-x-auto">
+                            <button onClick={handleThresholdAlpha} disabled={!selectedDesignId && selectedDesignIds.size === 0} className={`flex flex-shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-md border px-2 py-2 text-[11px] font-medium transition-all coarse:min-h-[44px] ${selectedDesignId || selectedDesignIds.size > 0 ? "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`} title={t("editor.cleanAlphaTitle")}><Droplets className="h-3 w-3" />{t("editor.cleanAlpha")}</button>
+                            {level === "full" && (
+                              <button onClick={handleThresholdAlphaAll} disabled={designs.length === 0} className={`flex flex-shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-md border px-2 py-2 text-[11px] font-medium transition-all coarse:min-h-[44px] ${designs.length > 0 ? "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`} title={t("editor.cleanAlphaAllTitle")}><Droplets className="h-3 w-3" />{t("editor.cleanAlphaAll")}</button>
+                            )}
+                          </div>
+
+                          {halftoneEnabled && (
+                            /* Its own row, and deliberately not a scrolling one:
+                               `overflow-x: auto` forces `overflow-y` to compute to
+                               `auto` as well, which would clip the popover. */
+                            <div className="relative w-fit">
+                              <button
+                                onClick={handleOpenHalftoneMenu}
+                                disabled={!selectedDesignId && selectedDesignIds.size === 0}
+                                className={`flex w-full items-center justify-center gap-1 whitespace-nowrap rounded-md border px-2 py-2 text-[11px] font-medium transition-all coarse:min-h-[44px] ${selectedDesignId || selectedDesignIds.size > 0 ? "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`}
+                                title="Halftone: convert design colours to halftone dots for dark-garment DTF"
+                              >
+                                <HalftoneIcon className="h-3 w-3" />Halftone
+                              </button>
+                              {halftoneMenuOpen && (selectedDesignId || selectedDesignIds.size > 0) && (
+                                /* Opens upward: this sits near the bottom of the
+                                   screen, so `top-full` would land the menu under
+                                   the sheet's own scroll edge. */
+                                <div className="absolute bottom-full left-0 z-50 mb-1 w-48 rounded-md border border-gray-200 bg-white p-2 shadow-lg">
+                                  <p className="mb-1 text-[11px] font-semibold text-gray-700 uppercase tracking-wide">Strength</p>
+                                  <div className="mb-2 flex gap-1">
+                                    {(['light','balanced','strong'] as const).map(s => (
+                                      <button key={s} onClick={() => setHalftoneStrength(s)}
+                                        className={`flex-1 text-[11px] py-1 rounded border font-medium capitalize transition-colors ${halftoneStrength === s ? 'bg-amber-500 text-white border-amber-600' : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-amber-50'}`}>
+                                        {s}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  <button
+                                    onClick={() => { setHalftoneMenuOpen(false); const id = selectedDesignId ?? [...selectedDesignIds][0]; if (id) handleApplyHalftone(id, 0, 0, 0, halftoneStrength); }}
+                                    className="mb-1 w-full rounded bg-gray-900 px-2 py-1.5 text-[11px] font-medium text-white hover:bg-gray-700"
+                                  >
+                                    ⬛ Black garment
+                                  </button>
+                                  {halftoneTopColors.length > 0 && (
+                                    <div className="mt-1 space-y-1">
+                                      <p className="text-[11px] font-semibold text-gray-700 uppercase tracking-wide">Colour garment</p>
+                                      {halftoneTopColors.map((c, i) => (
+                                        <button key={i}
+                                          onClick={() => { setHalftoneMenuOpen(false); const id = selectedDesignId ?? [...selectedDesignIds][0]; if (id) handleApplyHalftone(id, c.r, c.g, c.b, halftoneStrength); }}
+                                          className="flex w-full items-center gap-2 rounded px-2 py-1 text-[11px] hover:bg-gray-100"
+                                        >
+                                          <span className="h-3.5 w-3.5 flex-shrink-0 rounded-full border border-gray-200" style={{ background: c.hex }} />
+                                          <span className="truncate text-gray-700">{c.name ?? c.hex}</span>
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      {level === "full" && designs.length >= 2 && (
+                        <div className="flex flex-nowrap items-center justify-start gap-1 overflow-x-auto">
+                           <span className="flex-shrink-0 text-[11px] font-medium text-gray-700">{t("editor.margin")}</span>
+                          <select
+                            value={designGap === undefined ? "auto" : String(designGap)}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              const newGap = v === "auto" ? undefined : parseFloat(v);
+                              setDesignGap(newGap);
+                              setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true, fullRepack: true }), 0);
+                            }}
+                             className="h-8 flex-shrink-0 px-1.5 bg-gray-100 border border-gray-300 rounded text-[12px] coarse:text-[16px] coarse:h-11 font-medium text-gray-800 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
+                            title={useMetric(lang) ? t("editor.marginGapCm") : t("editor.marginGap")}
+                          >
+                            <option value="auto">{t("editor.marginAuto")}</option>
+                            <option value="0.0625">{useMetric(lang) ? formatLength(0.0625, lang) : "1/16″"}</option>
+                            <option value="0.125">{useMetric(lang) ? formatLength(0.125, lang) : "1/8″"}</option>
+                            <option value="0.25">{useMetric(lang) ? formatLength(0.25, lang) : "1/4″"}</option>
+                            <option value="0.5">{useMetric(lang) ? formatLength(0.5, lang) : "1/2″"}</option>
+                            <option value="1">{useMetric(lang) ? formatLength(1, lang) : "1″"}</option>
+                          </select>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </MobileToolSheet>
               </div>
-              </div>
-            </div>
+
+            {/* Undo/redo are the most-used controls in a touch editor, so they
+                stay in the flow and out of the sheet — two taps deep is a
+                regression no amount of sheet polish pays for. Delete rides with
+                them because it is already selection-gated and belongs beside
+                the action that reverses it. */}
+            <div className="flex flex-shrink-0 flex-nowrap items-center justify-start gap-1.5 overflow-x-auto border-t border-gray-200 bg-white px-2 py-0">
+              <button onClick={handleUndo} disabled={!canUndo()} className="h-8 w-8 flex-shrink-0 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.undo")}><Undo2 className="mx-auto h-4 w-4" /></button>
+              <button onClick={handleRedo} disabled={!canRedo()} className="h-8 w-8 flex-shrink-0 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.redo")}><Redo2 className="mx-auto h-4 w-4" /></button>
+              <button onClick={() => { if (selectedDesignIds.size > 1) handleDeleteMulti(selectedDesignIds); else if (selectedDesignId) handleDeleteDesign(selectedDesignId); }} disabled={!selectedDesignId} className="h-8 w-8 flex-shrink-0 rounded border border-red-200 bg-white text-red-500 transition-colors hover:bg-red-50 hover:text-red-600 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.delete")}><Trash2 className="mx-auto h-4 w-4" /></button>
+              <button
+                onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2, fullRepack: true })}
+                disabled={designs.length < 2 && selectedDesignIds.size < 2}
+                 className={`flex min-h-[36px] flex-shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-[12px] font-semibold transition-colors coarse:min-h-[44px] ${
+                  designs.length >= 2 || selectedDesignIds.size >= 2
+                    ? "border border-pink-600 bg-pink-500 text-black shadow-md shadow-pink-500/25 hover:bg-pink-600"
+                    : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"
+                }`}
+                title={selectedDesignIds.size >= 2 ? t("editor.autoArrangeSelected") : t("editor.autoArrangeAll")}
+              >
+                <LayoutGrid className="h-3.5 w-3.5 flex-shrink-0" />
+                {t("editor.autoArrange")}
+              </button>
             </div>
             <div ref={setMobileToolbarContainer} className="flex-shrink-0" />
           </div>

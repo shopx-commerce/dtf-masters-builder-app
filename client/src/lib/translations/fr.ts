@@ -63,6 +63,7 @@ export const fr: Record<string, string> = {
   "editor.draftDiscard": "Ignorer",
   "editor.draftRecover": "Récupérer le brouillon",
   "editor.draftRecovering": "Récupération...",
+  "editor.toolSheetHandle": "Panneau d’outils — glissez ou touchez pour en voir plus",
   "editor.autoArrange": "Auto-Organiser",
   "editor.autoArrangeAll": "Organiser automatiquement tous les designs sur la feuille",
   "editor.autoArrangeSelected": "Organiser uniquement les designs sélectionnés",
