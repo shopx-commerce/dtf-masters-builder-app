@@ -121,6 +121,26 @@ function getHandleHalfCssPx(
     : full;
   return capped / 2;
 }
+
+/**
+ * Whether a selection is drawn large enough on screen to carry a rotate band.
+ *
+ * That band is an invisible annulus around each corner — 22 to 34 CSS px on
+ * touch. Once the short on-screen edge drops below twice the outer radius the
+ * four bands meet across the middle of the artwork, and there is no longer any
+ * part of the design that is not also a rotate target. A 4in design on a 24.5in
+ * sheet is 56 CSS px wide on a phone, and its centre sits about 31 CSS px from
+ * the nearest corner: inside the band. Tapping the middle of it to drag rotated
+ * it instead, with nothing on screen to explain why.
+ *
+ * Below the threshold there is no rotation at all. The measurement is taken on
+ * screen rather than in inches, so zooming in is what earns it back — the same
+ * bargain `OUTLINE_ONLY_BELOW_CSS_PX` strikes for the corner glyphs, and the
+ * reason this is a gate rather than the removal of a feature.
+ */
+function selectionCanRotate(minEdgeCssPx: number, rotateOuterCssPx: number): boolean {
+  return minEdgeCssPx >= rotateOuterCssPx * 2;
+}
 const ZOOM_MIN_ABSOLUTE = 0.1;
 const ZOOM_WHEEL_FACTOR = 1.1;
 const ZOOM_BUTTON_FACTOR = 1.2;
@@ -894,21 +914,18 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       // Touch grabs an absolute number of CSS px, so a legible glyph and a thumb-sized
       // target are independent. A mouse keeps its rings proportional to the drawn glyph
       // so that a click well outside a corner still falls through to the marquee.
-      let resizeR: number;
-      let rotateOuterR: number;
       const designMinCss = Math.min(rect.width, rect.height) / bufferPerCss;
       const drawnHalf = getHandleHalfCssPx(designMinCss, z, isMobile, 0.25);
       // Nothing drawn, nothing to grab. The absolute touch rings below do not
       // depend on the glyph, so without this an outline-only design would keep
       // four invisible 44 CSS px targets and swallow the drag that moves it.
       if (drawnHalf === 0) return null;
-      if (isMobile) {
-        resizeR = TOUCH_RESIZE_HIT_R_CSS_PX * bufferPerCss;
-        rotateOuterR = TOUCH_ROTATE_OUTER_R_CSS_PX * bufferPerCss;
-      } else {
-        resizeR = drawnHalf * bufferPerCss * HANDLE_HIT_BOOST;
-        rotateOuterR = drawnHalf * bufferPerCss * HANDLE_ROTATE_RING;
-      }
+      // Radii in CSS px first, then converted: the rotate gate below compares a
+      // radius against an edge and both have to be in the same space.
+      const resizeRCss = isMobile ? TOUCH_RESIZE_HIT_R_CSS_PX : drawnHalf * HANDLE_HIT_BOOST;
+      const rotateOuterRCss = isMobile ? TOUCH_ROTATE_OUTER_R_CSS_PX : drawnHalf * HANDLE_ROTATE_RING;
+      const resizeR = resizeRCss * bufferPerCss;
+      const rotateOuterR = rotateOuterRCss * bufferPerCss;
 
       // Nearest corner in range, not the first in tl/tr/br/bl order. An absolute touch
       // ring is wider than a small design — a 44 CSS px target on a 25 CSS px design
@@ -926,6 +943,13 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       // Resize wins outright when both rings are in range.
       if (best) return best;
 
+      // Too small on screen for rotation to be anything but a trap.
+      if (!selectionCanRotate(designMinCss, rotateOuterRCss)) return null;
+      // Rotation is a gesture made *around* artwork, not on it — this is where
+      // every other editor puts it. Returning null hands the point back to the
+      // caller, which drags the body with it.
+      if (isClickInDesignInterior(px, py)) return null;
+
       for (const h of handles) {
         const d = Math.sqrt((px - h.x) ** 2 + (py - h.y) ** 2);
         if (d >= resizeR && d < rotateOuterR && d < bestD) {
@@ -935,7 +959,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       }
 
       return best;
-    }, [getHandlePositions, getDesignRect, isMobile]);
+    }, [getHandlePositions, getDesignRect, isMobile, isClickInDesignInterior]);
 
     // Group bounding box in canvas buffer space for multi-selection
     const getMultiSelectionBBox = useCallback(() => {
@@ -998,18 +1022,14 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const groupMin = bbox ? Math.min(bbox.width, bbox.height) : actualDpi * 20;
       // Same split as single selection: absolute CSS radii for touch, glyph-relative
       // rings for a mouse. The group draw at `drawSelectionHandles` shares the base.
-      let resizeR: number;
-      let rotateOuterR: number;
-      const drawnHalf = getHandleHalfCssPx(groupMin / bufferPerCss, z, isMobile, 0.15);
+      const groupMinCss = groupMin / bufferPerCss;
+      const drawnHalf = getHandleHalfCssPx(groupMinCss, z, isMobile, 0.15);
       // Nothing drawn, nothing to grab — see `hitTestHandles`.
       if (drawnHalf === 0) return null;
-      if (isMobile) {
-        resizeR = TOUCH_RESIZE_HIT_R_CSS_PX * bufferPerCss;
-        rotateOuterR = TOUCH_ROTATE_OUTER_R_CSS_PX * bufferPerCss;
-      } else {
-        resizeR = drawnHalf * bufferPerCss * HANDLE_HIT_BOOST;
-        rotateOuterR = drawnHalf * bufferPerCss * HANDLE_ROTATE_RING;
-      }
+      const resizeRCss = isMobile ? TOUCH_RESIZE_HIT_R_CSS_PX : drawnHalf * HANDLE_HIT_BOOST;
+      const rotateOuterRCss = isMobile ? TOUCH_ROTATE_OUTER_R_CSS_PX : drawnHalf * HANDLE_ROTATE_RING;
+      const resizeR = resizeRCss * bufferPerCss;
+      const rotateOuterR = rotateOuterRCss * bufferPerCss;
 
       // Nearest corner in range — see `hitTestHandles`.
       let best: { type: 'resize' | 'rotate'; id: string } | null = null;
@@ -1022,6 +1042,23 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         }
       }
       if (best) return best;
+
+      // Both rotate guards from `hitTestHandles`. A group needs them more, not
+      // less: nothing here prefers a drag over a handle the way the single
+      // selection's interior check does, so a rotate hit in the middle of a
+      // group box was the end of the matter and the group could not be moved.
+      if (!selectionCanRotate(groupMinCss, rotateOuterRCss)) return null;
+      if (bbox) {
+        // The group box is axis-aligned, so this is the same margin rule as
+        // `isClickInDesignInterior` without the rotation transform.
+        const margin = Math.min(10, groupMinCss * 0.25) * bufferPerCss;
+        const gcx = bbox.x + bbox.width / 2;
+        const gcy = bbox.y + bbox.height / 2;
+        if (
+          Math.abs(px - gcx) <= bbox.width / 2 - margin &&
+          Math.abs(py - gcy) <= bbox.height / 2 - margin
+        ) return null;
+      }
 
       for (const h of handles) {
         const d = Math.sqrt((px - h.x) ** 2 + (py - h.y) ** 2);
