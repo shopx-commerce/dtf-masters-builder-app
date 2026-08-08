@@ -279,7 +279,9 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
           }}
         />
       </div>
-      <div className="min-w-0 overflow-hidden pr-7">
+      {/* `layersheet:pr-12` clears the delete button's enlarged hit box on the
+          phone, so a tap meant for the name is not swallowed by it. */}
+      <div className="min-w-0 overflow-hidden pr-7 layersheet:pr-12">
         {isEditingName ? (
           <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
             <input
@@ -429,16 +431,21 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
         </div>
         <button
           onClick={handleDuplicateAndArrange}
-          className="inline-flex h-7 min-w-0 flex-1 items-center justify-center gap-1 rounded-md border border-fuchsia-400 bg-fuchsia-100 px-1.5 text-[9px] font-bold text-fuchsia-800 shadow-sm shadow-fuchsia-500/20 transition-colors hover:bg-fuchsia-200"
+          className="inline-flex h-7 min-w-0 flex-1 items-center justify-center gap-1 rounded-md border border-fuchsia-400 bg-fuchsia-100 px-1.5 text-[9px] font-bold text-fuchsia-800 shadow-sm shadow-fuchsia-500/20 transition-colors hover:bg-fuchsia-200 layersheet:h-11"
           title="Duplicate & Arrange"
         >
           <Copy className="h-3 w-3" />
           <span className="whitespace-nowrap">Duplicate &amp; Arrange</span>
         </button>
       </div>
+      {/* Hit area and glyph are separate boxes on the phone, as everywhere else
+          in this row: the 12px bezel keeps its size and the box around it grows
+          to 44. */}
       <button
         onClick={handleDelete}
-        className="absolute right-2.5 top-2.5 p-0.5 rounded hover:bg-gray-200 text-red-500 hover:text-red-600 transition-colors flex-shrink-0"
+        aria-label={t("editor.deleteLayer", { name: row.baseName })}
+        title={t("editor.deleteLayer", { name: row.baseName })}
+        className="absolute right-2.5 top-2.5 p-0.5 rounded hover:bg-gray-200 text-red-500 hover:text-red-600 transition-colors flex-shrink-0 layersheet:right-0 layersheet:top-0 layersheet:flex layersheet:h-11 layersheet:w-11 layersheet:items-center layersheet:justify-center layersheet:rounded-none layersheet:hover:bg-transparent"
       >
         <Trash2 className="w-3 h-3" />
       </button>

@@ -1,5 +1,5 @@
 import UploadSection from "../upload-section";
-import { useMemo, useRef, useEffect, useCallback } from "react";
+import { useMemo, useRef, useState, useEffect, useCallback } from "react";
 import PreviewSection from "../preview-section";
 import ControlsSection from "../controls-section";
 import CropModal from "../crop-modal";
@@ -12,15 +12,16 @@ import { useToast } from "@/hooks/use-toast";
 import { useKeyboardSafeFocus } from "@/hooks/use-keyboard-safe-focus";
 import { useMobileLayout } from "@/hooks/use-layout-viewport";
 import { formatDimensions, formatLength, useMetric, getUnitSuffix } from "@/lib/format-length";
+import { formatVariantPriceForDisplay } from "@/lib/variant-price";
+import { useWandTolerance, useToolActions } from "@/state/tool-store";
 import {
   ArrowDownLeft, ArrowDownRight, ArrowUpLeft, ArrowUpRight, Copy, ChevronDown, ChevronUp,
-  Droplets, FlipHorizontal2, FlipVertical2, Group, Layers, LayoutGrid, Link, Loader2, Minus, Plus, RotateCw,
-  Trash2, Undo2, Redo2, Ungroup, Unlink, XCircle,
+  Droplets, Eraser, FlipHorizontal2, FlipVertical2, Group, Layers, LayoutGrid, Link, Loader2, Minus, Plus, RotateCw,
+  Trash2, Undo2, Redo2, Ungroup, Unlink, WandSparkles, X, XCircle,
 } from "lucide-react";
 import { useImageEditorContext } from "./image-editor-context";
 import {
   useContextMenu,
-  useMobilePanel,
   useShowDesignInfo,
   useSelectionZoomActive,
   usePanModeActive,
@@ -94,6 +95,13 @@ export default function ImageEditorView() {
   // phone layout — the shell can correct that over `dtf-builder-shell-config`.
   // See `hooks/use-layout-viewport.ts`.
   const mobileLayout = useMobileLayout();
+  // The phone presents one surface — canvas, persistent bar, contextual sheet.
+  // Everything the old Controls panel held that is not contextual to a
+  // selection now lives behind this, summoned over the canvas rather than
+  // taking layout width or height from it.
+  const [layersOpen, setLayersOpen] = useState(false);
+  const wandTolerance = useWandTolerance();
+  const { setWandTolerance } = useToolActions();
   // Lifts a focused field clear of the software keyboard. Inert unless the
   // visual viewport actually shrinks, so desktop is untouched.
   useKeyboardSafeFocus();
@@ -110,7 +118,9 @@ export default function ImageEditorView() {
   // Now the model is untouched and only this view (plus the specific
   // consumers below) re-renders when they change.
   const contextMenu = useContextMenu();
-  const mobilePanel = useMobilePanel();
+  // `mobilePanel` is no longer read here: the phone has one surface, so there
+  // is nothing to flip between. The store field and its writers stay because
+  // `useImageEditorModelUploadCrop` still sets it after an upload.
   const showDesignInfo = useShowDesignInfo();
   const selectionZoomActive = useSelectionZoomActive();
   const panModeActive = usePanModeActive();
@@ -252,6 +262,63 @@ export default function ImageEditorView() {
     [handleAutoArrangeRef],
   );
 
+  /** Shared by the desktop sidebar's layers card and the phone's layers sheet. */
+  const layerListItems = layerRows.map((row) => {
+    const rowKey = `${row.baseName}::${row.sizeKey}`;
+    return <LayerRow key={rowKey} rowKey={rowKey} row={row} handlers={layerHandlers} />;
+  });
+
+  /**
+   * One element, rendered into exactly one of the two arms.
+   *
+   * On desktop it is the sidebar's first card. On the phone it is mounted
+   * `hidden`: its two inline cards (gangsheet size, White BG / Magic Wand)
+   * are re-laid-out for touch elsewhere in the mobile arm, but the component
+   * itself must stay mounted because the download / add-to-cart bar and both
+   * fluorescent panels are `createPortal` children of it, and `display: none`
+   * on a React ancestor does not reach a portal's DOM parent.
+   */
+  const controlsSection = (
+    <ControlsSection
+      resizeSettings={activeResizeSettings}
+      onResizeChange={handleResizeChange}
+      onDownload={handleDownload}
+      isProcessing={isProcessing}
+      exportProgressLabel={exportProgressLabel}
+      imageInfo={activeImageInfo}
+      artboardWidth={artboardWidth}
+      artboardHeight={artboardHeight}
+      onArtboardHeightChange={handleArtboardHeightChange}
+      downloadContainer={downloadContainer}
+      designCount={designs.length}
+      gangsheetHeights={GANGSHEET_HEIGHTS}
+      recommendedArtboardHeight={recommendedArtboardHeight}
+      downloadFormat={profile.downloadFormat}
+      enableFluorescent={profile.enableFluorescent}
+      selectedDesignId={selectedDesignId}
+      onSpotPreviewChange={setSpotPreviewData}
+      fluorPanelContainer={fluorPanelContainer}
+      copySpotSelectionsRef={copySpotSelectionsRef}
+      onActiveChannelChange={setActiveSpotChannel}
+      wandAssignRef={wandAssignRef}
+      panModeActive={panModeActive}
+      onPanModeChange={setPanModeActive}
+      clearActiveChannelRef={clearActiveChannelRef}
+      quantity={quantity}
+      onQuantityChange={setQuantity}
+      shopifyVariants={shopifyVariants}
+      onAddToCart={handleAddToCart}
+      hasVariantId={!!(initialVariantId || shopifyVariants?.length)}
+      isAddingToCart={isAddingToCart}
+      addToCartLabel={isEditMode ? "Update Design" : undefined}
+      addingStatusLabel={isEditMode ? "Updating" : undefined}
+      lockGangsheetSize={isEditMode}
+      onRemoveWhiteBackground={handleRemoveWhiteBackground}
+      wandDeleteActive={wandDeleteModeActive}
+      onWandDeleteToggle={handleWandDeleteToggle}
+    />
+  );
+
   if (!activeImageInfo && !embedFromShopify) {
     return (
       <div
@@ -330,14 +397,18 @@ export default function ImageEditorView() {
                 onBatchStart={handleBatchStart}
                 imageInfo={null}
               />
-              {/* Uploads library — re-add previously uploaded files to a fresh sheet */}
-              <div className="mt-4 w-full max-w-xl mx-auto">
-                <UploadsPanel
-                  t={t}
-                  onAddFile={handleAddFromUploads}
-                  onUnavailable={handleUploadUnavailable}
-                />
-              </div>
+              {/* Uploads library — re-add previously uploaded files to a fresh
+                  sheet. Desktop only: upload history is off the phone
+                  entirely, here as well as in the editor. */}
+              {!mobileLayout && (
+                <div className="mt-4 w-full max-w-xl mx-auto">
+                  <UploadsPanel
+                    t={t}
+                    onAddFile={handleAddFromUploads}
+                    onUnavailable={handleUploadUnavailable}
+                  />
+                </div>
+              )}
             </>
           )}
         </div>
@@ -399,78 +470,19 @@ export default function ImageEditorView() {
             </div>
           </div>
         )}
-        {mobileLayout && (
-          <div className="flex-shrink-0 border-b border-gray-200 bg-white px-2 py-1.5">
-            <div className="grid grid-cols-2 gap-1.5">
-              <button
-                type="button"
-                onClick={() => {
-                  setMobilePanel("controls");
-                  setWandDeleteModeActive(false);
-                }}
-                className={`rounded px-2 py-1 text-xs font-bold tracking-wide transition-colors ${mobilePanel === "controls" ? "bg-violet-600 text-white shadow-md shadow-violet-200" : "bg-violet-100 text-violet-400"}`}
-              >
-                🎛️ Controls
-              </button>
-              <button
-                type="button"
-                onClick={() => setMobilePanel("preview")}
-                className={`rounded px-2 py-1 text-xs font-bold tracking-wide transition-colors ${mobilePanel === "preview" ? "bg-cyan-500 text-white shadow-md shadow-cyan-200" : "bg-cyan-100 text-cyan-400"}`}
-              >
-                👁️ Preview
-              </button>
-            </div>
-          </div>
-        )}
-        <div
-          className={mobileLayout ? "flex min-h-0 flex-1 flex-row transition-transform duration-300 ease-out" : "flex-1 min-h-0 flex flex-row"}
-          style={mobileLayout ? { transform: mobilePanel === "preview" ? "translateX(-100%)" : "translateX(0)" } : undefined}
-        >
-      {/* Left sidebar - Layers + Settings
-          Width is keyed off `mobileLayout`, not a media query: inside an iframe a
-          media query sees the frame while `mobileLayout` sees the device, and the
-          two disagreeing is what stacked a 320px sidebar above the canvas on an
-          iPad held upright. */}
-      <div className={`flex-shrink-0 border-r border-gray-200 bg-white overflow-x-hidden ${mobileLayout ? "w-full" : "w-[320px] xl:w-[340px] overflow-y-auto"}`}>
+        <div className="flex-1 min-h-0 flex flex-row">
+      {/* Left sidebar - Layers + Settings.
+          Desktop and tablet only. The phone used to render this `w-full`
+          beside the canvas and slide between the two with a `translateX`,
+          which parked ~30 controls off the left edge of the viewport; every
+          one of them now has a home in the mobile arm below. `ControlsSection`
+          still mounts on the phone (see the hidden host further down) because
+          the download / add-to-cart bar and the fluorescent panels are its
+          portals. */}
+      {!mobileLayout && (
+      <div className="flex-shrink-0 border-r border-gray-200 bg-white overflow-x-hidden w-[320px] xl:w-[340px] overflow-y-auto">
         <div className="p-2.5 space-y-2">
-          <ControlsSection
-            resizeSettings={activeResizeSettings}
-            onResizeChange={handleResizeChange}
-            onDownload={handleDownload}
-            isProcessing={isProcessing}
-            exportProgressLabel={exportProgressLabel}
-            imageInfo={activeImageInfo}
-            artboardWidth={artboardWidth}
-            artboardHeight={artboardHeight}
-            onArtboardHeightChange={handleArtboardHeightChange}
-            downloadContainer={downloadContainer}
-            designCount={designs.length}
-            gangsheetHeights={GANGSHEET_HEIGHTS}
-            recommendedArtboardHeight={recommendedArtboardHeight}
-            downloadFormat={profile.downloadFormat}
-            enableFluorescent={profile.enableFluorescent}
-            selectedDesignId={selectedDesignId}
-            onSpotPreviewChange={setSpotPreviewData}
-            fluorPanelContainer={fluorPanelContainer}
-            copySpotSelectionsRef={copySpotSelectionsRef}
-            onActiveChannelChange={setActiveSpotChannel}
-            wandAssignRef={wandAssignRef}
-            panModeActive={panModeActive}
-            onPanModeChange={setPanModeActive}
-            clearActiveChannelRef={clearActiveChannelRef}
-            quantity={quantity}
-            onQuantityChange={setQuantity}
-            shopifyVariants={shopifyVariants}
-            onAddToCart={handleAddToCart}
-            hasVariantId={!!(initialVariantId || shopifyVariants?.length)}
-            isAddingToCart={isAddingToCart}
-            addToCartLabel={isEditMode ? "Update Design" : undefined}
-            addingStatusLabel={isEditMode ? "Updating" : undefined}
-            lockGangsheetSize={isEditMode}
-            onRemoveWhiteBackground={handleRemoveWhiteBackground}
-            wandDeleteActive={wandDeleteModeActive}
-            onWandDeleteToggle={handleWandDeleteToggle}
-          />
+          {controlsSection}
 
            {!mobileLayout && halftoneEnabled && (
              <div className="relative rounded-lg border border-amber-200 bg-amber-50/40 p-2">
@@ -577,23 +589,15 @@ export default function ImageEditorView() {
                     .layers-scroll::-webkit-scrollbar-thumb { background: #9ca3af; border-radius: 4px; }
                     .layers-scroll::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
                   `}</style>
-                  {layerRows.map((row) => {
-                    const rowKey = `${row.baseName}::${row.sizeKey}`;
-                    return (
-                      <LayerRow
-                        key={rowKey}
-                        rowKey={rowKey}
-                        row={row}
-                        handlers={layerHandlers}
-                      />
-                    );
-                  })}
+                  {layerListItems}
                 </div>
               )}
             </div>
           )}
 
-          {/* Uploads library panel — previously uploaded files, re-addable */}
+          {/* Uploads library panel — previously uploaded files, re-addable.
+              Desktop only: on the phone the library was the thing "Add
+              Designs" routed through, and it is gone from that arm entirely. */}
           <UploadsPanel
             t={t}
             onAddFile={handleAddFromUploads}
@@ -601,6 +605,7 @@ export default function ImageEditorView() {
           />
         </div>
       </div>
+      )}
 
       {/* Right area - Canvas workspace */}
       <div className={`min-w-0 flex flex-col ${mobileLayout ? "w-full flex-shrink-0" : "flex-1 h-full overflow-hidden"}`}>
@@ -611,6 +616,9 @@ export default function ImageEditorView() {
         {/* Preview Canvas */}
         {mobileLayout ? (
           <div className="flex min-h-0 flex-1 flex-col">
+              {/* Portal host. Renders nothing itself — see the note on
+                  `controlsSection`. */}
+              <div className="hidden" aria-hidden="true">{controlsSection}</div>
               {/* Full-bleed canvas. The sheet below overlays it rather than
                   sitting beside it, because `PreviewSection` sizes the
                   gangsheet from this box and anything that takes width or
@@ -654,7 +662,10 @@ export default function ImageEditorView() {
                     wrapping would silently eat canvas, and a centred row that
                     overflows spills off the left edge where no scroll reaches. */}
                 <MobileToolSheet
-                  open={!!selectedDesignId}
+                  /* Both sheets are `bottom-0 z-40`; only one is ever mounted
+                     so they cannot stack. Closing the layers sheet brings the
+                     contextual one straight back. */
+                  open={!!selectedDesignId && !layersOpen}
                   handleLabel={t("editor.toolSheetHandle")}
                   handleAccessory={
                     <span
@@ -710,40 +721,59 @@ export default function ImageEditorView() {
                                 <span>{t("editor.duplicate").replace(/ \(.*/, "")}</span>
                               </span>
                             </button>
-                            <div className="relative h-[28px] w-10 flex-shrink-0 overflow-hidden rounded border border-gray-300 bg-white focus-within:border-cyan-500 coarse:h-11">
-                              <input
-                                type="text"
-                                inputMode="numeric"
-                                value={duplicateCount}
-                                onChange={(e) => setDuplicateCount(parseDuplicateCount(e.target.value))}
-                                onKeyDown={handleDuplicateCountKeyDown}
-                                disabled={!selectedDesignId}
-                                /* 16px on any touch screen so iOS does not auto-zoom on
-                                   focus — same reasoning as `size-input.tsx`. Gated on the
-                                   pointer rather than on the width breakpoint, so a tablet
-                                   in this layout is covered too. */
-                                 className="w-full h-full text-center text-[12px] coarse:text-[16px] font-semibold leading-none p-0 pr-3 bg-white outline-none disabled:opacity-30 disabled:pointer-events-none"
-                                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                                title="Number of copies"
-                              />
-                              <div className="absolute right-0 top-0 h-full w-3 border-l border-gray-300 overflow-hidden rounded-r">
+                            {/* Hit area and glyph are separate boxes on a coarse
+                                pointer, the same trade `size-input.tsx` and
+                                `layer-row.tsx` make: the two chevrons keep their
+                                12px bezels and get 44x44 boxes around them, which
+                                is why the stepper leaves the input's right edge
+                                and becomes a sibling column. Copy count multiplies
+                                material consumption, so a mis-tap here costs film
+                                by the sheet. */}
+                            <div className="flex flex-shrink-0 items-center gap-px">
+                              {/* 46 rather than 44: the 1px border is part of
+                                  this box, and the field inside it is what the
+                                  finger actually lands on. */}
+                              <div className="h-[28px] w-10 overflow-hidden rounded border border-gray-300 bg-white focus-within:border-cyan-500 coarse:h-[46px] coarse:w-14">
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={duplicateCount}
+                                  onChange={(e) => setDuplicateCount(parseDuplicateCount(e.target.value))}
+                                  onKeyDown={handleDuplicateCountKeyDown}
+                                  disabled={!selectedDesignId}
+                                  /* 16px on any touch screen so iOS does not auto-zoom on
+                                     focus — same reasoning as `size-input.tsx`. Gated on the
+                                     pointer rather than on the width breakpoint, so a tablet
+                                     in this layout is covered too. */
+                                  className="w-full h-full text-center text-[12px] coarse:text-[16px] font-semibold leading-none p-0 bg-white outline-none disabled:opacity-30 disabled:pointer-events-none"
+                                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                  title={t("editor.copyCount")}
+                                />
+                              </div>
+                              <div className="flex flex-col gap-[3px] coarse:gap-2">
                                 <button
                                   type="button"
                                   onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev + 1))}
                                   disabled={!selectedDesignId || duplicateCount >= 99}
-                                  className="h-1/2 w-full flex items-center justify-center border-b border-gray-300 bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
-                                  title="Increase copies"
+                                  className="group flex h-3.5 w-4 items-center justify-center disabled:opacity-30 disabled:pointer-events-none coarse:h-11 coarse:w-11"
+                                  title={t("editor.increaseCopies")}
+                                  aria-label={t("editor.increaseCopies")}
                                 >
-                                  <ChevronUp className="w-2.5 h-2.5 text-gray-600" />
+                                  <span className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-50 text-gray-600 group-hover:bg-gray-100">
+                                    <ChevronUp className="w-2.5 h-2.5" />
+                                  </span>
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev - 1))}
                                   disabled={!selectedDesignId || duplicateCount <= 1}
-                                  className="h-1/2 w-full flex items-center justify-center bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
-                                  title="Decrease copies"
+                                  className="group flex h-3.5 w-4 items-center justify-center disabled:opacity-30 disabled:pointer-events-none coarse:h-11 coarse:w-11"
+                                  title={t("editor.decreaseCopies")}
+                                  aria-label={t("editor.decreaseCopies")}
                                 >
-                                  <ChevronDown className="w-2.5 h-2.5 text-gray-600" />
+                                  <span className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-50 text-gray-600 group-hover:bg-gray-100">
+                                    <ChevronDown className="w-2.5 h-2.5" />
+                                  </span>
                                 </button>
                               </div>
                             </div>
@@ -766,6 +796,52 @@ export default function ImageEditorView() {
                               <button onClick={handleThresholdAlphaAll} disabled={designs.length === 0} className={`flex flex-shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-md border px-2 py-2 text-[11px] font-medium transition-all coarse:min-h-[44px] ${designs.length > 0 ? "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`} title={t("editor.cleanAlphaAllTitle")}><Droplets className="h-3 w-3" />{t("editor.cleanAlphaAll")}</button>
                             )}
                           </div>
+
+                          {/* White BG and Magic Wand. Both act on the current
+                              selection — `handleRemoveWhiteBackground` returns
+                              early without one — so the selection-gated sheet
+                              is where they belong, not a panel that was
+                              reachable with nothing selected. */}
+                          <div className="flex flex-nowrap items-center justify-start gap-2 overflow-x-auto">
+                            <button
+                              type="button"
+                              onClick={handleRemoveWhiteBackground}
+                              className="flex flex-shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-md border border-amber-200 bg-amber-50 px-2 py-2 text-[11px] font-medium text-amber-700 transition-all hover:bg-amber-100 coarse:min-h-[44px]"
+                              title={t("editor.whiteBgTitle")}
+                            >
+                              <Eraser className="h-3 w-3 flex-shrink-0" />{t("editor.whiteBg")}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleWandDeleteToggle}
+                              className={`flex flex-shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-md border px-2 py-2 text-[11px] font-medium transition-all coarse:min-h-[44px] ${wandDeleteModeActive
+                                ? "border-fuchsia-600 bg-fuchsia-600 text-white hover:bg-fuchsia-700"
+                                : "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-600 hover:bg-fuchsia-100"}`}
+                              title={wandDeleteModeActive ? t("editor.magicWandActiveTitle") : t("editor.magicWandTitle")}
+                            >
+                              <WandSparkles className="h-3 w-3 flex-shrink-0" aria-hidden="true" />
+                              {wandDeleteModeActive ? t("editor.magicWandOn") : t("editor.magicWand")}
+                            </button>
+                          </div>
+
+                          {wandDeleteModeActive && (
+                            <label className="flex flex-nowrap items-center justify-start gap-2 overflow-x-auto text-[12px] text-fuchsia-800">
+                              <span className="flex-shrink-0 font-medium">{t("editor.wandTolerance")}</span>
+                              {/* The track is 8px tall; `coarse:h-11` grows the
+                                  input's own box around it so the hit area
+                                  clears 44px without a fatter thumb. */}
+                              <input
+                                type="range"
+                                min="1"
+                                max="100"
+                                value={wandTolerance}
+                                onChange={(e) => setWandTolerance(Number(e.target.value))}
+                                className="min-w-0 flex-1 accent-fuchsia-600 coarse:h-11"
+                                aria-label={t("editor.wandTolerance")}
+                              />
+                              <span className="w-6 flex-shrink-0 text-right tabular-nums">{wandTolerance}</span>
+                            </label>
+                          )}
 
                           {halftoneEnabled && (
                             /* Its own row, and deliberately not a scrolling one:
@@ -847,6 +923,135 @@ export default function ImageEditorView() {
                     </>
                   )}
                 </MobileToolSheet>
+
+                {/* Summoned layers panel. Same overlay semantics as the tool
+                    sheet — `absolute bottom-0` inside the canvas box, so the
+                    box itself never changes size and `PreviewSection` never
+                    re-fits the artwork. `sizing="fill"` because a list has no
+                    natural peek height to measure. */}
+                <MobileToolSheet
+                  open={layersOpen}
+                  testId="mobile-layers-sheet"
+                  sizing="fill"
+                  /* A list is worth summoning only if it shows a row. On a phone
+                     held sideways the canvas box is ~184px and a touch layer row
+                     is 152 of them, so at the half detent — and with the tool
+                     sheet's 56px canvas reservation, which a list does not need
+                     — this opened to 57px of visible list and no layer in it. */
+                  initialDetent="full"
+                  minCanvasStripPx={16}
+                  handleLabel={t("editor.layersSheetHandle")}
+                  handleLeading={
+                    <button
+                      type="button"
+                      /* The handle above owns pointer events for dragging, so
+                         this has to claim its own before they reach it. */
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => { e.stopPropagation(); setLayersOpen(false); }}
+                      className="flex h-11 w-11 items-center justify-center rounded text-gray-500 hover:bg-gray-100 hover:text-gray-900"
+                      title={t("editor.closeLayers")}
+                      aria-label={t("editor.closeLayers")}
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  }
+                >
+                  {() => (
+                    <>
+                      {/* Gangsheet size and price. Document-level rather than
+                          contextual, and the one control that sets what the
+                          customer pays, so it leads the panel. A native
+                          `select` rather than the desktop combobox: it raises
+                          the OS picker, and it cannot be clipped by the
+                          sheet's own scroll the way a rendered popover can. */}
+                      <div className="flex flex-nowrap items-center justify-start gap-1.5 overflow-x-auto border-b border-gray-200 pb-2">
+                        <Layers className="h-4 w-4 flex-shrink-0 text-cyan-500" />
+                        <span className="flex-shrink-0 text-[12px] font-semibold text-gray-900">{t("controls.gangsheetSize")}</span>
+                        <span className="flex-shrink-0 text-[12px] font-semibold tabular-nums text-gray-800">{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
+                        <span className="flex-shrink-0 text-[12px] text-gray-700">×</span>
+                        {isEditMode ? (
+                          <span className="flex-shrink-0 rounded border border-gray-200 bg-gray-100 px-2 py-1 text-[12px] font-semibold tabular-nums text-gray-900">
+                            {formatLength(artboardHeight, lang)}{lang === "en" ? '"' : ""}
+                          </span>
+                        ) : (
+                          <select
+                            value={String(artboardHeight)}
+                            onChange={(e) => handleArtboardHeightChange(parseFloat(e.target.value))}
+                            /* Fixed width on purpose: a native select is as
+                               wide as its longest option, and the recommended
+                               entry carries a "(current bounds)" suffix that
+                               would otherwise stretch this to twice the row.
+                               The suffix is suppressed on the selected entry —
+                               see below — so the collapsed control never has to
+                               render it and this width is always enough. */
+                            className="h-8 w-[5.5rem] flex-shrink-0 cursor-pointer rounded border border-gray-300 bg-gray-100 px-1.5 text-[12px] font-semibold tabular-nums text-gray-900 outline-none transition-colors hover:border-gray-400 focus:border-cyan-500 coarse:h-11 coarse:w-[6.5rem] coarse:text-[16px]"
+                            title={t("controls.gangsheetSize")}
+                            data-testid="mobile-gangsheet-height"
+                          >
+                            {GANGSHEET_HEIGHTS.map((h) => (
+                              <option key={h} value={String(h)}>
+                                {formatLength(h, lang)}{lang === "en" ? '"' : ""}
+                                {/* A closed native select shows the selected option's own
+                                    text, and this one is too narrow for the suffix — it
+                                    rendered as `12.00" (c`, cut mid-word. The hint only
+                                    means anything as advice not yet taken, so the entry
+                                    that is already selected drops it and the long form is
+                                    left to the open list, which is free to be wider. */}
+                                {recommendedArtboardHeight === h && artboardHeight !== h
+                                  ? ` (${t("controls.currentBounds")})`
+                                  : ""}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        {selectedVariantPrice != null && (
+                          <span className="flex-shrink-0 whitespace-nowrap rounded-full border border-emerald-600 bg-white px-2 py-0.5 text-[11px] font-bold leading-tight tabular-nums text-emerald-600">
+                            {formatVariantPriceForDisplay(selectedVariantPrice)}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex flex-nowrap items-center justify-start gap-2 overflow-x-auto">
+                        <Layers className="h-5 w-5 flex-shrink-0 text-cyan-500" strokeWidth={2.25} />
+                        <span className="flex-shrink-0 text-[13px] font-semibold text-gray-800">{t("editor.layers")}</span>
+                        <span className="flex-shrink-0 rounded-full bg-cyan-100 px-2 py-0.5 text-[12px] font-bold tabular-nums text-cyan-700">{designs.length}</span>
+                        {/* Straight to the file picker. The uploads library it
+                            used to sit beside is not mounted on this arm. */}
+                        <button
+                          type="button"
+                          onClick={() => sidebarFileRef.current?.click()}
+                          className="flex min-h-10 flex-shrink-0 items-center gap-1 whitespace-nowrap rounded-lg border border-cyan-600 bg-cyan-500 px-3 py-2 text-[12px] font-bold text-white shadow-md shadow-cyan-500/25 transition-all hover:bg-cyan-600 active:scale-[0.98] coarse:min-h-[44px]"
+                          title={t("editor.addDesignTitle")}
+                          data-testid="mobile-add-designs"
+                        >
+                          <Plus className="h-4 w-4 flex-shrink-0" strokeWidth={2.5} />
+                          <span>{t("editor.addDesigns")}</span>
+                        </button>
+                        <input
+                          ref={sidebarFileRef}
+                          type="file"
+                          className="hidden"
+                          accept=".png,.jpg,.jpeg,.webp,.pdf,image/png,image/jpeg,image/webp,application/pdf"
+                          multiple
+                          onChange={handleSidebarFileChange}
+                        />
+                      </div>
+
+                      {/* No `max-height` of its own: the sheet is already a
+                          scroller, and a second one nested inside it makes the
+                          list a trap for a thumb that meant to drag the sheet. */}
+                      {/* `data-mobile-layers` drives the `layersheet:` variant
+                          that grows `LayerRow`'s targets to 44px here without
+                          moving the same rows in the desktop sidebar, which an
+                          iPad also renders on a touch screen. */}
+                      <div data-mobile-layers className="rounded-lg border border-gray-200">{layerListItems}</div>
+
+                      {/* Fluorescent spot-colour panels portal here on this
+                          arm; on desktop they go to the sidebar. */}
+                      {profile.enableFluorescent && <div ref={setFluorPanelContainer} />}
+                    </>
+                  )}
+                </MobileToolSheet>
               </div>
 
             {/* Undo/redo are the most-used controls in a touch editor, so they
@@ -854,7 +1059,28 @@ export default function ImageEditorView() {
                 regression no amount of sheet polish pays for. Delete rides with
                 them because it is already selection-gated and belongs beside
                 the action that reverses it. */}
-            <div className="flex flex-shrink-0 flex-nowrap items-center justify-start gap-1.5 overflow-x-auto border-t border-gray-200 bg-white px-2 py-0">
+            <div className="flex flex-shrink-0 flex-nowrap items-center justify-start gap-1.5 overflow-x-auto border-t border-gray-200 bg-white px-2 py-0" data-testid="mobile-persistent-bar">
+              {/* Leftmost because it is the only route to the layers list, the
+                  gangsheet size and Add Designs; if a longer translation makes
+                  this row scroll, the control that must never be the one out
+                  of reach is this one. Icon-only, like its three neighbours —
+                  a text label costs ~50px the row does not have. */}
+              <button
+                type="button"
+                onClick={() => setLayersOpen((v) => !v)}
+                className={`relative h-8 w-8 flex-shrink-0 rounded border transition-colors coarse:h-11 coarse:w-11 ${layersOpen ? "border-cyan-600 bg-cyan-500 text-white" : "border-gray-300 bg-white text-gray-600 hover:bg-gray-100 hover:text-gray-900"}`}
+                title={layersOpen ? t("editor.closeLayers") : t("editor.openLayers")}
+                aria-label={layersOpen ? t("editor.closeLayers") : t("editor.openLayers")}
+                aria-expanded={layersOpen}
+                data-testid="mobile-layers-toggle"
+              >
+                <Layers className="mx-auto h-4 w-4" />
+                {designs.length > 0 && (
+                  <span className={`pointer-events-none absolute -right-1 -top-1 min-w-[16px] rounded-full px-1 text-[10px] font-bold leading-4 tabular-nums ${layersOpen ? "bg-white text-cyan-700" : "bg-cyan-500 text-white"}`}>
+                    {designs.length}
+                  </span>
+                )}
+              </button>
               <button onClick={handleUndo} disabled={!canUndo()} className="h-8 w-8 flex-shrink-0 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.undo")}><Undo2 className="mx-auto h-4 w-4" /></button>
               <button onClick={handleRedo} disabled={!canRedo()} className="h-8 w-8 flex-shrink-0 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.redo")}><Redo2 className="mx-auto h-4 w-4" /></button>
               <button onClick={() => { if (selectedDesignIds.size > 1) handleDeleteMulti(selectedDesignIds); else if (selectedDesignId) handleDeleteDesign(selectedDesignId); }} disabled={!selectedDesignId} className="h-8 w-8 flex-shrink-0 rounded border border-red-200 bg-white text-red-500 transition-colors hover:bg-red-50 hover:text-red-600 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.delete")}><Trash2 className="mx-auto h-4 w-4" /></button>
@@ -872,7 +1098,7 @@ export default function ImageEditorView() {
                 {t("editor.autoArrange")}
               </button>
             </div>
-            <div ref={setMobileToolbarContainer} className="flex-shrink-0" />
+            <div ref={setMobileToolbarContainer} className="flex-shrink-0" data-testid="mobile-canvas-toolbar" />
           </div>
         ) : (
           <div className="flex-1 min-h-0 relative">

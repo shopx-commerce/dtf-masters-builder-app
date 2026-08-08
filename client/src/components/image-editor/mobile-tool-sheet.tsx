@@ -23,8 +23,16 @@ export type SheetDetent = "peek" | "half" | "full";
 const SPRING = "cubic-bezier(0.16, 1.06, 0.28, 1)";
 const SPRING_MS = 300;
 
-/** Handle strip: 8px above, the 4px grip, 8px below. */
-const HANDLE_H = 20;
+/**
+ * Handle strip.
+ *
+ * The strip is itself a control — tapping it advances the detent — so it is a
+ * 44px target rather than the 20px the grip alone would need. It also clips
+ * (the sheet is `overflow-hidden`), so a close button placed in it would
+ * otherwise lose its top and bottom thirds. Height here is cheap: the sheet
+ * overlays the canvas, so nothing inside it costs artwork.
+ */
+const HANDLE_H = 44;
 
 /** Used until the peek row has been measured. */
 const FALLBACK_PEEK_H = 112;
@@ -38,7 +46,14 @@ const MIN_KEYBOARD_INSET_PX = 120;
 /** Gap left between the sheet's bottom edge and the top of the keyboard. */
 const KEYBOARD_GAP_PX = 8;
 
-/** Canvas that stays uncovered however tall the sheet's content wants to be. */
+/**
+ * Canvas that stays uncovered however tall the sheet's content wants to be.
+ *
+ * The default suits a sheet you operate *while watching the artwork* — the
+ * sizing controls are useless if you cannot see what they are resizing. A sheet
+ * that is only a list has no such tie to the canvas and can ask for a smaller
+ * strip; see `minCanvasStripPx`.
+ */
 const MIN_CANVAS_STRIP_PX = 56;
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -48,6 +63,37 @@ interface MobileToolSheetProps {
   open: boolean;
   /** Accessible name for the drag handle. */
   handleLabel: string;
+  /** Distinguishes the two sheets in the DOM. */
+  testId?: string;
+  /**
+   * Canvas this sheet promises to leave uncovered, overriding
+   * `MIN_CANVAS_STRIP_PX`.
+   *
+   * Worth setting for a sheet whose content is unrelated to what the canvas is
+   * showing. A phone on its side leaves the canvas box about 184px tall, and
+   * reserving 56 of those for a strip of artwork nobody is looking at left the
+   * layers list a 57px window onto 274px of content — the panel opened without
+   * a single layer in view.
+   */
+  minCanvasStripPx?: number;
+  /**
+   * How the three detents are sized.
+   *
+   * `content` measures the peek detent from the content itself, which is right
+   * for the contextual tool sheet: peek is exactly as tall as the sizing row it
+   * has to show. A summoned panel holding a list has no such natural height —
+   * measuring it would put peek at the ceiling and collapse all three detents
+   * onto one number — so `fill` derives them from the available height instead.
+   */
+  sizing?: "content" | "fill";
+  /** Detent the sheet opens at. */
+  initialDetent?: SheetDetent;
+  /**
+   * Interactive slot at the left of the handle strip, for a close button.
+   * Unlike `handleAccessory` this one receives pointer events, so anything put
+   * here must stop propagation or it will also start a drag.
+   */
+  handleLeading?: ReactNode;
   /**
    * Status pinned to the right of the grip, visible at every detent.
    *
@@ -73,10 +119,20 @@ interface MobileToolSheetProps {
  * and any layout height taken here would shrink it, which is the whole reason
  * the two-column phone layout was replaced.
  */
-export default function MobileToolSheet({ open, handleLabel, handleAccessory, children }: MobileToolSheetProps) {
+export default function MobileToolSheet({
+  open,
+  handleLabel,
+  testId = "mobile-tool-sheet",
+  sizing = "content",
+  initialDetent = "peek",
+  minCanvasStripPx = MIN_CANVAS_STRIP_PX,
+  handleLeading,
+  handleAccessory,
+  children,
+}: MobileToolSheetProps) {
   const sheetRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
-  const [detent, setDetent] = useState<SheetDetent>("peek");
+  const [detent, setDetent] = useState<SheetDetent>(initialDetent);
   const [dragH, setDragH] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [peekH, setPeekH] = useState(FALLBACK_PEEK_H);
@@ -84,12 +140,13 @@ export default function MobileToolSheet({ open, handleLabel, handleAccessory, ch
   const [lift, setLift] = useState(0);
   const dragRef = useRef<{ startY: number; startH: number; moved: boolean } | null>(null);
   const frameRef = useRef(0);
+  const handleH = HANDLE_H;
 
   // A fresh selection always starts at peek, and grows into it from nothing so
   // the sheet reads as arriving rather than appearing.
   useEffect(() => {
     if (!open) return;
-    setDetent("peek");
+    setDetent(initialDetent);
     setDragH(null);
     frameRef.current = requestAnimationFrame(() => {
       frameRef.current = requestAnimationFrame(() => setExpanded(true));
@@ -98,7 +155,7 @@ export default function MobileToolSheet({ open, handleLabel, handleAccessory, ch
       cancelAnimationFrame(frameRef.current);
       setExpanded(false);
     };
-  }, [open]);
+  }, [open, initialDetent]);
 
   // The sheet's own containing block gives the half/full extents.
   useLayoutEffect(() => {
@@ -115,17 +172,17 @@ export default function MobileToolSheet({ open, handleLabel, handleAccessory, ch
   // than assumed, so the row can never be clipped by a hard-coded number.
   useLayoutEffect(() => {
     const el = contentRef.current;
-    if (!el) return;
+    if (sizing !== "content" || !el) return;
     const read = () => {
       if (dragRef.current || detent !== "peek") return;
       const h = el.offsetHeight;
-      if (h > 0) setPeekH(HANDLE_H + h);
+      if (h > 0) setPeekH(handleH + h);
     };
     read();
     const ro = new ResizeObserver(read);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [detent, open]);
+  }, [detent, open, sizing, handleH]);
 
   /**
    * Lift the whole sheet clear of the software keyboard while one of its own
@@ -191,13 +248,17 @@ export default function MobileToolSheet({ open, handleLabel, handleAccessory, ch
   // (`size-input`'s stepper is deliberately 96px on a coarse pointer), so
   // without a ceiling the peek detent hides the artwork it is describing.
   // Past the ceiling the sheet's own scroll takes over.
-  const maxH = Math.max(HANDLE_H + 40, (containerH || FALLBACK_PEEK_H * 3) - MIN_CANVAS_STRIP_PX);
-  const peekCapped = Math.min(peekH, maxH);
+  const maxH = Math.max(handleH + 40, (containerH || FALLBACK_PEEK_H * 3) - minCanvasStripPx);
+  const peekCapped = sizing === "fill" ? Math.round(maxH * 0.55) : Math.min(peekH, maxH);
   // 0.6 rather than a literal half: at 0.5 the half detent's own content —
   // transform, duplicate, clean, halftone — did not fit and had to be scrolled
   // to, which is the wrong default for the detent that is meant to show them.
-  const halfH = clamp(Math.round(maxH * 0.6), Math.min(peekCapped + 48, maxH), maxH);
-  const fullH = clamp(Math.round(maxH * 0.88), Math.min(halfH + 48, maxH), maxH);
+  const halfH = sizing === "fill"
+    ? Math.round(maxH * 0.8)
+    : clamp(Math.round(maxH * 0.6), Math.min(peekCapped + 48, maxH), maxH);
+  const fullH = sizing === "fill"
+    ? maxH
+    : clamp(Math.round(maxH * 0.88), Math.min(halfH + 48, maxH), maxH);
   const heights: Record<SheetDetent, number> = { peek: peekCapped, half: halfH, full: fullH };
 
   const liveH = expanded ? dragH ?? heights[detent] : 0;
@@ -238,7 +299,7 @@ export default function MobileToolSheet({ open, handleLabel, handleAccessory, ch
     if (!d) return;
     const dy = d.startY - e.clientY;
     if (Math.abs(dy) > TAP_SLOP_PX) d.moved = true;
-    setDragH(clamp(d.startH + dy, Math.min(peekCapped, HANDLE_H), fullH));
+    setDragH(clamp(d.startH + dy, Math.min(peekCapped, handleH), fullH));
   };
   const endDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
     const d = dragRef.current;
@@ -255,7 +316,7 @@ export default function MobileToolSheet({ open, handleLabel, handleAccessory, ch
   return (
     <div
       ref={sheetRef}
-      data-testid="mobile-tool-sheet"
+      data-testid={testId}
       data-detent={level}
       className="absolute inset-x-0 bottom-0 z-40 flex flex-col overflow-hidden rounded-t-2xl border-t border-gray-200 bg-white shadow-[0_-8px_24px_rgba(15,23,42,0.18)]"
       style={{
@@ -273,7 +334,7 @@ export default function MobileToolSheet({ open, handleLabel, handleAccessory, ch
         tabIndex={0}
         aria-label={handleLabel}
         title={handleLabel}
-        data-testid="mobile-tool-sheet-handle"
+        data-testid={`${testId}-handle`}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
@@ -285,9 +346,12 @@ export default function MobileToolSheet({ open, handleLabel, handleAccessory, ch
           }
         }}
         className="relative flex flex-shrink-0 cursor-grab items-center justify-center active:cursor-grabbing"
-        style={{ height: HANDLE_H, touchAction: "none" }}
+        style={{ height: handleH, touchAction: "none" }}
       >
         <span className="block h-1 w-9 rounded-full bg-gray-300" />
+        {handleLeading && (
+          <span className="absolute left-1 top-1/2 -translate-y-1/2 flex items-center">{handleLeading}</span>
+        )}
         {handleAccessory && (
           <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2">
             {handleAccessory}
@@ -295,7 +359,7 @@ export default function MobileToolSheet({ open, handleLabel, handleAccessory, ch
         )}
       </div>
       <div
-        data-testid="mobile-tool-sheet-scroll"
+        data-testid={`${testId}-scroll`}
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
       >
         <div

@@ -106,6 +106,17 @@ export default {
     require("tailwindcss/plugin")(
       ({ addVariant }: { addVariant: (name: string, definition: string) => void }) => {
         addVariant("coarse", "@media (any-pointer: coarse)");
+        /**
+         * `layersheet:` — inside the phone's summoned layers sheet.
+         *
+         * `LayerRow` is shared with the desktop sidebar, and an iPad renders
+         * that sidebar on a touch screen, so `coarse:` cannot be used to grow
+         * the row's targets for the phone: it would move the iPad too, and the
+         * iPad layout is required to stay byte-identical. Scoping on an
+         * attribute that only the phone's layers sheet sets keeps the change
+         * where it is wanted.
+         */
+        addVariant("layersheet", "[data-mobile-layers] &");
       },
     ),
   ],
