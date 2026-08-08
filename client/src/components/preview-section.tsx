@@ -24,22 +24,24 @@ const PREVIEW_CANVAS_INSET = 3;
 const PREVIEW_CANVAS_BORDER = 3;
 const PREVIEW_SURFACE_ORIGIN = PREVIEW_CANVAS_INSET + PREVIEW_CANVAS_BORDER;
 /**
- * Half the drawn extent of a selection resize handle, in screen CSS px, so a
- * single-selection square and a multi-selection circle both read as 2x this on
- * screen at any zoom. All four corners are the same size: the bottom-right used
- * to paint at 2x on touch, which on a phone made it 40 CSS px across — 80% of an
- * 8in design and over 250% of a 1in one — while the other three stayed 20.
- * Touch gets a slightly larger glyph than pointer devices, and hit-testing keeps
- * its own, larger radius — see `hitTestHandles` — so the drawn size never
- * dictates how big the grab area is.
+ * The full drawn width of a selection resize handle, in screen CSS px, before
+ * it is capped against the size of the artwork it decorates. A single-selection
+ * square and a multi-selection circle both read as this across at any zoom.
+ *
+ * All four corners are the same size: the bottom-right used to paint at 2x on
+ * touch, which on a phone made it 40 CSS px across — 80% of an 8in design and
+ * over 250% of a 1in one — while the other three stayed 20. Touch gets a
+ * slightly larger glyph than pointer devices, and hit-testing keeps its own,
+ * larger radius — see `hitTestHandles` — so the drawn size never dictates how
+ * big the grab area is.
  */
-const TOUCH_HANDLE_HALF_PX = 8;
-const DESKTOP_HANDLE_HALF_PX = 6;
+const TOUCH_HANDLE_FULL_PX = 16;
+const DESKTOP_HANDLE_FULL_PX = 12;
 /**
  * Pointer-device hit-test ring radii, as multiples of the *drawn* handle half-extent
  * above. Keeping them relative to the drawn size is right for a mouse, which can land
  * on a 12 CSS px glyph unaided: the hit tests previously hardcoded a base of 10,
- * which silently became an orphaned copy of `TOUCH_HANDLE_HALF_PX` when the pointer handle
+ * which silently became an orphaned copy of the touch handle size when the pointer handle
  * shrank to 6. Desktop then hit-tested resize out to 14px around a 6px glyph and rotate out
  * to 30px, so a click 15-30px outside a corner — aiming to start a marquee — rotated the
  * design instead, with nothing drawn to explain why.
@@ -76,25 +78,48 @@ const LOW_ZOOM_HANDLE_MAX_ZOOM = 0.5;
  */
 const LOW_ZOOM_HANDLE_FULL_CSS_PX = 8;
 /**
- * Half the drawn extent of a handle, in screen CSS px.
+ * Short on-screen edge, in CSS px, below which a design is decorated with its
+ * outline alone and no corner handles at all.
+ *
+ * Under this size the floor above is what sets the handle, not the artwork, so
+ * the four corners stop describing the selection and start hiding it: at 20 CSS
+ * px they cover more of the design than the design shows of itself. An outline
+ * still says "selected", the body still drags, the sizing fields still resize,
+ * and zooming in brings the handles back — `minEdgeCssPx` is measured on screen,
+ * so magnifying the artwork is what earns the corners.
+ */
+const OUTLINE_ONLY_BELOW_CSS_PX = 24;
+/**
+ * Half the drawn extent of a handle, in screen CSS px, or `0` to mean "draw the
+ * outline and no handles" — see `OUTLINE_ONLY_BELOW_CSS_PX`. Callers must treat
+ * zero as a signal and skip both the glyph and its hit ring, or they leave an
+ * invisible target behind.
  *
  * `minEdgeCssPx` is the shorter on-screen edge of the design or group box being
- * decorated, so something far smaller than a full-size handle shrinks its handles
- * instead of disappearing underneath them, down to `MIN_HANDLE_CSS_PX`.
- * `shrinkRatio` is the share of that edge one handle may occupy, which differs
+ * decorated, so something far smaller than a full-size handle shrinks its
+ * handles instead of disappearing underneath them, down to `MIN_HANDLE_CSS_PX`.
+ * `shareOfEdge` is the share of that edge one handle may span, and differs
  * between a single design and a group box.
+ *
+ * That share used to be applied to the half-extent while being documented as the
+ * share of the edge, so every handle spanned twice what it claimed: 50% of a
+ * single design's short edge rather than 25%, which is why handles read as
+ * growing as artwork shrank. They were not growing — they held a fixed and far
+ * too generous proportion while the design fell away beneath them.
  */
 function getHandleHalfCssPx(
   minEdgeCssPx: number,
   zoom: number,
   touch: boolean,
-  shrinkRatio: number,
+  shareOfEdge: number,
 ): number {
-  const base = touch ? TOUCH_HANDLE_HALF_PX : DESKTOP_HANDLE_HALF_PX;
-  const half = Math.min(base, Math.max(minEdgeCssPx * shrinkRatio, MIN_HANDLE_CSS_PX / 2));
-  return zoom < LOW_ZOOM_HANDLE_MAX_ZOOM
-    ? Math.min(half, LOW_ZOOM_HANDLE_FULL_CSS_PX / 2)
-    : half;
+  if (minEdgeCssPx < OUTLINE_ONLY_BELOW_CSS_PX) return 0;
+  const base = touch ? TOUCH_HANDLE_FULL_PX : DESKTOP_HANDLE_FULL_PX;
+  const full = Math.max(MIN_HANDLE_CSS_PX, Math.min(base, minEdgeCssPx * shareOfEdge));
+  const capped = zoom < LOW_ZOOM_HANDLE_MAX_ZOOM
+    ? Math.min(full, LOW_ZOOM_HANDLE_FULL_CSS_PX)
+    : full;
+  return capped / 2;
 }
 const ZOOM_MIN_ABSOLUTE = 0.1;
 const ZOOM_WHEEL_FACTOR = 1.1;
@@ -864,14 +889,18 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       // so that a click well outside a corner still falls through to the marquee.
       let resizeR: number;
       let rotateOuterR: number;
+      const designMinCss = Math.min(rect.width, rect.height) / bufferPerCss;
+      const drawnHalf = getHandleHalfCssPx(designMinCss, z, isMobile, 0.25);
+      // Nothing drawn, nothing to grab. The absolute touch rings below do not
+      // depend on the glyph, so without this an outline-only design would keep
+      // four invisible 44 CSS px targets and swallow the drag that moves it.
+      if (drawnHalf === 0) return null;
       if (isMobile) {
         resizeR = TOUCH_RESIZE_HIT_R_CSS_PX * bufferPerCss;
         rotateOuterR = TOUCH_ROTATE_OUTER_R_CSS_PX * bufferPerCss;
       } else {
-        const designMinCss = Math.min(rect.width, rect.height) / bufferPerCss;
-        const drawnHalf = getHandleHalfCssPx(designMinCss, z, false, 0.25) * bufferPerCss;
-        resizeR = drawnHalf * HANDLE_HIT_BOOST;
-        rotateOuterR = drawnHalf * HANDLE_ROTATE_RING;
+        resizeR = drawnHalf * bufferPerCss * HANDLE_HIT_BOOST;
+        rotateOuterR = drawnHalf * bufferPerCss * HANDLE_ROTATE_RING;
       }
 
       // Nearest corner in range, not the first in tl/tr/br/bl order. An absolute touch
@@ -964,13 +993,15 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       // rings for a mouse. The group draw at `drawSelectionHandles` shares the base.
       let resizeR: number;
       let rotateOuterR: number;
+      const drawnHalf = getHandleHalfCssPx(groupMin / bufferPerCss, z, isMobile, 0.15);
+      // Nothing drawn, nothing to grab — see `hitTestHandles`.
+      if (drawnHalf === 0) return null;
       if (isMobile) {
         resizeR = TOUCH_RESIZE_HIT_R_CSS_PX * bufferPerCss;
         rotateOuterR = TOUCH_ROTATE_OUTER_R_CSS_PX * bufferPerCss;
       } else {
-        const drawnHalf = getHandleHalfCssPx(groupMin / bufferPerCss, z, false, 0.15) * bufferPerCss;
-        resizeR = drawnHalf * HANDLE_HIT_BOOST;
-        rotateOuterR = drawnHalf * HANDLE_ROTATE_RING;
+        resizeR = drawnHalf * bufferPerCss * HANDLE_HIT_BOOST;
+        rotateOuterR = drawnHalf * bufferPerCss * HANDLE_ROTATE_RING;
       }
 
       // Nearest corner in range — see `hitTestHandles`.
@@ -3512,7 +3543,9 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
             { x: groupBBox.x + groupBBox.width, y: groupBBox.y + groupBBox.height },
             { x: groupBBox.x, y: groupBBox.y + groupBBox.height },
           ];
-          for (const gh of groupHandles) {
+          // Zero means the box is too small to wear handles; the dashed outline
+          // above is then the whole affordance.
+          for (const gh of handleR > 0 ? groupHandles : []) {
             ctx.save();
             ctx.fillStyle = '#ffffff';
             ctx.strokeStyle = '#22d3ee';
@@ -3704,10 +3737,12 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       }
 
       // All four corners are the same size; the bottom-right no longer doubles on touch.
+      // Zero means the design is too small to wear handles without being buried by
+      // them, and the outline drawn above is the whole selection affordance.
       const handleSize = getHandleHalfCssPx(designMin / bufferPerCss, zHandles, isMobile, 0.25) * bufferPerCss;
       const r = Math.max(1, handleSize * 0.30);
       const borderW = 1.5 * inv;
-      for (const p of pts) {
+      for (const p of handleSize > 0 ? pts : []) {
         ctx.save();
         ctx.translate(p.x, p.y);
         ctx.rotate(rad);
