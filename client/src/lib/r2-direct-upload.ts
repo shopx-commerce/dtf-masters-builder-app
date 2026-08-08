@@ -1,4 +1,4 @@
-import { isTrustedShellMessage, resolveShellTargetOrigin } from "./shell-message";
+import { isTrustedShellMessage } from "./shell-message";
 
 type UploadJson = Record<string, unknown>;
 export type R2UploadBody = Blob | ArrayBuffer | Uint8Array;
@@ -106,7 +106,10 @@ async function prepareViaShellRelay(
       ...(options.productionFormat ? { productionFormat: options.productionFormat } : {}),
       ...(options.objectKey ? { objectKey: options.objectKey } : {}),
     },
-    resolveShellTargetOrigin(),
+    // Relay prepare/complete messages carry no secrets — use "*" so a
+    // mis-resolved target origin never silently drops the message and
+    // causes a 3-minute relay timeout.
+    "*",
   );
   try {
     return await wait;
@@ -142,7 +145,8 @@ async function completeViaShellRelay(
       totalParts,
       ...(uploadedParts?.length ? { parts: uploadedParts } : {}),
     },
-    resolveShellTargetOrigin(),
+    // Same reasoning as prepareViaShellRelay — no secrets, use "*".
+    "*",
   );
   return wait;
 }
