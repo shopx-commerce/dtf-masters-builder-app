@@ -5,8 +5,8 @@ import { useLanguage } from "@/lib/i18n";
 import { useMetric } from "@/lib/format-length";
 import type { ImageInfo, ResizeSettings } from "./image-editor";
 
-const ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'application/pdf'];
-const ACCEPTED_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.pdf'];
+const ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'application/pdf', 'image/svg+xml', 'application/postscript', 'application/eps', 'application/x-eps'];
+const ACCEPTED_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.pdf', '.svg', '.eps'];
 const GRADIENT_COLORS = [
   { bg: 'rgb(34, 197, 94)', glow: 'rgba(34, 197, 94, 0.5)' },
   { bg: 'rgb(234, 179, 8)', glow: 'rgba(234, 179, 8, 0.5)' },
@@ -32,14 +32,19 @@ export default function UploadSection({ onImageUpload, onBatchStart, imageInfo, 
   const handleFileUpload = useCallback(async (file: File) => {
     const ext = file.name.toLowerCase();
     const isPdf = file.type === 'application/pdf' || ext.endsWith('.pdf');
+    const isSvg = file.type === 'image/svg+xml' || ext.endsWith('.svg');
+    const isEps = ext.endsWith('.eps') || file.type === 'application/postscript' || file.type === 'application/eps' || file.type === 'application/x-eps';
     const isImage = ACCEPTED_TYPES.includes(file.type) || ACCEPTED_EXTENSIONS.some(e => ext.endsWith(e));
 
-    if (!isImage && !isPdf) {
+    if (!isImage && !isPdf && !isSvg && !isEps) {
       toast({ title: t("toast.unsupportedFormat"), description: t("toast.unsupportedFormatDesc"), variant: "destructive" });
       return;
     }
 
-    if (isPdf) {
+    if (isPdf || isSvg || isEps) {
+      // Vector formats bypass the per-file rasterisation done here.
+      // `handleFileUploadUnified` in the model owns the pdf.js /
+      // sanitised-SVG / EPS-reject pipeline.
       onImageUpload(file, null as unknown as HTMLImageElement);
       return;
     }
@@ -181,7 +186,7 @@ export default function UploadSection({ onImageUpload, onBatchStart, imageInfo, 
           type="file" 
           ref={fileInputRef}
           className="hidden" 
-          accept=".png,.jpg,.jpeg,.webp,.pdf,image/png,image/jpeg,image/webp,application/pdf" 
+          accept=".png,.jpg,.jpeg,.webp,.pdf,.svg,image/png,image/jpeg,image/webp,image/svg+xml,application/pdf"
           multiple
           onChange={handleFileInputChange}
         />

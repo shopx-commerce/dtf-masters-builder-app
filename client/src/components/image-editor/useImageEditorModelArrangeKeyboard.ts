@@ -58,6 +58,9 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     handleDeleteDesign,
     handleDeleteMulti,
     handleRotate90,
+    handleGroupSelected,
+    handleUngroupSelected,
+    ensureDesignImagesAvailable,
   } = bag;
   const handleArtboardResizeRef = useRef<(newWidth: number, newHeight: number) => void>(() => {});
 
@@ -83,10 +86,17 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
   }, [selectedDesignId, artboardWidth, artboardHeight]);
 
   const GANGSHEET_HEIGHTS = useMemo(() => {
-    if (initialGangsheetHeights && initialGangsheetHeights.length > 0) return initialGangsheetHeights;
+    // Height lists can arrive from Shopify variants in arbitrary order
+    // (variant position / alphabetical). `find(h => h > current)` and
+    // `GANGSHEET_HEIGHTS[length - 1]` (MAX) both require ascending numeric
+    // order — an unsorted list makes "add one copy" jump straight to the
+    // largest size instead of the next one up.
+    if (initialGangsheetHeights && initialGangsheetHeights.length > 0) {
+      return Array.from(new Set(initialGangsheetHeights)).sort((a, b) => a - b);
+    }
     const base = profile.gangsheetHeights;
-    if (!initialHeight || base.includes(initialHeight)) return base;
-    return [...base, initialHeight].sort((a, b) => a - b);
+    const merged = !initialHeight || base.includes(initialHeight) ? base : [...base, initialHeight];
+    return Array.from(new Set(merged)).sort((a, b) => a - b);
   }, [profile.gangsheetHeights, initialHeight, initialGangsheetHeights]);
   const MAX_ARTBOARD_HEIGHT = GANGSHEET_HEIGHTS[GANGSHEET_HEIGHTS.length - 1];
 
@@ -110,6 +120,38 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
   }) => {
     const currentDesigns = designsRef.current;
     if (currentDesigns.length === 0) { console.warn('[autoArrange] no designs'); return; }
+    if (currentDesigns.some(d =>
+      !d.imageInfo?.image?.complete ||
+      !(d.imageInfo.image.naturalWidth || d.imageInfo.image.width) ||
+      !d.imageInfo.file ||
+      d.imageInfo.file.size <= 0
+    )) {
+      void ensureDesignImagesAvailable(currentDesigns).then(repairedDesigns => {
+        const hasInvalidImage = repairedDesigns.some(d =>
+          !d.imageInfo?.image?.complete ||
+          !(d.imageInfo.image.naturalWidth || d.imageInfo.image.width) ||
+          !d.imageInfo.file ||
+          d.imageInfo.file.size <= 0
+        );
+        if (hasInvalidImage) {
+          toast({
+            title: t("toast.arrangeUnavailable"),
+            description: "Your progress is saved, but one design could not be reloaded. Please recover the draft and try again.",
+            variant: "destructive",
+          });
+          return;
+        }
+        handleAutoArrangeRef.current(opts);
+      }).catch(error => {
+        console.warn("[autoArrange] image rehydration failed", error);
+        toast({
+          title: t("toast.arrangeUnavailable"),
+          description: "Your progress is saved, but one design could not be reloaded. Please recover the draft and try again.",
+          variant: "destructive",
+        });
+      });
+      return;
+    }
     if (!opts?.skipSnapshot) saveSnapshot();
 
     const usableW = artboardWidthRef.current;
@@ -159,11 +201,72 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       return fill;
     };
 
-    const items = designsToArrange.map(d => {
-      const w = d.widthInches * d.transform.s;
-      const h = getEffectiveHeight(d);
-      return { id: d.id, w, h, fill: getContentFill(d) };
-    });
+    // Group-aware item construction.
+    //
+    // A `DesignItem.groupId` marks user-defined groups (see types.ts).
+    // Auto-arrange treats each group as a single "super-item" so the
+    // packer preserves the intra-group layout while still packing the
+    // group as a unit against the rest of the sheet.
+    //
+    // Super-item id convention: `group:${groupId}`. Post-processing keys
+    // off this prefix to map the returned placement back to every group
+    // member and apply the same translation delta.
+    //
+    // Design decision: super-items are passed with rotation 0 and the
+    // arrange worker is *not* prevented from rotating them (the worker
+    // API doesn't currently expose a per-item no-rotate flag). To keep
+    // group semantics predictable, we ignore rotation from the worker
+    // for super-items in `applyResult` — the group's members retain
+    // their individual rotations and only translate. This is the same
+    // guarantee the multi-drag path already gives users, so it feels
+    // consistent.
+    const GROUP_PREFIX = "group:";
+    type GroupBBox = {
+      minX: number; minY: number; maxX: number; maxY: number;
+      members: DesignItem[];
+    };
+    const groups = new Map<string, GroupBBox>();
+    const nonGrouped: DesignItem[] = [];
+    for (const d of designsToArrange) {
+      if (d.groupId) {
+        const t = d.transform;
+        const bounds = getRotatedBounds(d);
+        const cx = t.nx * usableW;
+        const cy = t.ny * usableH;
+        const minX = cx + bounds.minX, maxX = cx + bounds.maxX;
+        const minY = cy + bounds.minY, maxY = cy + bounds.maxY;
+        const g = groups.get(d.groupId);
+        if (g) {
+          if (minX < g.minX) g.minX = minX;
+          if (minY < g.minY) g.minY = minY;
+          if (maxX > g.maxX) g.maxX = maxX;
+          if (maxY > g.maxY) g.maxY = maxY;
+          g.members.push(d);
+        } else {
+          groups.set(d.groupId, { minX, minY, maxX, maxY, members: [d] });
+        }
+      } else {
+        nonGrouped.push(d);
+      }
+    }
+
+    const items = [
+      ...nonGrouped.map(d => ({
+        id: d.id,
+        w: d.widthInches * d.transform.s,
+        h: getEffectiveHeight(d),
+        fill: getContentFill(d),
+      })),
+      ...Array.from(groups.entries()).map(([gid, g]) => ({
+        id: `${GROUP_PREFIX}${gid}`,
+        w: g.maxX - g.minX,
+        h: g.maxY - g.minY,
+        // Fill=1.0 keeps groups from being treated as sparse; empty regions
+        // between group members are intentional and shouldn't invite the
+        // packer to slot other items in.
+        fill: 1.0,
+      })),
+    ];
 
     const fixedRects: Array<{ x: number; y: number; w: number; h: number }> | undefined = arrangeSelection
       ? currentDesigns.filter(d => !selectedDesignIds.has(d.id)).map(d => {
@@ -181,7 +284,20 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       if (hasOverflow && artboardHeightRef.current < MAX_ARTBOARD_HEIGHT) {
         const nextHeight = GANGSHEET_HEIGHTS.find(h => h > artboardHeightRef.current) ?? MAX_ARTBOARD_HEIGHT;
         handleArtboardResizeRef.current(artboardWidthRef.current, nextHeight);
-        setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true }), 0);
+        // Forward the caller's `arrangeAll` flag on the expansion recursion.
+        // Without this, callers that pass `arrangeAll: true` (adding N
+        // copies via the layer "+N" control, or a resize-triggered
+        // expansion) silently drop into `arrangeSelection` mode on the
+        // recursive call once `selectedDesignIds.size >= 2`, which treats
+        // every non-selected design as a fixed obstacle placed on the
+        // pre-expansion sheet — causing the sheet to walk all the way up
+        // GANGSHEET_HEIGHTS to MAX_ARTBOARD_HEIGHT instead of converging
+        // as soon as everything fits.
+        setTimeout(() => handleAutoArrangeRef.current({
+          skipSnapshot: true,
+          preserveSelection: true,
+          arrangeAll: opts?.arrangeAll,
+        }), 0);
         return;
       }
       if (hasOverflow) {
@@ -191,14 +307,64 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       }
       const abW = artboardWidthRef.current;
       const abH = artboardHeightRef.current;
+
+      // Build a per-design delta map from the worker's placements.
+      // Non-grouped: identify by exact id, adopt the worker's rotation.
+      // Grouped   : identify via the `group:` prefix, adopt only the
+      //             translation delta so intra-group layout survives.
+      type DesignDelta = {
+        nx: number;
+        ny: number;
+        rotation: number | null; // null → keep the design's current rotation
+        overflows: boolean;
+      };
+      const deltas = new Map<string, DesignDelta>();
+      for (const placed of bestResult) {
+        if (placed.id.startsWith(GROUP_PREFIX)) {
+          const gid = placed.id.slice(GROUP_PREFIX.length);
+          const g = groups.get(gid);
+          if (!g) continue;
+          // Worker returns the *center* of the super-item's bounding box
+          // in normalised coords. Compute the delta between the group's
+          // old and new bbox centers in normalised space, then shift
+          // every member by that delta.
+          const oldCx = (g.minX + g.maxX) / 2;
+          const oldCy = (g.minY + g.maxY) / 2;
+          const newCx = placed.nx * abW;
+          const newCy = placed.ny * abH;
+          const dnx = (newCx - oldCx) / abW;
+          const dny = (newCy - oldCy) / abH;
+          for (const m of g.members) {
+            deltas.set(m.id, {
+              nx: m.transform.nx + dnx,
+              ny: m.transform.ny + dny,
+              rotation: null,
+              overflows: placed.overflows,
+            });
+          }
+        } else {
+          deltas.set(placed.id, {
+            nx: placed.nx,
+            ny: placed.ny,
+            rotation: placed.rotation,
+            overflows: placed.overflows,
+          });
+        }
+      }
+
       setDesigns(prev => prev.map(d => {
-        const p = bestResult.find(r => r.id === d.id);
-        if (!p) return d;
-        const finalRotation = p.rotation % 360;
+        const delta = deltas.get(d.id);
+        if (!delta) return d;
+        const finalRotation = delta.rotation === null
+          ? d.transform.rotation
+          : delta.rotation % 360;
         const stampExtra = getStampExtra(d);
-        let adjustedNx = p.nx;
-        let adjustedNy = p.ny;
-        if (stampExtra > 0) {
+        let adjustedNx = delta.nx;
+        let adjustedNy = delta.ny;
+        if (stampExtra > 0 && delta.rotation !== null) {
+          // Stamp-extra offset only makes sense when the packer chose the
+          // rotation. For group members (rotation preserved), skip it —
+          // the design's current position already accounts for its stamp.
           const rad = (finalRotation * Math.PI) / 180;
           adjustedNx -= (stampExtra / 2) * Math.sin(rad) / abW;
           adjustedNy -= (stampExtra / 2) * Math.cos(rad) / abH;
@@ -460,7 +626,7 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       const best = cands[0].result;
       applyResult(best, best.some(p => p.rotation !== 0), best.some(p => p.overflows));
     }
-  }, [selectedDesignIds, saveSnapshot, toast, designGap, GANGSHEET_HEIGHTS, MAX_ARTBOARD_HEIGHT]);
+  }, [selectedDesignIds, saveSnapshot, toast, designGap, GANGSHEET_HEIGHTS, MAX_ARTBOARD_HEIGHT, ensureDesignImagesAvailable]);
 
   const handleArtboardResize = useCallback((newWidth: number, newHeight: number) => {
     if (newWidth <= 0 || newHeight <= 0) return;
@@ -520,6 +686,10 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
   handlePasteRef.current = handlePaste;
   const handleRotate90Ref = useRef(handleRotate90);
   handleRotate90Ref.current = handleRotate90;
+  const handleGroupSelectedRef = useRef(handleGroupSelected);
+  handleGroupSelectedRef.current = handleGroupSelected;
+  const handleUngroupSelectedRef = useRef(handleUngroupSelected);
+  handleUngroupSelectedRef.current = handleUngroupSelected;
   const selectedDesignIdRef = useRef(selectedDesignId);
   selectedDesignIdRef.current = selectedDesignId;
   const showDesignInfoRef = useRef(showDesignInfo);
@@ -567,6 +737,21 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
           setSelectedDesignIds(new Set(allIds));
           setSelectedDesignId(allIds[allIds.length - 1]);
         }
+        return;
+      }
+      // Group / Ungroup — Ctrl+G groups the current multi-selection,
+      // Ctrl+Shift+G ungroups the selection. Order matters: check
+      // Shift+G first so Ctrl+G alone doesn't accidentally trigger both
+      // paths. `key.toLowerCase()` handles capitals-lock without a
+      // separate branch.
+      if (ctrl && e.shiftKey && e.key.toLowerCase() === 'g') {
+        e.preventDefault();
+        handleUngroupSelectedRef.current();
+        return;
+      }
+      if (ctrl && !e.shiftKey && e.key.toLowerCase() === 'g') {
+        e.preventDefault();
+        handleGroupSelectedRef.current();
         return;
       }
       if (ctrl && e.key === 'd') {

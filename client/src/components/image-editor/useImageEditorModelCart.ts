@@ -33,6 +33,7 @@ export function useImageEditorModelCart(
     setIsAddingToCart,
     setIsUpdateFlow,
     setAddToCartProgressLabel,
+    setExportProgressLabel,
     addToCartStallTimeoutRef,
     lastAddToCartPngBytesRef,
     shellUploadUrlRef,
@@ -246,6 +247,7 @@ export function useImageEditorModelCart(
         let exportWorkerBuffer: ArrayBuffer | null = null;
 
         if (useWorker) {
+          setExportProgressLabel("Preparing export...");
           const bitmaps = await Promise.all(exportDesignsSource.map((d) => createImageBitmap(d.imageInfo.image)));
           const exportDesigns = exportDesignsSource.map((d, i) => ({
             widthInches: d.widthInches,
@@ -281,6 +283,7 @@ export function useImageEditorModelCart(
           });
           exportWorkerBuffer = exportResult.buffer;
           pngBlob = new Blob([exportWorkerBuffer], { type: 'image/png' });
+          setExportProgressLabel("Finalizing PNG...");
         } else {
           const exportCanvas = document.createElement('canvas');
           exportCanvas.width = outW;
@@ -558,12 +561,14 @@ export function useImageEditorModelCart(
         cartPreviewUrl = existingProduction.previewUrl ? String(existingProduction.previewUrl) : productionUrl;
         uploadedProductionKey = existingProduction.key ? String(existingProduction.key) : uploadedProductionKey;
         setAddToCartProgressLabel(undefined);
+        setExportProgressLabel(undefined);
       } else if (serverRenderEligible) {
         // Nothing to upload: there is no client-rendered production file. The cart line carries the
         // deterministic key, and the shell derives the final print-file URL from it — the link is
         // knowable before the bytes exist. Only the small preview is fetched here.
         cartPreviewUrl = await getCartPreviewUrl();
         setAddToCartProgressLabel(undefined);
+        setExportProgressLabel(undefined);
       } else if (uploadInBuilder) {
         const uploadOpts = {
           // Never fall back to `filename` here. A bare filename is not a valid object key, and
@@ -599,6 +604,7 @@ export function useImageEditorModelCart(
           const detail = uploadErr instanceof Error ? uploadErr.message : String(uploadErr);
           console.warn("[handleAddToCart] Builder R2 upload failed, falling back to parent shell:", detail);
           setAddToCartProgressLabel(undefined);
+          setExportProgressLabel(undefined);
           // Parent shell can upload via signed proxy URL when builder→R2 or shell relay fails.
         }
       }
@@ -668,12 +674,13 @@ export function useImageEditorModelCart(
       setIsAddingToCart(false);
       setIsUpdateFlow(false);
       setIsProcessing(false);
+      setExportProgressLabel(undefined);
       if (addToCartStallTimeoutRef.current != null) {
         window.clearTimeout(addToCartStallTimeoutRef.current);
         addToCartStallTimeoutRef.current = null;
       }
     }
-  }, [artboardWidth, artboardHeight, quantity, shopifyVariants, initialVariantId, shopDomain, toast, refreshAddToCartStallTimeout, buildDesignStatePayload, isEditMode, initialDesignState, setIsAddingToCart, setIsUpdateFlow, setIsProcessing, setAddToCartProgressLabel, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, shellShopKeyRef, designIdRef, designsRef, getLayerAssetRef, getLayerScreenedAssetRef, getCartPreviewUrl, profile, spotPreviewData]);
+  }, [artboardWidth, artboardHeight, quantity, shopifyVariants, initialVariantId, shopDomain, toast, refreshAddToCartStallTimeout, buildDesignStatePayload, isEditMode, initialDesignState, setIsAddingToCart, setIsUpdateFlow, setIsProcessing, setAddToCartProgressLabel, setExportProgressLabel, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, shellShopKeyRef, designIdRef, designsRef, getLayerAssetRef, getLayerScreenedAssetRef, getCartPreviewUrl, profile, spotPreviewData]);
 
   return {
     ...bag,

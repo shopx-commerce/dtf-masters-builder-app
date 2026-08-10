@@ -20,6 +20,7 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
     toast,
     t,
     setIsProcessing,
+    setExportProgressLabel,
   } = bag;
 
   const handleDownload = useCallback(async (downloadType: string = 'standard', format: string = 'png', spotColorsByDesign?: Record<string, any[]>) => {
@@ -196,6 +197,7 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
         );
 
         if (useWorker) {
+          setExportProgressLabel(t("editor.exportPreparing"));
           const bitmaps = await Promise.all(
             exportSrc.map(d => createImageBitmap(d.imageInfo.image))
           );
@@ -253,6 +255,7 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
               bitmaps,
             );
           });
+          setExportProgressLabel(t("editor.exportFinalizing"));
         } else {
           const exportCanvas = document.createElement('canvas');
           exportCanvas.width = outW;
@@ -310,9 +313,10 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
       console.error("Download failed:", error);
       toast({ title: t("toast.downloadFailed"), description: error instanceof Error ? error.message : t("toast.downloadFailedDesc"), variant: "destructive" });
     } finally {
+      setExportProgressLabel(undefined);
       setIsProcessing(false);
     }
-  }, [imageInfo, designs, artboardWidth, artboardHeight, toast]);
+  }, [imageInfo, designs, artboardWidth, artboardHeight, toast, t, setExportProgressLabel, setIsProcessing]);
 
   const fileToDataUrl = useCallback((file: File): Promise<string> => {
     return new Promise((resolve, reject) => {

@@ -1,6 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { cropImageToContent, cropImageToContentAsync, isOpaqueRasterUpload } from "@/lib/image-crop";
 import { parsePDF, type ParsedPDFData } from "@/lib/pdf-parser";
+import { parseSVG, isSVGFile, isEPSFile, type ParsedSVGData } from "@/lib/svg-parser";
+import { saveUploadToLibrary } from "@/lib/uploads-library";
+import { getContourWorkerManager } from "@/lib/contour-worker-manager";
 import {
   LOW_RES_EFFECTIVE_DPI_THRESHOLD,
   MAX_STORED_IMAGE_DIMENSION,
@@ -49,7 +52,12 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
     artboardWidthRef,
     artboardHeightRef,
     applyImageDirectly,
+    thumbnailCacheRef,
+    contentFillCacheRef,
+    assetDataUrlCacheRef,
+    restoredLayerAssetRef,
   } = bag;
+  const [isUpscaling, setIsUpscaling] = useState(false);
 
   const resolveUploadDpi = useCallback(async (
     file: File,
@@ -322,6 +330,29 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
     if (isMobile) setMobilePanel("preview");
   }, [applyImageDirectly, isMobile]);
 
+  const handleSVGUpload = useCallback((file: File, svgData: ParsedSVGData) => {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+    // Store the rasterised PNG as a real File so downstream export paths
+    // that reach into `imageInfo.file` (e.g. sending source to the server
+    // for higher-quality re-render) receive a PNG.
+    const pngFile = new File(
+      [svgData.pngBlob],
+      file.name.replace(/\.svg$/i, ".png"),
+      { type: "image/png" },
+    );
+    const newImageInfo: ImageInfo = {
+      file: pngFile,
+      image: svgData.image,
+      originalWidth: svgData.widthPx,
+      originalHeight: svgData.heightPx,
+      dpi: svgData.dpi,
+    };
+    applyImageDirectly(newImageInfo, svgData.widthInches, svgData.heightInches, false);
+    if (isMobile) setMobilePanel("preview");
+  }, [applyImageDirectly, isMobile]);
+
   const handleBatchStart = useCallback((fileCount: number) => {
     const targetHeight = Math.min(48, GANGSHEET_HEIGHTS[GANGSHEET_HEIGHTS.length - 1]);
     const validHeight = GANGSHEET_HEIGHTS.reduce((best, h) => h <= targetHeight && h > best ? h : best, GANGSHEET_HEIGHTS[0]);
@@ -333,11 +364,32 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
   const handleFileUploadUnified = useCallback(async (file: File, image: HTMLImageElement | null) => {
     const ext = file.name.toLowerCase();
     const isPdf = file.type === 'application/pdf' || ext.endsWith('.pdf');
+    // Persist supported uploads into the sidebar Uploads library
+    // (best-effort, fire-and-forget — never blocks or fails the upload).
+    if (isPdf || isSVGFile(file) || image) void saveUploadToLibrary(file);
     if (isPdf) {
       try {
         setIsUploading(true);
         const pdfData = await parsePDF(file);
         handlePDFUpload(file, pdfData);
+        if (pdfData.pageCount > 1) {
+          toast({
+            title: t("toast.pdfMultiPage"),
+            description: t("toast.pdfMultiPageDesc", { pages: pdfData.pageCount }),
+            variant: "warning",
+          });
+        }
+        // Text-fidelity warning. Only fires when the PDF actually
+        // contains rendered text — plain vector logos (paths only)
+        // skip the toast so we don't cry wolf. See ParsedPDFData.hasText
+        // for the coarse-but-safe detection strategy.
+        if (pdfData.hasText) {
+          toast({
+            title: t("toast.pdfHasText"),
+            description: t("toast.pdfHasTextDesc"),
+            variant: "warning",
+          });
+        }
         if (isMobile) setMobilePanel("preview");
       } catch (err) {
         console.error('PDF parse error:', err);
@@ -347,19 +399,101 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
       }
       return;
     }
+    if (isSVGFile(file)) {
+      try {
+        setIsUploading(true);
+        const svgData = await parseSVG(file);
+        handleSVGUpload(file, svgData);
+        // Text-with-external-font warning. Only fires when *both*
+        // conditions are true — text is present *and* a font URL was
+        // detected in a `<style>` block. Text-only or url-only alone
+        // produce no toast so we minimise noise for well-authored
+        // SVGs. See analyseSvgFontRisk in svg-parser.ts.
+        if (svgData.hasText && svgData.hasExternalFonts) {
+          toast({
+            title: t("toast.svgExternalFont"),
+            description: t("toast.svgExternalFontDesc"),
+            variant: "warning",
+          });
+        }
+        // Ambiguous-size warning. Fires when we had to fall back to
+        // the viewBox because the SVG author didn't set width/height.
+        if (svgData.dimensionSource === "viewbox" || svgData.dimensionSource === "fallback") {
+          toast({
+            title: t("toast.svgAmbiguousSize"),
+            description: t("toast.svgAmbiguousSizeDesc"),
+            variant: "warning",
+          });
+        }
+        if (isMobile) setMobilePanel("preview");
+      } catch (err) {
+        console.error('SVG parse error:', err);
+        toast({ title: t("toast.svgFailed"), description: t("toast.svgFailedDesc"), variant: "destructive" });
+      } finally {
+        setIsUploading(false);
+      }
+      return;
+    }
+    if (isEPSFile(file)) {
+      toast({
+        title: t("toast.epsUnsupported"),
+        description: t("toast.epsUnsupportedDesc"),
+        variant: "destructive",
+      });
+      return;
+    }
     if (image) {
       await handleImageUpload(file, image);
       if (isMobile) setMobilePanel("preview");
     }
-  }, [handleImageUpload, handlePDFUpload, isMobile, toast]);
+  }, [handleImageUpload, handlePDFUpload, handleSVGUpload, isMobile, toast, t]);
 
   const processSidebarFile = useCallback((file: File): Promise<void> => {
     const ext = file.name.toLowerCase();
     const isPdf = file.type === 'application/pdf' || ext.endsWith('.pdf');
+    const isSvg = isSVGFile(file);
+    const isEps = isEPSFile(file);
     const isImage = ['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || ['.png', '.jpg', '.jpeg', '.webp'].some(x => ext.endsWith(x));
-    if (!isImage && !isPdf) {
+    if (!isImage && !isPdf && !isSvg && !isEps) {
       toast({ title: t("toast.unsupportedFormat"), description: t("toast.formatOnly"), variant: "destructive" });
       return Promise.resolve();
+    }
+    if (isEps) {
+      toast({ title: t("toast.epsUnsupported"), description: t("toast.epsUnsupportedDesc"), variant: "destructive" });
+      return Promise.resolve();
+    }
+    // Persist into the sidebar Uploads library (best-effort).
+    void saveUploadToLibrary(file);
+    if (isSvg) {
+      return (async () => {
+        try {
+          setIsUploading(true);
+          const svgData = await parseSVG(file);
+          handleSVGUpload(file, svgData);
+          // Mirror the warnings surfaced by `handleFileUploadUnified` so
+          // drag-and-drop into the sidebar behaves identically to
+          // clicking the file picker.
+          if (svgData.hasText && svgData.hasExternalFonts) {
+            toast({
+              title: t("toast.svgExternalFont"),
+              description: t("toast.svgExternalFontDesc"),
+              variant: "warning",
+            });
+          }
+          if (svgData.dimensionSource === "viewbox" || svgData.dimensionSource === "fallback") {
+            toast({
+              title: t("toast.svgAmbiguousSize"),
+              description: t("toast.svgAmbiguousSizeDesc"),
+              variant: "warning",
+            });
+          }
+        } catch (err) {
+          console.error('SVG parse error:', err);
+          toast({ title: t("toast.svgFailed"), description: t("toast.svgFailedDesc"), variant: "destructive" });
+        } finally {
+          setIsUploading(false);
+        }
+      })();
     }
     if (isPdf) {
       return (async () => {
@@ -367,6 +501,20 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
           setIsUploading(true);
           const pdfData = await parsePDF(file);
           handlePDFUpload(file, pdfData);
+          if (pdfData.pageCount > 1) {
+            toast({
+              title: t("toast.pdfMultiPage"),
+              description: t("toast.pdfMultiPageDesc", { pages: pdfData.pageCount }),
+              variant: "warning",
+            });
+          }
+          if (pdfData.hasText) {
+            toast({
+              title: t("toast.pdfHasText"),
+              description: t("toast.pdfHasTextDesc"),
+              variant: "warning",
+            });
+          }
         } catch (err) {
           console.error('PDF parse error:', err);
           toast({ title: t("toast.pdfFailed"), description: t("toast.pdfFailedShort"), variant: "destructive" });
@@ -406,7 +554,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
       };
       img.src = url;
     });
-  }, [handleImageUpload, handlePDFUpload, toast]);
+  }, [handleImageUpload, handlePDFUpload, handleSVGUpload, toast, t]);
 
   const handleSidebarFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files ? Array.from(e.target.files) : [];
@@ -513,6 +661,143 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
     }
   }, [imageInfo, selectedDesign, selectedDesignId, saveSnapshot, resizeSettings]);
 
+  const handleIncreaseQuality = useCallback(async (scaleFactor: number) => {
+    const design = selectedDesignId ? designs.find(d => d.id === selectedDesignId) : null;
+    const sourceInfo = design?.imageInfo ?? imageInfo;
+    if (!design || !sourceInfo?.image || isUpscaling) return;
+
+    const source = sourceInfo.image;
+    const sourceWidth = source.naturalWidth || source.width;
+    const sourceHeight = source.naturalHeight || source.height;
+    if (!sourceWidth || !sourceHeight) {
+      toast({ title: t("toast.upscaleFailed"), description: t("toast.upscaleFailedDesc"), variant: "destructive" });
+      return;
+    }
+
+    setIsUpscaling(true);
+    toast({ title: t("toast.upscaleStarted"), description: t("toast.upscaleStartedDesc") });
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = sourceWidth;
+      canvas.height = sourceHeight;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Could not create image canvas");
+      context.drawImage(source, 0, 0, sourceWidth, sourceHeight);
+
+      const pngBlob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error("Could not encode image")), "image/png");
+      });
+      const fileName = sourceInfo.file?.name?.replace(/\.[^.]+$/, "") || "design";
+      let resultBlob: Blob | null = null;
+      let lastError: Error | null = null;
+      const maxAttempts = 4;
+
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+          const body = new FormData();
+          body.append("image", new File([pngBlob], `${fileName}.png`, { type: "image/png" }));
+          body.append("scaleFactor", String(scaleFactor));
+          const response = await fetch("/api/upscale-image", { method: "POST", body });
+          if (!response.ok) {
+            const payload = await response.json().catch(() => null) as { error?: string } | null;
+            const error = new Error(payload?.error || `Upscale request failed (${response.status})`);
+            if ((response.status === 502 || response.status === 503) && attempt < maxAttempts - 1) {
+              lastError = error;
+              await new Promise(resolve => setTimeout(resolve, 4000));
+              continue;
+            }
+            throw error;
+          }
+          resultBlob = await response.blob();
+          break;
+        } catch (error) {
+          lastError = error instanceof Error ? error : new Error("Upscale request failed");
+          const retryableNetworkError =
+            error instanceof TypeError ||
+            (error instanceof Error && /network|fetch|failed to fetch/i.test(error.message));
+          if (!retryableNetworkError || attempt >= maxAttempts - 1) throw lastError;
+          await new Promise(resolve => setTimeout(resolve, 4000));
+        }
+      }
+
+      if (!resultBlob) throw lastError ?? new Error("Upscale returned no image");
+      const resultUrl = URL.createObjectURL(resultBlob);
+      const upscaledImage = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const nextImage = new Image();
+        nextImage.onload = () => {
+          URL.revokeObjectURL(resultUrl);
+          resolve(nextImage);
+        };
+        nextImage.onerror = () => {
+          URL.revokeObjectURL(resultUrl);
+          reject(new Error("Could not load upscaled image"));
+        };
+        nextImage.src = resultUrl;
+      });
+
+      const outputWidth = upscaledImage.naturalWidth || upscaledImage.width;
+      const outputHeight = upscaledImage.naturalHeight || upscaledImage.height;
+      const outputDpi = Math.min(
+        outputWidth / Math.max(0.01, design.widthInches),
+        outputHeight / Math.max(0.01, design.heightInches),
+      );
+      const nextFile = new File([resultBlob], `${fileName}-upscaled.png`, { type: "image/png" });
+      const nextInfo: ImageInfo = {
+        ...sourceInfo,
+        file: nextFile,
+        image: upscaledImage,
+        originalWidth: outputWidth,
+        originalHeight: outputHeight,
+        dpi: outputDpi,
+        isPDF: false,
+        originalPdfData: undefined,
+      };
+
+      saveSnapshot();
+      const oldSrc = sourceInfo.image.src;
+      thumbnailCacheRef.current.delete(oldSrc);
+      contentFillCacheRef.current.delete(oldSrc);
+      assetDataUrlCacheRef.current.delete(design.id);
+      restoredLayerAssetRef.current.delete(design.id);
+      getContourWorkerManager().clearCache();
+      setDesigns(prev => prev.map(current => current.id === design.id
+        ? {
+            ...current,
+            imageInfo: nextInfo,
+            originalDPI: outputDpi,
+            alphaThresholded: false,
+            halftoned: false,
+            halftoneSettings: undefined,
+            halftoneSourceImage: undefined,
+          }
+        : current
+      ));
+      setImageInfo(nextInfo);
+      setResizeSettings(prev => ({ ...prev, widthInches: design.widthInches, heightInches: design.heightInches }));
+      toast({ title: t("toast.upscaleSuccess"), description: t("toast.upscaleSuccessDesc", { scale: scaleFactor }) });
+    } catch (error) {
+      console.error("[upscale] failed:", error);
+      toast({
+        title: t("toast.upscaleFailed"),
+        description: error instanceof Error ? error.message : t("toast.upscaleFailedDesc"),
+        variant: "destructive",
+      });
+    } finally {
+      setIsUpscaling(false);
+    }
+  }, [
+    selectedDesignId,
+    designs,
+    imageInfo,
+    isUpscaling,
+    toast,
+    t,
+    saveSnapshot,
+    thumbnailCacheRef,
+    contentFillCacheRef,
+    assetDataUrlCacheRef,
+    restoredLayerAssetRef,
+  ]);
 
   const thresholdAlphaForDesign = useCallback((info: ImageInfo): Promise<ImageInfo | null> => {
     return new Promise(resolve => {
@@ -618,7 +903,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
 
 
   // Only handlers consumed outside this hook (via the merged bag → context → UI) are exposed.
-  // Internal helpers (handleImageUpload/handlePDFUpload/handleFallbackImage/processSidebarFile/
+  // Internal helpers (handleImageUpload/handlePDFUpload/handleFallbackImage/
   // thresholdAlphaForDesign) and drag internals (setIsDragOver/dragCounterRef) stay private.
   // applyImageDirectly is intentionally not re-listed — it already flows through `...bag`.
   return {
@@ -626,6 +911,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
     handleBatchStart,
     handleFileUploadUnified,
     handleSidebarFileChange,
+    processSidebarFile,
     isDragOver,
     handleDragEnter,
     handleDragLeave,
@@ -636,5 +922,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
     handleThresholdAlphaAll,
     handleCropDesign,
     handleCropApply,
+    handleIncreaseQuality,
+    isUpscaling,
   };
 }

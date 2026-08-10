@@ -1,5 +1,6 @@
 import UploadSection from "../upload-section";
-import { useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { useToast } from "@/hooks/use-toast";
 import PreviewSection from "../preview-section";
 import ControlsSection from "../controls-section";
 import CropModal from "../crop-modal";
@@ -8,10 +9,12 @@ import EditorActionToolbar from "./editor-action-toolbar";
 import { formatDimensions, formatLength, useMetric, getUnitSuffix } from "@/lib/format-length";
 import {
   ArrowDownLeft, ArrowDownRight, ArrowUpLeft, ArrowUpRight, Copy, ChevronDown, ChevronUp,
-  Droplets, FlipHorizontal2, FlipVertical2, Layers, LayoutGrid, Link, Loader2, Minus, Plus, RotateCw,
-  Trash2, Undo2, Redo2, Unlink, XCircle,
+  Droplets, FlipHorizontal2, FlipVertical2, Group, Layers, LayoutGrid, Link, Loader2, Minus, Plus, RotateCw,
+  Trash2, Undo2, Redo2, Ungroup, Unlink, XCircle,
 } from "lucide-react";
 import { useImageEditorContext } from "./image-editor-context";
+import { UploadsPanel } from "./uploads-panel";
+import { LayerRow, type LayerRowHandlers } from "./layer-row";
 
 /** Halftone icon — a grid of circles shrinking diagonally. */
 const HalftoneIcon = ({ className }: { className?: string }) => (
@@ -32,12 +35,12 @@ const HalftoneIcon = ({ className }: { className?: string }) => (
 
 export default function ImageEditorView() {
   const {
-    t, lang, profile, embedFromShopify, isMobile, isLgUp, isUploading, uploadProgress, isProcessing,
+    t, lang, profile, embedFromShopify, isMobile, isLgUp, isUploading, uploadProgress, isProcessing, exportProgressLabel,
     isAddingToCart, isEditMode, isUpdateFlow, isDragOver, artboardWidth, artboardHeight,
     quantity, designGap, duplicateCount, designs, setDesigns, selectedDesignId, setSelectedDesignId,
     selectedDesignIds, setSelectedDesignIds, mobilePanel,
     setMobilePanel, showDesignInfo, setShowDesignInfo, selectionZoomActive, setSelectionZoomActive,
-    editingLayerName, setEditingLayerName, editingNameValue, setEditingNameValue, proportionalLock,
+    proportionalLock,
     setProportionalLock, spotPreviewData, setSpotPreviewData, contextMenu, setContextMenu,
     cropModalDesignId, setCropModalDesignId, activeImageInfo, activeDesignTransform,
     activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, canvasRef, designInfoRef,
@@ -45,12 +48,13 @@ export default function ImageEditorView() {
     fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer,
     copySpotSelectionsRef, GANGSHEET_HEIGHTS, MAX_ARTBOARD_HEIGHT, recommendedArtboardHeight,
     initialVariantId, shopifyVariants,
-    handleFileUploadUnified, handleBatchStart, handleSidebarFileChange, handleDragEnter,
+    handleFileUploadUnified, handleBatchStart, handleSidebarFileChange, processSidebarFile, handleDragEnter,
     handleDragLeave, handleDragOver, handleDrop, handleSelectDesign, handleMultiSelect,
     handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta,
     handleEffectiveSizeChange, handleResizeChange, handleDuplicateDesign,
     handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleSetGroupCount,
     handleDeleteDesign, handleDeleteGroup, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleAlignCorner,
+    handleGroupSelected, handleUngroupSelected, selectedHasGroup,
     handleAutoArrange, handleArtboardResize, handleThresholdAlpha,
     handleThresholdAlphaAll, handleCropDesign, handleCropApply, handleDownload, handleAddToCart,
     handleApplyHalftone, handleOpenHalftoneMenu, halftoneStrength, setHalftoneStrength,
@@ -60,15 +64,53 @@ export default function ImageEditorView() {
     handleCanvasContextMenu, handleInteractionEnd, handleUndo, handleRedo, canUndo, canRedo,
     handleAutoArrangeRef, actionToolbarProps, getLayerThumbnail, setDesignGap, setDuplicateCount,
     parseDuplicateCount, handleDuplicateCountKeyDown, clampDuplicateCount, setArtboardWidth,
-    setArtboardHeight, setQuantity,
+    setArtboardHeight, setQuantity, draftRecoveryAvailable, isRecoveringDraft,
+    recoverEditorDraft, discardEditorDraft,
   } = useImageEditorContext();
+  const { toast } = useToast();
+  const handleAddFromUploads = useCallback(async (file: File) => {
+    await processSidebarFile(file);
+  }, [processSidebarFile]);
+  const handleUploadUnavailable = useCallback(() => {
+    toast({ title: t("editor.uploadsUnavailable"), variant: "destructive" });
+  }, [toast, t]);
   const [activeSpotChannel, setActiveSpotChannel] = useState<string | null>(null);
-  const [editingCountKey, setEditingCountKey] = useState<string | null>(null);
-  const [editingCountValue, setEditingCountValue] = useState("");
   const [panModeActive, setPanModeActive] = useState(false);
   const wandAssignRef = useRef<((nx: number, ny: number) => void) | null>(null);
   const clearActiveChannelRef = useRef<(() => void) | null>(null);
   const halftoneEnabled = profile?.id === "hot-peel" || profile?.id === "fluorescent";
+
+  // Stable-identity handler bundle for `LayerRow`. The context returns
+  // some handlers with new identity per render (notably `handleSetGroupCount`,
+  // which closes over the ever-changing model `bag`), so we redirect
+  // through a ref. `layerHandlers` never changes identity — that's what
+  // lets `memo(LayerRow)` skip re-renders when unrelated state churns.
+  const layerHandlersLiveRef = useRef({
+    handleSelectDesign,
+    handleSetGroupCount,
+    handleDeleteGroup,
+    setDesigns,
+    getLayerThumbnail,
+  });
+  layerHandlersLiveRef.current = {
+    handleSelectDesign,
+    handleSetGroupCount,
+    handleDeleteGroup,
+    setDesigns,
+    getLayerThumbnail,
+  };
+  const layerHandlers = useMemo<LayerRowHandlers>(
+    () => ({
+      handleSelectDesign: (id) => layerHandlersLiveRef.current.handleSelectDesign(id),
+      handleSetGroupCount: (row, count) =>
+        layerHandlersLiveRef.current.handleSetGroupCount(row, count),
+      handleDeleteGroup: (ids) => layerHandlersLiveRef.current.handleDeleteGroup(ids),
+      handleAutoArrangeRef,
+      setDesigns: (updater) => layerHandlersLiveRef.current.setDesigns(updater),
+      getLayerThumbnail: (design) => layerHandlersLiveRef.current.getLayerThumbnail(design),
+    }),
+    [handleAutoArrangeRef],
+  );
 
   if (!activeImageInfo && !embedFromShopify) {
     return (
@@ -79,6 +121,31 @@ export default function ImageEditorView() {
         onDragOver={handleDragOver}
         onDrop={handleDrop}
       >
+        {draftRecoveryAvailable && (
+          <div className="absolute inset-x-2 top-2 z-[60] flex items-center justify-between gap-3 rounded-lg border border-cyan-300 bg-white/95 px-3 py-2 text-sm shadow-lg backdrop-blur-sm">
+            <div className="min-w-0">
+              <p className="font-semibold text-gray-900">{t("editor.draftRecoveryTitle")}</p>
+              <p className="truncate text-xs text-gray-600">{t("editor.draftRecoveryDescription")}</p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void discardEditorDraft()}
+                className="rounded-md px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100"
+              >
+                {t("editor.draftDiscard")}
+              </button>
+              <button
+                type="button"
+                onClick={() => void recoverEditorDraft()}
+                disabled={isRecoveringDraft}
+                className="rounded-md bg-cyan-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-cyan-700 disabled:opacity-60"
+              >
+                {isRecoveringDraft ? t("editor.draftRecovering") : t("editor.draftRecover")}
+              </button>
+            </div>
+          </div>
+        )}
         <input
           ref={headerUploadInputRef}
           type="file"
@@ -117,11 +184,21 @@ export default function ImageEditorView() {
               </div>
             </div>
           ) : (
-            <UploadSection 
-              onImageUpload={handleFileUploadUnified}
-              onBatchStart={handleBatchStart}
-              imageInfo={null}
-            />
+            <>
+              <UploadSection
+                onImageUpload={handleFileUploadUnified}
+                onBatchStart={handleBatchStart}
+                imageInfo={null}
+              />
+              {/* Uploads library — re-add previously uploaded files to a fresh sheet */}
+              <div className="mt-4 w-full max-w-xl mx-auto">
+                <UploadsPanel
+                  t={t}
+                  onAddFile={handleAddFromUploads}
+                  onUnavailable={handleUploadUnavailable}
+                />
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -136,6 +213,31 @@ export default function ImageEditorView() {
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
+      {draftRecoveryAvailable && (
+        <div className="absolute inset-x-2 top-2 z-[60] flex items-center justify-between gap-3 rounded-lg border border-cyan-300 bg-white/95 px-3 py-2 text-sm shadow-lg backdrop-blur-sm">
+          <div className="min-w-0">
+            <p className="font-semibold text-gray-900">{t("editor.draftRecoveryTitle")}</p>
+            <p className="truncate text-xs text-gray-600">{t("editor.draftRecoveryDescription")}</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void discardEditorDraft()}
+              className="rounded-md px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100"
+            >
+              {t("editor.draftDiscard")}
+            </button>
+            <button
+              type="button"
+              onClick={() => void recoverEditorDraft()}
+              disabled={isRecoveringDraft}
+              className="rounded-md bg-cyan-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-cyan-700 disabled:opacity-60"
+            >
+              {isRecoveringDraft ? t("editor.draftRecovering") : t("editor.draftRecover")}
+            </button>
+          </div>
+        </div>
+      )}
       <input
         ref={headerUploadInputRef}
         type="file"
@@ -188,6 +290,7 @@ export default function ImageEditorView() {
             onResizeChange={handleResizeChange}
             onDownload={handleDownload}
             isProcessing={isProcessing}
+            exportProgressLabel={exportProgressLabel}
             imageInfo={activeImageInfo}
             artboardWidth={artboardWidth}
             artboardHeight={artboardHeight}
@@ -334,184 +437,27 @@ export default function ImageEditorView() {
                     .layers-scroll::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
                   `}</style>
                   {layerRows.map((row) => {
-                    const first = row.designs[0];
-                    const count = row.designs.length;
-                    const isSelected = row.designs.some(d => d.id === selectedDesignId || selectedDesignIds.has(d.id));
+                    const rowKey = `${row.baseName}::${row.sizeKey}`;
                     return (
-                    <div
-                      key={`${row.baseName}::${row.sizeKey}`}
-                      className={`relative grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1 px-2.5 py-2.5 cursor-pointer transition-colors ${isSelected ? 'bg-cyan-50 border-l-2 border-cyan-400' : 'hover:bg-gray-100/70 border-l-2 border-transparent'}`}
-                      onClick={(e) => {
-                        if (e.ctrlKey || e.metaKey) {
-                          setSelectedDesignIds(prev => {
-                            const next = new Set(prev);
-                            const allSelected = row.designs.every(d => next.has(d.id));
-                            if (allSelected) {
-                              for (const d of row.designs) next.delete(d.id);
-                              setSelectedDesignId(next.size > 0 ? Array.from(next)[next.size - 1] : null);
-                            } else {
-                              for (const d of row.designs) next.add(d.id);
-                              setSelectedDesignId(first.id);
-                            }
-                            return next;
-                          });
-                        } else {
-                          handleSelectDesign(first.id);
-                        }
-                      }}
-                    >
-                      <div className="row-span-2 h-9 w-9 rounded bg-gray-100 border border-gray-300 flex-shrink-0 overflow-hidden flex items-center justify-center">
-                        <img
-                          src={getLayerThumbnail(first)}
-                          alt=""
-                          className="max-w-full max-h-full object-contain"
-                          loading="lazy"
-                          style={{ transform: `${first.transform.flipX ? 'scaleX(-1)' : ''} ${first.transform.flipY ? 'scaleY(-1)' : ''}` }}
-                        />
-                      </div>
-                      <div className="min-w-0 overflow-hidden pr-7">
-                        {editingLayerName === `${row.baseName}::${row.sizeKey}` ? (
-                          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                            <input
-                              autoFocus
-                              className="text-[11px] text-gray-900 bg-white border border-cyan-400 rounded px-1 py-0 w-full outline-none"
-                              value={editingNameValue}
-                              onChange={(e) => setEditingNameValue(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  const trimmed = editingNameValue.trim();
-                                  if (trimmed) {
-                                    setDesigns(prev => prev.map(d =>
-                                      row.designs.some(rd => rd.id === d.id) ? { ...d, name: trimmed } : d
-                                    ));
-                                  }
-                                  setEditingLayerName(null);
-                                } else if (e.key === 'Escape') {
-                                  setEditingLayerName(null);
-                                }
-                              }}
-                              onBlur={() => {
-                                const trimmed = editingNameValue.trim();
-                                if (trimmed) {
-                                  setDesigns(prev => prev.map(d =>
-                                    row.designs.some(rd => rd.id === d.id) ? { ...d, name: trimmed } : d
-                                  ));
-                                }
-                                setEditingLayerName(null);
-                              }}
-                            />
-                          </div>
-                        ) : (
-                          <p
-                            className="text-[11px] text-gray-900 truncate cursor-text hover:text-cyan-600 transition-colors"
-                            title={t("editor.renameDesign")}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditingLayerName(`${row.baseName}::${row.sizeKey}`);
-                              setEditingNameValue(first.name);
-                            }}
-                          >
-                            {row.baseName}
-                            {row.isResized && <span className="ml-1 text-[9px] text-amber-400/80 font-medium">{t("editor.resized")}</span>}
-                          </p>
-                        )}
-                        <p className={`text-gray-600 truncate tabular-nums ${lang !== 'en' ? 'text-[9px]' : 'text-[10px]'}`} title={formatDimensions(first.widthInches * first.transform.s, first.heightInches * first.transform.s, lang)}>
-                          {formatDimensions(first.widthInches * first.transform.s, first.heightInches * first.transform.s, lang)}
-                        </p>
-                      </div>
-                      <div className="col-start-2 flex min-w-0 items-center gap-1.5">
-                        <div className="flex items-center gap-px shrink-0" onClick={(e) => e.stopPropagation()}>
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            min={1}
-                            max={200}
-                            readOnly={editingCountKey !== `${row.baseName}::${row.sizeKey}`}
-                            autoFocus={editingCountKey === `${row.baseName}::${row.sizeKey}`}
-                            className={`h-6 w-14 rounded border-2 bg-white text-center text-[11px] font-semibold tabular-nums text-gray-800 outline-none shadow-sm transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${editingCountKey === `${row.baseName}::${row.sizeKey}` ? "border-cyan-500" : "cursor-pointer border-gray-300 hover:border-cyan-400 hover:bg-cyan-50"}`}
-                            value={editingCountKey === `${row.baseName}::${row.sizeKey}` ? editingCountValue : String(count)}
-                            onChange={(e) => setEditingCountValue(e.target.value.replace(/\D/g, "").slice(0, 3))}
-                            onFocus={() => {
-                              if (editingCountKey !== `${row.baseName}::${row.sizeKey}`) {
-                                setEditingCountKey(`${row.baseName}::${row.sizeKey}`);
-                                setEditingCountValue(String(count));
-                              }
-                            }}
-                            onBlur={() => {
-                              handleSetGroupCount(row, parseInt(editingCountValue || String(count), 10));
-                              setEditingCountKey(null);
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                handleSetGroupCount(row, parseInt(editingCountValue || String(count), 10));
-                                setEditingCountKey(null);
-                              } else if (e.key === "Escape") {
-                                setEditingCountKey(null);
-                              }
-                              e.stopPropagation();
-                            }}
-                            title="Click to set exact copy count"
-                          />
-                          <div className="flex flex-col gap-px">
-                            <button
-                              type="button"
-                              tabIndex={-1}
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={() => handleSetGroupCount(row, count + 1)}
-                              disabled={count >= 200}
-                              className="flex h-[10px] w-3.5 items-center justify-center rounded-t border border-gray-300 bg-gray-100 text-gray-400 transition-colors hover:bg-cyan-100 hover:text-cyan-600 disabled:opacity-30"
-                              title="Increase copies"
-                            >
-                              <ChevronUp className="h-2.5 w-2.5" strokeWidth={3} />
-                            </button>
-                            <button
-                              type="button"
-                              tabIndex={-1}
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={() => handleSetGroupCount(row, count - 1)}
-                              disabled={count <= 1}
-                              className="flex h-[10px] w-3.5 items-center justify-center rounded-b border border-t-0 border-gray-300 bg-gray-100 text-gray-400 transition-colors hover:bg-cyan-100 hover:text-cyan-600 disabled:opacity-30"
-                              title="Decrease copies"
-                            >
-                              <ChevronDown className="h-2.5 w-2.5" strokeWidth={3} />
-                            </button>
-                          </div>
-                        </div>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const targetCount = editingCountKey === `${row.baseName}::${row.sizeKey}`
-                              ? parseInt(editingCountValue, 10)
-                              : count;
-                            const groupIds = new Set(row.designs.map(d => d.id));
-                            setSelectedDesignIds(groupIds);
-                            setSelectedDesignId(first.id);
-                            if (targetCount !== count) {
-                              handleSetGroupCount(row, targetCount);
-                            } else if (Number.isInteger(targetCount)) {
-                              setTimeout(() => handleAutoArrangeRef.current({ preserveSelection: true }), 0);
-                            }
-                            setEditingCountKey(null);
-                          }}
-                          className="inline-flex h-7 min-w-0 flex-1 items-center justify-center gap-1 rounded-md border border-fuchsia-400 bg-fuchsia-100 px-1.5 text-[9px] font-bold text-fuchsia-800 shadow-sm shadow-fuchsia-500/20 transition-colors hover:bg-fuchsia-200"
-                          title="Duplicate & Arrange"
-                        >
-                          <Copy className="h-3 w-3" />
-                          <span className="whitespace-nowrap">Duplicate &amp; Arrange</span>
-                        </button>
-                      </div>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleDeleteGroup(row.designs.map(d => d.id)); }}
-                        className="absolute right-2.5 top-2.5 p-0.5 rounded hover:bg-gray-200 text-red-500 hover:text-red-600 transition-colors flex-shrink-0"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ); })}
+                      <LayerRow
+                        key={rowKey}
+                        rowKey={rowKey}
+                        row={row}
+                        handlers={layerHandlers}
+                      />
+                    );
+                  })}
                 </div>
               )}
             </div>
           )}
+
+          {/* Uploads library panel — previously uploaded files, re-addable */}
+          <UploadsPanel
+            t={t}
+            onAddFile={handleAddFromUploads}
+            onUnavailable={handleUploadUnavailable}
+          />
         </div>
       </div>
 
@@ -813,6 +759,24 @@ export default function ImageEditorView() {
             null,
             { icon: Droplets, label: t("editor.cleanAlpha"), shortcut: '', action: () => { handleThresholdAlpha(); setContextMenu(null); }, disabled: false },
             null,
+            // Group / Ungroup — surfaced conditionally so the menu stays
+            // compact for the common single-design case. `Group` shows
+            // only when 2+ ungrouped designs are selected; `Ungroup`
+            // shows only when the selection contains at least one
+            // grouped design. The Ctrl+G / Ctrl+Shift+G shortcuts follow
+            // Illustrator/Figma conventions users already know.
+            ...(selectedDesignIds.size >= 2 && !selectedHasGroup
+              ? [
+                  { icon: Group, label: t("editor.groupSelected"), shortcut: 'Ctrl+G', action: () => { handleGroupSelected(); setContextMenu(null); }, disabled: false },
+                  null,
+                ]
+              : []),
+            ...(selectedHasGroup
+              ? [
+                  { icon: Ungroup, label: t("editor.ungroupSelected"), shortcut: 'Ctrl+Shift+G', action: () => { handleUngroupSelected(); setContextMenu(null); }, disabled: false },
+                  null,
+                ]
+              : []),
             { icon: LayoutGrid, label: t("editor.selectAll"), shortcut: 'Ctrl+A', action: () => { handleMultiSelect(designs.map(d => d.id)); setContextMenu(null); }, disabled: designs.length === 0 },
             { icon: XCircle, label: t("editor.deselect"), shortcut: 'Esc', action: () => { handleSelectDesign(null); setContextMenu(null); }, disabled: false },
           ] as Array<{ icon: React.ComponentType<any>; label: string; shortcut: string; action: () => void; disabled: boolean } | null>).map((item, i) =>

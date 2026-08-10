@@ -4,3 +4,18 @@
 - [Copy-count arrangement](copy-count-arrangement.md) — layer copy-count changes must repack the whole sheet, not use selected-only obstacle mode.
 - [Low-zoom selection controls](low-zoom-selection-controls.md) — shrink corner handles and rotation hit zones only below 100% zoom.
 - [Halftone resize pipeline](halftone-resize-pipeline.md) — rebuild halftone screens from original pixels at the design’s final physical size.
+- [Legacy arrangement boundary](legacy-arrangement-boundary.md) — preserve the legacy worker packing/ranking behavior while keeping group super-item mapping in the editor layer.
+- [Design resize sheet expansion](design-resize-sheet-expansion.md) — promote the gangsheet before applying a manual design height beyond the current bound.
+- [Replicate upscale timeouts](replicate-upscale-timeouts.md) — keep synchronous waits below Replicate's 60-second header limit and use a separate outer timeout.
+- [Editor draft recovery](editor-draft-recovery.md) — use IndexedDB for debounced editor snapshots and uploaded file blobs so browser resets are recoverable.
+- [Preview render throttling](preview-render-throttling.md) — rAF-throttle continuous zoom/pan commits, immediate-commit one-shot zoom actions, and keep the composite signature out of the per-frame path.
+- [Preview worker boundary](preview-worker-boundary.md) — offload preview-only thumbnails/color work while leaving export and cart rendering unchanged.
+- [Editor file rehydration](editor-file-rehydration.md) — repair invalid image references from IndexedDB once before retrying arrange, export, or cart work.
+- [Local upscale provider](local-upscale-provider.md) — local ncnn-Vulkan inference is the default deployment path with a serialized queue, bounded cache, and alpha restoration.
+- [Restored layer assets](restored-layer-asset-normalization.md) — crop padded transparent sources only when alpha bounds match saved physical dimensions.
+- [Parent postMessage memory guard](postmessage-memory-guard.md) — preserve the message contract while converting structured-clone memory failures into recoverable editor errors.
+- [Spot color input boundary](spot-color-input-boundary.md) — normalize optional extracted-color flags before PDF spot-color tracing.
+- [GitHub branch audit](github-branch-audit.md) — the July feature branch is a stale monolithic snapshot; preserve the current modular pipeline and integration boundaries.
+- [Authenticated GitHub sync](authenticated-github-sync.md) — use the attached GitHub connector when local HTTPS credentials reject fetch/pull.
+- [Gangsheet height lists](gangsheet-height-lists.md) — dedupe + numerically sort Shopify variant height lists before any "next size up" or MAX lookup.
+- [Halftone selected overlay](halftone-selected-overlay.md) — HD detail overlay must render 1:1 (never downscale halftone dots) and the main canvas draws only the 6px ring under it.

@@ -44,6 +44,9 @@ export {
   getRotatedBounds,
   getEffectiveHeight,
   getStampExtra,
+  getDesignSelectionUnits,
+  getDesignSelectionBounds,
+  rotateDesignSelection,
   exportWorkerResultToBlob,
 };
 
@@ -300,6 +303,169 @@ function clampDesignToArtboard(
     ny = Math.max(minNy, Math.min(maxNy, ny));
   }
   return { nx, ny };
+}
+
+export type DesignSelectionUnit = {
+  key: string;
+  members: Array<{
+    id: string;
+    widthInches: number;
+    heightInches: number;
+    transform: ImageTransform;
+    printFileName?: boolean;
+    groupId?: string;
+  }>;
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+};
+
+/**
+ * Return selected designs as transform units. A group is always expanded to
+ * all of its members, even if a stale caller passes only one member id. This
+ * is the same super-item model used by auto-arrange and prevents tools from
+ * accidentally moving one layer out of a group.
+ */
+function getDesignSelectionUnits(
+  designs: DesignSelectionUnit["members"],
+  ids: Set<string>,
+  artboardWidth: number,
+  artboardHeight: number,
+): DesignSelectionUnit[] {
+  const selectedGroupIds = new Set(
+    designs
+      .filter(d => ids.has(d.id) && d.groupId)
+      .map(d => d.groupId as string),
+  );
+  const byKey = new Map<string, DesignSelectionUnit>();
+
+  for (const d of designs) {
+    const selected = ids.has(d.id) || (d.groupId ? selectedGroupIds.has(d.groupId) : false);
+    if (!selected) continue;
+    const key = d.groupId ? `group:${d.groupId}` : `design:${d.id}`;
+    const bounds = getRotatedBounds(d);
+    const cx = d.transform.nx * artboardWidth;
+    const cy = d.transform.ny * artboardHeight;
+    const minX = cx + bounds.minX;
+    const maxX = cx + bounds.maxX;
+    const minY = cy + bounds.minY;
+    const maxY = cy + bounds.maxY;
+    const unit = byKey.get(key);
+    if (unit) {
+      unit.members.push(d);
+      unit.minX = Math.min(unit.minX, minX);
+      unit.maxX = Math.max(unit.maxX, maxX);
+      unit.minY = Math.min(unit.minY, minY);
+      unit.maxY = Math.max(unit.maxY, maxY);
+    } else {
+      byKey.set(key, {
+        key,
+        members: [d],
+        minX,
+        maxX,
+        minY,
+        maxY,
+      });
+    }
+  }
+  return Array.from(byKey.values());
+}
+
+function getDesignSelectionBounds(
+  designs: DesignSelectionUnit["members"],
+  ids: Set<string>,
+  artboardWidth: number,
+  artboardHeight: number,
+): { minX: number; maxX: number; minY: number; maxY: number } | null {
+  const units = getDesignSelectionUnits(designs, ids, artboardWidth, artboardHeight);
+  if (units.length === 0) return null;
+  return units.reduce(
+    (bounds, unit) => ({
+      minX: Math.min(bounds.minX, unit.minX),
+      maxX: Math.max(bounds.maxX, unit.maxX),
+      minY: Math.min(bounds.minY, unit.minY),
+      maxY: Math.max(bounds.maxY, unit.maxY),
+    }),
+    {
+      minX: Infinity,
+      maxX: -Infinity,
+      minY: Infinity,
+      maxY: -Infinity,
+    },
+  );
+}
+
+/**
+ * Rotate a complete selection around its combined bounding-box center.
+ * Group members keep their groupId and their relative geometry; only the
+ * selection translation and each member's visual rotation change.
+ */
+function rotateDesignSelection(
+  designs: DesignSelectionUnit["members"],
+  ids: Set<string>,
+  angleDeg: number,
+  artboardWidth: number,
+  artboardHeight: number,
+): Map<string, { nx: number; ny: number; rotation: number }> | null {
+  const targets = designs.filter(d => ids.has(d.id) || (d.groupId && designs.some(
+    member => ids.has(member.id) && member.groupId === d.groupId,
+  )));
+  const bounds = getDesignSelectionBounds(
+    designs,
+    ids,
+    artboardWidth,
+    artboardHeight,
+  );
+  if (targets.length === 0 || !bounds) return new Map();
+
+  // Selection bounds are already expressed in artboard pixels.
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerY = (bounds.minY + bounds.maxY) / 2;
+  const radians = (angleDeg * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const candidates = targets.map(d => {
+    const px = d.transform.nx * artboardWidth - centerX;
+    const py = d.transform.ny * artboardHeight - centerY;
+    return {
+      d,
+      nx: (centerX + px * cos - py * sin) / artboardWidth,
+      ny: (centerY + px * sin + py * cos) / artboardHeight,
+      rotation: ((d.transform.rotation + angleDeg) % 360 + 360) % 360,
+    };
+  });
+
+  let nextMinX = Infinity;
+  let nextMaxX = -Infinity;
+  let nextMinY = Infinity;
+  let nextMaxY = -Infinity;
+  for (const { d, nx, ny, rotation } of candidates) {
+    const next = {
+      ...d,
+      transform: { ...d.transform, nx, ny, rotation },
+    };
+    const nextBounds = getRotatedBounds(next);
+    const cx = nx * artboardWidth;
+    const cy = ny * artboardHeight;
+    nextMinX = Math.min(nextMinX, cx + nextBounds.minX);
+    nextMaxX = Math.max(nextMaxX, cx + nextBounds.maxX);
+    nextMinY = Math.min(nextMinY, cy + nextBounds.minY);
+    nextMaxY = Math.max(nextMaxY, cy + nextBounds.maxY);
+  }
+
+  if (
+    nextMinX < 0 ||
+    nextMaxX > artboardWidth ||
+    nextMinY < 0 ||
+    nextMaxY > artboardHeight
+  ) {
+    return null;
+  }
+  return new Map(candidates.map(({ d, nx, ny, rotation }) => [
+    d.id,
+    { nx, ny, rotation },
+  ]));
 }
 
 export let exportReqCounter = 0;
