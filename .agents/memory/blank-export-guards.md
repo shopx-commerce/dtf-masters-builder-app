@@ -15,3 +15,9 @@ description: Why gangsheet exports validate their own pixel output, and the rule
 - On any mid-stream encode failure, abort the CompressionStream writer, cancel the reader, await the drain promise, and release bitmap/stamp caches before rethrowing — the worker may be reused and these devices are already memory-starved.
 - Known gap: the fluorescent production PDF path (`exportProductionPdf`) has no equivalent final check.
 - The `.png.png` double extension in R2 content-disposition comes from the Shopify/Cloudflare shell (it appends `.png` to an already-suffixed name); not fixable in this repo.
+
+## Edit-mode reuse escape hatch
+
+The edit flow's content-signature shortcut reuses the stored production file when nothing changed — it inherently trusts that file, so a corrupt upload persists across every "Update design" until something forces a rebuild. The "Regenerate file" checkbox (edit mode only) is that escape hatch: it forces a full export + upload to the same production key, overwriting in place (production URLs are stable by design; only the `?v=` param bumps).
+
+**Rule:** the forced-regenerate flag may reset **only** on a trusted `dtf-builder-cart-status: done` (guarded by `isTrustedShellMessage` + `isTrustedCartStatus`), never at post time. **Why:** the shell reports failure asynchronously — it never enters the submit handler's catch — so resetting when the message is posted would send the retry straight back through the reuse path with the bad file intact.
