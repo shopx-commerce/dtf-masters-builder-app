@@ -1,0 +1,314 @@
+[1G[0K⠙[1G[0K
+> rest-express@1.0.0 dev
+> NODE_ENV=development tsx server/index.ts
+
+[1G[0K⠙[1G[0K5:36:52 AM [express] serving on port 5000
+Browserslist: browsers data (caniuse-lite) is 22 months old. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m5:40:09 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/controls-section.tsx, /src/index.css?v=NtlZg1Q6uxMD_Ft__lpbu[22m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m5:40:09 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/preview-section.tsx, /src/index.css?v=NtlZg1Q6uxMD_Ft__lpbu[22m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m5:40:09 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css?v=NtlZg1Q6uxMD_Ft__lpbu, /src/components/image-editor/image-editor-provider.tsx[22m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m5:40:09 AM[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2msrc/lib/bg-removal-worker.ts[22m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m5:40:09 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css?v=NtlZg1Q6uxMD_Ft__lpbu, /src/components/image-editor/image-editor-provider.tsx, /src/components/controls-section.tsx[22m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m5:40:09 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css?v=NtlZg1Q6uxMD_Ft__lpbu, /src/components/image-editor/image-editor-provider.tsx[22m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m5:40:09 AM[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2msrc/lib/spot-color-worker.ts[22m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m5:40:09 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/App.tsx?v=NtlZg1Q6uxMD_Ft__lpbu, /src/index.css?v=NtlZg1Q6uxMD_Ft__lpbu, /src/pages/embed.tsx, /src/pages/landing.tsx, /src/pages/sticker-maker.tsx, /src/components/image-editor/image-editor-provider.tsx[22m
+[replit-cartographer] Error processing /home/runner/workspace/client/src/components/controls-section.tsx: SyntaxError: Identifier 'autoAssignChannel' has already been declared. (147:9)
+    at toParseError [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parse-error.ts:95:45[90m)[39m
+    at raise [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/tokenizer/index.ts:1497:19[90m)[39m
+    at checkRedeclarationInScope [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/util/scope.ts:155:19[90m)[39m
+    at declareName [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/util/scope.ts:109:12[90m)[39m
+    at declareName [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/plugins/typescript/scope.ts:89:11[90m)[39m
+    at registerFunctionStatementId [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/statement.ts:1717:16[90m)[39m
+    at registerFunctionStatementId [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/plugins/typescript/index.ts:2547:15[90m)[39m
+    at parseFunction [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/statement.ts:1680:12[90m)[39m
+    at parseFunctionStatement [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/statement.ts:1053:17[90m)[39m
+    at parseStatementContent [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/statement.ts:480:21[90m)[39m
+    at parseStatementContent [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/plugins/typescript/index.ts:3056:20[90m)[39m
+    at parseStatementLike [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/statement.ts:437:17[90m)[39m
+    at parseModuleItem [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/statement.ts:374:17[90m)[39m
+    at parseBlockOrModuleBlockBody [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/statement.ts:1419:16[90m)[39m
+    at parseBlockBody [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/statement.ts:1393:10[90m)[39m
+    at parseProgram [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/statement.ts:225:10[90m)[39m
+    at parseTopLevel [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/statement.ts:203:25[90m)[39m
+    at parse [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/index.ts:90:10[90m)[39m
+    at parse [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/plugins/typescript/index.ts:4192:20[90m)[39m
+    at parse [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/index.ts:92:38[90m)[39m
+    at TransformPluginContext.handler [90m(/home/runner/workspace/[39mnode_modules/[4m@replit/vite-plugin-cartographer[24m/dist/index.mjs:74:23[90m)[39m
+    at PluginContainer.transform [90m(/home/runner/workspace/[39mnode_modules/[4mvite[24m/dist/node/chunks/dep-CHZK6zbr.js:49099:19[90m)[39m
+    at loadAndTransform [90m(/home/runner/workspace/[39mnode_modules/[4mvite[24m/dist/node/chunks/dep-CHZK6zbr.js:51931:49[90m)[39m
+    at async viteTransformMiddleware [90m(/home/runner/workspace/[39mnode_modules/[4mvite[24m/dist/node/chunks/dep-CHZK6zbr.js:62031:24[90m)[39m {
+  code: [32m'BABEL_PARSER_SYNTAX_ERROR'[39m,
+  reasonCode: [32m'VarRedeclaration'[39m,
+  loc: Position { line: [33m147[39m, column: [33m9[39m, index: [33m5834[39m },
+  pos: [33m5834[39m,
+  syntaxPlugin: [90mundefined[39m
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m5:40:09 AM[22m [31m[1m[vite][22m[39m [31mInternal server error: /home/runner/workspace/client/src/components/controls-section.tsx: Identifier 'autoAssignChannel' has already been declared. (147:9)
+
+[0m [90m 145 |[31m [90m *   285–345        → FM  (magentas, purples)[31m
+ [90m 146 |[31m [90m */[31m
+[31m[1m>[22m[31m[90m 147 |[31m [36mfunction[31m autoAssignChannel(
+ [90m     |[31m          [31m[1m^[22m[31m
+ [90m 148 |[31m   rgb[33m:[31m { r[33m:[31m number[33m;[31m g[33m:[31m number[33m;[31m b[33m:[31m number }
+ [90m 149 |[31m )[33m:[31m [32m'spotFluorY'[31m [33m|[31m [32m'spotFluorM'[31m [33m|[31m [32m'spotFluorG'[31m [33m|[31m [32m'spotFluorOrange'[31m [33m|[31m [36mnull[31m {
+ [90m 150 |[31m   [36mconst[31m { h[33m,[31m s[33m,[31m l } [33m=[31m rgbToHsl(rgb[33m.[31mr[33m,[31m rgb[33m.[31mg[33m,[31m rgb[33m.[31mb)[33m;[31m[0m[39m
+  Plugin: [35mvite:react-babel[39m
+  File: [36m/home/runner/workspace/client/src/components/controls-section.tsx[39m:147:9
+[33m  145|   *   285–345        → FM  (magentas, purples)
+  146|   */
+  147|  function autoAssignChannel(
+     |           ^
+  148|    rgb: { r: number; g: number; b: number }
+  149|  ): 'spotFluorY' | 'spotFluorM' | 'spotFluorG' | 'spotFluorOrange' | null {[39m
+      at toParseError (/home/runner/workspace/node_modules/@babel/parser/src/parse-error.ts:95:45)
+      at raise (/home/runner/workspace/node_modules/@babel/parser/src/tokenizer/index.ts:1497:19)
+      at checkRedeclarationInScope (/home/runner/workspace/node_modules/@babel/parser/src/util/scope.ts:155:19)
+      at declareName (/home/runner/workspace/node_modules/@babel/parser/src/util/scope.ts:109:12)
+      at declareName (/home/runner/workspace/node_modules/@babel/parser/src/plugins/typescript/scope.ts:89:11)
+      at registerFunctionStatementId (/home/runner/workspace/node_modules/@babel/parser/src/parser/statement.ts:1717:16)
+      at registerFunctionStatementId (/home/runner/workspace/node_modules/@babel/parser/src/plugins/typescript/index.ts:2547:15)
+      at parseFunction (/home/runner/workspace/node_modules/@babel/parser/src/parser/statement.ts:1680:12)
+      at parseFunctionStatement (/home/runner/workspace/node_modules/@babel/parser/src/parser/statement.ts:1053:17)
+      at parseStatementContent (/home/runner/workspace/node_modules/@babel/parser/src/parser/statement.ts:480:21)
+      at parseStatementContent (/home/runner/workspace/node_modules/@babel/parser/src/plugins/typescript/index.ts:3056:20)
+      at parseStatementLike (/home/runner/workspace/node_modules/@babel/parser/src/parser/statement.ts:437:17)
+      at parseModuleItem (/home/runner/workspace/node_modules/@babel/parser/src/parser/statement.ts:374:17)
+      at parseBlockOrModuleBlockBody (/home/runner/workspace/node_modules/@babel/parser/src/parser/statement.ts:1419:16)
+      at parseBlockBody (/home/runner/workspace/node_modules/@babel/parser/src/parser/statement.ts:1393:10)
+      at parseProgram (/home/runner/workspace/node_modules/@babel/parser/src/parser/statement.ts:225:10)
+      at parseTopLevel (/home/runner/workspace/node_modules/@babel/parser/src/parser/statement.ts:203:25)
+      at parse (/home/runner/workspace/node_modules/@babel/parser/src/parser/index.ts:90:10)
+      at parse (/home/runner/workspace/node_modules/@babel/parser/src/plugins/typescript/index.ts:4192:20)
+      at parse (/home/runner/workspace/node_modules/@babel/parser/src/index.ts:92:38)
+      at parser (/home/runner/workspace/node_modules/@babel/core/src/parser/index.ts:28:19)
+      at parser.next (<anonymous>)
+      at normalizeFile (/home/runner/workspace/node_modules/@babel/core/src/transformation/normalize-file.ts:50:24)
+      at normalizeFile.next (<anonymous>)
+      at run (/home/runner/workspace/node_modules/@babel/core/src/transformation/index.ts:40:36)
+      at run.next (<anonymous>)
+      at transform (/home/runner/workspace/node_modules/@babel/core/src/transform.ts:29:20)
+      at transform.next (<anonymous>)
+      at step (/home/runner/workspace/node_modules/gensync/index.js:261:32)
+      at /home/runner/workspace/node_modules/gensync/index.js:273:13
+      at async.call.result.err.err (/home/runner/workspace/node_modules/gensync/index.js:223:11)
+      at /home/runner/workspace/node_modules/gensync/index.js:189:28
+      at <anonymous> (/home/runner/workspace/node_modules/@babel/core/src/gensync-utils/async.ts:90:7)
+      at /home/runner/workspace/node_modules/gensync/index.js:113:33
+      at step (/home/runner/workspace/node_modules/gensync/index.js:287:14)
+      at /home/runner/workspace/node_modules/gensync/index.js:273:13
+      at async.call.result.err.err (/home/runner/workspace/node_modules/gensync/index.js:223:11)
+[1G[0K⠙[1G[0K[1mnpm[22m [96mnotice[39m
+[1mnpm[22m [96mnotice[39m New [31mmajor[39m version of npm available! [31m10.8.2[39m -> [34m12.0.2[39m
+[1mnpm[22m [96mnotice[39m Changelog: [34mhttps://github.com/npm/cli/releases/tag/v12.0.2[39m
+[1mnpm[22m [96mnotice[39m To update run: [4mnpm install -g npm@12.0.2[24m
+[1mnpm[22m [96mnotice[39m
+[1G[0K⠙[1G[0K

@@ -1,0 +1,130 @@
+
+> rest-express@1.0.0 dev
+> NODE_ENV=development tsx server/index.ts
+
+[1G[0KRe-optimizing dependencies because lockfile has changed
+6:03:29 AM [express] serving on port 5000
+Browserslist: browsers data (caniuse-lite) is 22 months old. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m6:04:33 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css?v=JDoEt4QWlJM2F6M6Q3DBQ, /src/components/image-editor/image-editor-provider.tsx[22m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m6:04:35 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/image-editor/image-editor-provider.tsx, /src/index.css?v=JDoEt4QWlJM2F6M6Q3DBQ[22m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m6:04:38 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css?v=JDoEt4QWlJM2F6M6Q3DBQ, /src/components/image-editor/image-editor-provider.tsx[22m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m6:04:45 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css?v=JDoEt4QWlJM2F6M6Q3DBQ, /src/components/image-editor/image-editor-provider.tsx[22m [33m(x2)[39m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m6:05:25 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css?v=JDoEt4QWlJM2F6M6Q3DBQ, /src/components/image-editor/image-editor-provider.tsx[22m [33m(x3)[39m
+[1G[0K⠙[1G[0K
