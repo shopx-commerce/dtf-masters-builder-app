@@ -1,6 +1,7 @@
 import { useCallback, useRef } from "react";
 import { EXPORT_DPI, EXPORT_TIMEOUT_MS } from "./constants";
 import {
+  assertExportCanvasNotBlank,
   canUseMemoryEfficientPngExport,
   decodePrintSourceAtSize,
   exportPngWithWorker,
@@ -339,6 +340,7 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
             if (design.alphaThresholded) { ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high'; }
             decoded?.close();
           }
+          assertExportCanvasNotBlank(exportCanvas, exportSrc.length);
           const rawBlob: Blob = await new Promise((res, rej) =>
             exportCanvas.toBlob((b) => b ? res(b) : rej(new Error('toBlob failed')), 'image/png'));
           exportCanvas.width = 0;

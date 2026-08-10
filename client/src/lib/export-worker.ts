@@ -334,7 +334,15 @@ async function drawDesignsOnStrip(
     const { stamp, aabbW, aabbH } = await getOrBuildStamp(
       d, p, bitmap, exportDpi, stampCache, stampCacheState,
     );
-    if (!stamp) continue;
+    if (!stamp) {
+      // A null stamp means the browser refused a 2d context for the design's
+      // pre-render canvas — graphics memory is exhausted. Skipping it would
+      // print an incomplete sheet, so abort the export instead.
+      throw new Error(
+        `Could not render "${d.name || 'a design'}" onto the sheet — the device ran out of ` +
+        'graphics memory. Close other apps or tabs and try again, or reduce the sheet size.',
+      );
+    }
 
     // Placement chosen so the design's pivot lands on the same integer pixel
     // as the pre-cache code path (Math.round of the design's absolute center),
@@ -437,6 +445,16 @@ function isRowAllZero(pixels: Uint8ClampedArray, offset: number, length: number)
   return true;
 }
 
+// The blank-sheet guard message. Thrown when a sheet that contains designs
+// encodes to 100% transparent pixels — the browser (typically iOS under
+// graphics-memory pressure) silently rendered nothing instead of erroring.
+// Without this guard the blank uploads successfully and a customer can order
+// an empty print at a perfectly valid production URL.
+const BLANK_EXPORT_ERROR =
+  'The exported sheet came out blank — the browser rendered no pixels ' +
+  '(this usually means the device ran out of memory). Close other apps or ' +
+  'tabs and try again, or reduce the sheet size.';
+
 async function writeStripRows(
   writer: WritableStreamDefaultWriter<Uint8Array>,
   pixels: Uint8ClampedArray,
@@ -446,7 +464,8 @@ async function writeStripRows(
   bpp: number,
   prevRow: Uint8Array,
   scratch: FilterScratch,
-) {
+): Promise<boolean> {
+  let sawInk = false;
   for (let startRow = 0; startRow < stripH; startRow += BATCH_ROWS) {
     const endRow = Math.min(startRow + BATCH_ROWS, stripH);
     const batchCount = endRow - startRow;
@@ -460,12 +479,14 @@ async function writeStripRows(
         // batch is already zero, so filter byte + payload are both correct.
         prevRow.fill(0);
       } else {
+        sawInk = true;
         filterRowAdaptive(cur, prevRow, bpp, rowBytes, scratch, batch, r * filteredRowLen);
         prevRow.set(cur); // this row is the "up" reference for the next
       }
     }
     await writer.write(batch);
   }
+  return sawInk;
 }
 
 async function buildPngStreaming(input: ExportInput): Promise<Uint8Array> {
@@ -549,13 +570,44 @@ async function buildPngStreaming(input: ExportInput): Promise<Uint8Array> {
   const stripHeight = stripHeightFor(outW);
   const totalStrips = Math.max(1, Math.ceil(outH / stripHeight));
   let completedStrips = 0;
+  // Set when any encoded row contains a non-zero byte. Free to compute — the
+  // per-row zero scan already runs for the PNG filter fast path.
+  let sawInk = false;
 
-  for (let stripY = 0; stripY < outH; stripY += stripHeight) {
-    const stripH = Math.min(stripHeight, outH - stripY);
+  try {
+    for (let stripY = 0; stripY < outH; stripY += stripHeight) {
+      const stripH = Math.min(stripHeight, outH - stripY);
 
-    if (!stripHasContent(designBounds, stripY, stripH)) {
-      await writeEmptyRows(writer, outW, stripH, emptyRow, filteredRowLen);
-      prevRow.fill(0); // the rows just written are fully transparent (zero)
+      if (!stripHasContent(designBounds, stripY, stripH)) {
+        await writeEmptyRows(writer, outW, stripH, emptyRow, filteredRowLen);
+        prevRow.fill(0); // the rows just written are fully transparent (zero)
+        completedStrips++;
+        self.postMessage({
+          type: 'progress',
+          requestId: input.requestId,
+          phase: 'rendering',
+          completed: completedStrips,
+          total: totalStrips,
+        });
+        continue;
+      }
+
+      if (!stripCanvas || stripCanvas.width !== outW || stripCanvas.height !== stripH) {
+        stripCanvas = new OffscreenCanvas(outW, stripH);
+        stripCtx = stripCanvas.getContext('2d', { alpha: true, willReadFrequently: true });
+        if (!stripCtx) throw new Error('Failed to get strip canvas context');
+      }
+      const ctx = stripCtx!;
+      ctx.clearRect(0, 0, outW, stripH);
+      await drawDesignsOnStrip(
+        ctx, designBounds, stripY, stripH, exportDpi,
+        sources, bitmapCache, stampCache, stampCacheState,
+      );
+
+      const imageData = ctx.getImageData(0, 0, outW, stripH);
+      if (await writeStripRows(writer, imageData.data, stripH, filteredRowLen, rowBytes, bpp, prevRow, scratch)) {
+        sawInk = true;
+      }
       completedStrips++;
       self.postMessage({
         type: 'progress',
@@ -564,62 +616,69 @@ async function buildPngStreaming(input: ExportInput): Promise<Uint8Array> {
         completed: completedStrips,
         total: totalStrips,
       });
-      continue;
     }
 
-    if (!stripCanvas || stripCanvas.width !== outW || stripCanvas.height !== stripH) {
-      stripCanvas = new OffscreenCanvas(outW, stripH);
-      stripCtx = stripCanvas.getContext('2d', { alpha: true, willReadFrequently: true });
-      if (!stripCtx) throw new Error('Failed to get strip canvas context');
+    if (stripCanvas) {
+      stripCanvas.width = 0;
+      stripCanvas.height = 0;
     }
-    const ctx = stripCtx!;
-    ctx.clearRect(0, 0, outW, stripH);
-    await drawDesignsOnStrip(
-      ctx, designBounds, stripY, stripH, exportDpi,
-      sources, bitmapCache, stampCache, stampCacheState,
-    );
 
-    const imageData = ctx.getImageData(0, 0, outW, stripH);
-    await writeStripRows(writer, imageData.data, stripH, filteredRowLen, rowBytes, bpp, prevRow, scratch);
-    completedStrips++;
+    // A sheet that contains designs must have produced at least one
+    // non-transparent row. All-zero output means every draw silently failed
+    // (iOS graphics-memory exhaustion) or every design landed outside the
+    // sheet — fail loudly instead of uploading a blank production file.
+    if (designs.length > 0 && !sawInk) {
+      throw new Error(BLANK_EXPORT_ERROR);
+    }
+
+    // Release the source-bitmap and stamp caches so their pixel storage can be
+    // reclaimed before the final PNG chunks are assembled. Stamps and bitmaps
+    // can add up to hundreds of megabytes on a duplicate-heavy 370" sheet.
+    for (const bitmap of bitmapCache.values()) {
+      try { bitmap.close(); } catch {}
+    }
+    bitmapCache.clear();
+    for (const stamp of stampCache.values()) {
+      stamp.width = 0;
+      stamp.height = 0;
+    }
+    stampCache.clear();
+    stampCacheState.totalBytes = 0;
+
     self.postMessage({
       type: 'progress',
       requestId: input.requestId,
-      phase: 'rendering',
-      completed: completedStrips,
-      total: totalStrips,
+      phase: 'finalizing',
+      completed: 0,
+      total: 1,
     });
-  }
 
-  if (stripCanvas) {
-    stripCanvas.width = 0;
-    stripCanvas.height = 0;
+    await writer.close();
+    await readPromise;
+  } catch (err) {
+    // The encode failed mid-stream (blank sheet, a design that could not be
+    // rendered, or memory exhaustion). Tear the compression pipeline down so
+    // the worker holds no dangling stream state or pixel caches, then rethrow
+    // for the caller's error path.
+    try { writer.abort(err); } catch { /* writer already closed or errored */ }
+    try { reader.cancel(); } catch { /* reader already done */ }
+    await readPromise.catch(() => {});
+    if (stripCanvas) {
+      stripCanvas.width = 0;
+      stripCanvas.height = 0;
+    }
+    for (const bitmap of bitmapCache.values()) {
+      try { bitmap.close(); } catch {}
+    }
+    bitmapCache.clear();
+    for (const stamp of stampCache.values()) {
+      stamp.width = 0;
+      stamp.height = 0;
+    }
+    stampCache.clear();
+    stampCacheState.totalBytes = 0;
+    throw err;
   }
-
-  // Release the source-bitmap and stamp caches so their pixel storage can be
-  // reclaimed before the final PNG chunks are assembled. Stamps and bitmaps
-  // can add up to hundreds of megabytes on a duplicate-heavy 370" sheet.
-  for (const bitmap of bitmapCache.values()) {
-    try { bitmap.close(); } catch {}
-  }
-  bitmapCache.clear();
-  for (const stamp of stampCache.values()) {
-    stamp.width = 0;
-    stamp.height = 0;
-  }
-  stampCache.clear();
-  stampCacheState.totalBytes = 0;
-
-  self.postMessage({
-    type: 'progress',
-    requestId: input.requestId,
-    phase: 'finalizing',
-    completed: 0,
-    total: 1,
-  });
-
-  await writer.close();
-  await readPromise;
 
   let totalCompressed = 0;
   for (const p of compressedParts) totalCompressed += p.length;
@@ -697,6 +756,24 @@ async function runExportLegacy(input: ExportInput): Promise<Uint8Array> {
     try { bitmap.close(); } catch {}
   }
   bitmapCache.clear();
+
+  // iOS silently returns a transparent canvas when the allocation exceeds the
+  // tab's graphics-memory budget — drawImage never throws. Scan the alpha
+  // channel at native resolution in horizontal bands (early exit on the first
+  // opaque pixel) so even a single tiny design counts as ink; a downsampled
+  // probe could average sparse artwork below one alpha step and false-flag it.
+  if (designs.length > 0) {
+    const bandRows = Math.max(1, Math.floor(4_000_000 / outW));
+    let ink = false;
+    for (let y = 0; y < outH && !ink; y += bandRows) {
+      const h = Math.min(bandRows, outH - y);
+      const alpha = ctx.getImageData(0, y, outW, h).data;
+      for (let i = 3; i < alpha.length; i += 4) {
+        if (alpha[i] !== 0) { ink = true; break; }
+      }
+    }
+    if (!ink) throw new Error(BLANK_EXPORT_ERROR);
+  }
 
   const rawBlob = await canvas.convertToBlob({ type: 'image/png' });
   const rawBuf = new Uint8Array(await rawBlob.arrayBuffer());

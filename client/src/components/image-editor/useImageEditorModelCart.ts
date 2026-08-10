@@ -4,6 +4,7 @@ import { EXPORT_DPI, EXPORT_TIMEOUT_MS } from "./constants";
 import {
   canUseMemoryEfficientPngExport,
   decodePrintSourceAtSize,
+  assertExportCanvasNotBlank,
   exportPngWithWorker,
   getExportMemoryWarning,
   injectPngDpi,
@@ -406,6 +407,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
             ctx.restore();
             decoded?.close();
           }
+          assertExportCanvasNotBlank(exportCanvas, exportDesignsSource.length);
           const rawBlob: Blob = await new Promise((res, rej) =>
             exportCanvas.toBlob((b) => (b ? res(b) : rej(new Error('toBlob failed'))), 'image/png'),
           );

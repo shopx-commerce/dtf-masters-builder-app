@@ -456,6 +456,37 @@ export async function exportPngWithWorker(options: {
   return { blob: new Blob([result.buffer], { type: "image/png" }) };
 }
 
+/**
+ * Throws when a sheet that contains designs rendered as 100% transparent.
+ * iOS silently no-ops canvas work past the tab's graphics-memory budget, so a
+ * "successful" export can be a blank file; catching it before encode/upload
+ * turns a silent blank production file into a visible, retryable error.
+ *
+ * Scans the alpha channel at native resolution in horizontal bands with an
+ * early exit on the first opaque pixel — a downsampled probe could average a
+ * tiny valid design below one alpha step and wrongly reject a good sheet.
+ */
+export function assertExportCanvasNotBlank(canvas: HTMLCanvasElement, designCount: number): void {
+  if (designCount <= 0) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return; // cannot verify — never block a healthy export on probe failure
+  const { width, height } = canvas;
+  if (!width || !height) return;
+  const bandRows = Math.max(1, Math.floor(4_000_000 / width));
+  for (let y = 0; y < height; y += bandRows) {
+    const h = Math.min(bandRows, height - y);
+    const alpha = ctx.getImageData(0, y, width, h).data;
+    for (let i = 3; i < alpha.length; i += 4) {
+      if (alpha[i] !== 0) return;
+    }
+  }
+  throw new Error(
+    "The exported sheet came out blank — the browser rendered no pixels " +
+    "(this usually means the device ran out of memory). Close other apps or " +
+    "tabs and try again, or reduce the sheet size.",
+  );
+}
+
 let _arrangeWorker: Worker | null = null;
 export function getArrangeWorker(): Worker | null {
   if (!_arrangeWorker) {
