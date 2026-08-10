@@ -8,3 +8,11 @@ Multi-selection rotation is a geometric group operation: rotate every design cen
 **Why:** Independent per-design clamping made selected designs rotate in place and pull into each other near canvas limits; shifting at the edge allowed a rotation to continue beyond the user’s intended bounds.
 
 **How to apply:** Keep drag-handle rotation and toolbar/preset rotation on the same group-geometry path.
+
+Selection bounds returned by the shared transform helpers are artboard pixels; only normalized
+`nx`/`ny` values should be divided by artboard dimensions.
+
+**Why:** Mixing normalized and pixel bounds makes the group rotation center wildly incorrect on
+tall sheets and can cause valid rotations to be rejected at the artboard edge.
+
+**How to apply:** Keep center/bounds calculations in pixel space until writing transforms back.

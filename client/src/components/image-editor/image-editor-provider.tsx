@@ -8,70 +8,14 @@ import { useImageEditorModelExport } from "./useImageEditorModelExport";
 import { useImageEditorModelCart } from "./useImageEditorModelCart";
 import { useCartPreviewUploader } from "./use-cart-preview-uploader";
 import type { EditorActionToolbarProps } from "./editor-action-toolbar";
-import { clampDesignToArtboard, getRotatedBounds } from "./utils";
-import type { DesignItem } from "@/lib/types";
+import {
+  clampDesignToArtboard,
+  getDesignSelectionBounds,
+  getDesignSelectionUnits,
+  rotateDesignSelection,
+} from "./utils";
 
 export type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
-
-function rotateDesignGroup(
-  designs: DesignItem[],
-  ids: Set<string>,
-  angleDeg: number,
-  artboardWidth: number,
-  artboardHeight: number,
-) {
-  const targets = designs.filter(d => ids.has(d.id));
-  if (targets.length === 0) return new Map<string, { nx: number; ny: number; rotation: number }>();
-
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const d of targets) {
-    const bounds = getRotatedBounds(d);
-    const cx = d.transform.nx * artboardWidth;
-    const cy = d.transform.ny * artboardHeight;
-    minX = Math.min(minX, cx + bounds.minX);
-    maxX = Math.max(maxX, cx + bounds.maxX);
-    minY = Math.min(minY, cy + bounds.minY);
-    maxY = Math.max(maxY, cy + bounds.maxY);
-  }
-
-  const centerX = (minX + maxX) / 2;
-  const centerY = (minY + maxY) / 2;
-  const radians = (angleDeg * Math.PI) / 180;
-  const cos = Math.cos(radians);
-  const sin = Math.sin(radians);
-  const candidates = targets.map(d => {
-    const px = d.transform.nx * artboardWidth - centerX;
-    const py = d.transform.ny * artboardHeight - centerY;
-    return {
-      d,
-      nx: (centerX + px * cos - py * sin) / artboardWidth,
-      ny: (centerY + px * sin + py * cos) / artboardHeight,
-      rotation: ((d.transform.rotation + angleDeg) % 360 + 360) % 360,
-    };
-  });
-
-  let nextMinX = Infinity, nextMaxX = -Infinity, nextMinY = Infinity, nextMaxY = -Infinity;
-  for (const { d, nx, ny, rotation } of candidates) {
-    const bounds = getRotatedBounds({
-      ...d,
-      transform: { ...d.transform, nx, ny, rotation },
-    });
-    const cx = nx * artboardWidth;
-    const cy = ny * artboardHeight;
-    nextMinX = Math.min(nextMinX, cx + bounds.minX);
-    nextMaxX = Math.max(nextMaxX, cx + bounds.maxX);
-    nextMinY = Math.min(nextMinY, cy + bounds.minY);
-    nextMaxY = Math.max(nextMaxY, cy + bounds.maxY);
-  }
-
-  if (nextMinX < 0 || nextMaxX > artboardWidth || nextMinY < 0 || nextMaxY > artboardHeight) {
-    return null;
-  }
-  return new Map(candidates.map(({ d, nx, ny, rotation }) => [
-    d.id,
-    { nx, ny, rotation },
-  ]));
-}
 
 export function ImageEditorProvider({ children, ...props }: ImageEditorProps & { children: React.ReactNode }) {
   const value = useImageEditorModel(props);
@@ -106,8 +50,19 @@ function useImageEditorModel(props: ImageEditorProps) {
     if (delta > 0) {
       const base = row.designs[0];
       const baseName = base.name.replace(/ copy( \d+)?$/, "");
+      // Strip `groupId` from row-count copies. If the source belongs to
+      // a user-defined group, inheriting that `groupId` would collapse
+      // every copy into the same super-item during auto-arrange — and
+      // because all copies start at the base's exact transform, the
+      // super-item bbox is one item's size, so arrange happily places
+      // the group in a tiny slot with N copies stacked on top of each
+      // other. Stripping matches `handleDuplicateDesign`'s behavior for
+      // single-source copies: layer-row "+" is semantically "add N more
+      // of this item to the sheet", not "expand the group", so the new
+      // copies should be free to be placed independently by arrange.
+      const { groupId: _dropGid, ...baseNoGroup } = base;
       const copies = Array.from({ length: delta }, () => ({
-        ...base,
+        ...baseNoGroup,
         id: crypto.randomUUID(),
         name: baseName,
         transform: { ...base.transform },
@@ -152,7 +107,7 @@ function useImageEditorModel(props: ImageEditorProps) {
       if (ids.size > 1) {
         const active = prev.find(d => d.id === bag.selectedDesignId);
         const delta = active ? rotation - active.transform.rotation : 0;
-        const rotated = rotateDesignGroup(prev, ids, delta, bag.artboardWidth, bag.artboardHeight);
+        const rotated = rotateDesignSelection(prev, ids, delta, bag.artboardWidth, bag.artboardHeight);
         if (!rotated) return prev;
         return prev.map(d => {
           const next = rotated.get(d.id);
@@ -168,22 +123,93 @@ function useImageEditorModel(props: ImageEditorProps) {
     });
   };
 
+  // Center-align the current selection along one axis.
+  //
+  // Axis naming follows the Lucide / Illustrator / Figma convention that
+  // matches the icons the user sees:
+  //   `axis === "vertical"`   → items share a *vertical* center axis
+  //                              → all get the same X coordinate (`nx`).
+  //                              Icon: `AlignCenterVertical` (dots on a
+  //                              vertical center line).
+  //   `axis === "horizontal"` → items share a *horizontal* center axis
+  //                              → all get the same Y coordinate (`ny`).
+  //                              Icon: `AlignCenterHorizontal`.
+  //
+  // Targeting rules — chosen for predictability in a consumer editor:
+  //   - Zero designs selected → no-op (defensive; the button is disabled
+  //     in that state anyway).
+  //   - One design selected   → snap to the artboard's center line
+  //     (0.5). "Center on sheet" is the intuitive one-item behavior;
+  //     averaging a single value would silently produce a no-op.
+  //   - Two+ designs selected → snap all to the *bounding-box* center
+  //     of the selection along the target axis. Bounding-box center
+  //     `(min + max) / 2` is more predictable than the mean, which
+  //     weights toward clusters and can drift far from the visual
+  //     midpoint of a lopsided selection.
+  //   - Grouped designs move as one unit: each user-defined group
+  //     contributes a single bounding box (its members' combined
+  //     extent), so aligning a mixed selection of loose designs and
+  //     groups keeps every group's intra-group layout intact.
   const handleAlignAxis = (axis: "horizontal" | "vertical") => {
     const ids = bag.selectedDesignIds.size > 0
       ? bag.selectedDesignIds
       : (bag.selectedDesignId ? new Set([bag.selectedDesignId]) : new Set<string>());
-    const targets = bag.designs.filter(d => ids.has(d.id));
-    if (targets.length === 0) return;
+    if (ids.size === 0) return;
+    const units = getDesignSelectionUnits(
+      bag.designs,
+      ids,
+      bag.artboardWidth,
+      bag.artboardHeight,
+    );
+    if (units.length === 0) return;
     bag.saveSnapshot();
-    const center = targets.reduce(
-      (sum, d) => sum + (axis === "horizontal" ? d.transform.nx : d.transform.ny),
-      0,
-    ) / targets.length;
+
+    // Field the operation writes: vertical axis → nx; horizontal axis → ny.
+    const field: "nx" | "ny" = axis === "vertical" ? "nx" : "ny";
+
+    const selectionBounds = getDesignSelectionBounds(
+      bag.designs,
+      ids,
+      bag.artboardWidth,
+      bag.artboardHeight,
+    );
+    if (!selectionBounds) return;
+    const targetPx = units.length === 1
+      ? (axis === "vertical" ? bag.artboardWidth : bag.artboardHeight) / 2
+      : (axis === "vertical"
+        ? (selectionBounds.minX + selectionBounds.maxX) / 2
+        : (selectionBounds.minY + selectionBounds.maxY) / 2);
+
+    const deltas = new Map<string, number>();
+    for (const unit of units) {
+      const unitCenter = field === "nx"
+        ? (unit.minX + unit.maxX) / 2
+        : (unit.minY + unit.maxY) / 2;
+      const axisSize = field === "nx" ? bag.artboardWidth : bag.artboardHeight;
+      const desired = (targetPx - unitCenter) / axisSize;
+      const minDelta = field === "nx"
+        ? -unit.minX / bag.artboardWidth
+        : -unit.minY / bag.artboardHeight;
+      const maxDelta = field === "nx"
+        ? (bag.artboardWidth - unit.maxX) / bag.artboardWidth
+        : (bag.artboardHeight - unit.maxY) / bag.artboardHeight;
+      const delta = minDelta <= maxDelta
+        ? Math.max(minDelta, Math.min(maxDelta, desired))
+        : 0;
+      for (const member of unit.members) deltas.set(member.id, delta);
+    }
+
     bag.setDesigns(prev => prev.map(d => {
-      if (!ids.has(d.id)) return d;
-      const next = { ...d, transform: { ...d.transform, [axis === "horizontal" ? "nx" : "ny"]: center } };
-      const { nx, ny } = clampDesignToArtboard(next, bag.artboardWidth, bag.artboardHeight);
-      return { ...next, transform: { ...next.transform, nx, ny } };
+      const delta = deltas.get(d.id);
+      if (delta === undefined) return d;
+      return {
+        ...d,
+        transform: {
+          ...d.transform,
+          nx: d.transform.nx + (field === "nx" ? delta : 0),
+          ny: d.transform.ny + (field === "ny" ? delta : 0),
+        },
+      };
     }));
   };
 
@@ -242,6 +268,9 @@ function useImageEditorModel(props: ImageEditorProps) {
     isEditMode: bag.isEditMode,
     isAddingToCart: bag.isAddingToCart,
     isProcessing: bag.isProcessing,
+    exportProgressLabel: bag.exportProgressLabel,
+    handleIncreaseQuality: bag.handleIncreaseQuality,
+    isUpscaling: bag.isUpscaling,
   };
 
   return { ...bag, handleSetGroupCount, actionToolbarProps };

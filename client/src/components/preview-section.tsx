@@ -10,6 +10,9 @@ import { ImageInfo, ResizeSettings, type ImageTransform, type DesignItem } from 
 import { computeLayerRect } from "@/lib/types";
 
 const BASE_DPI_SCALE = 2;
+const HIGH_QUALITY_DETAIL_ZOOM = 3;
+const HIGH_QUALITY_DETAIL_MAX_AREA = 4_000_000;
+const HIGH_QUALITY_DETAIL_MAX_EDGE = 4096;
 /** Keep selection controls compact only when the canvas is genuinely zoomed out. */
 function getLowZoomHandleScale(zoom: number): number {
   return zoom < 0.5 ? 0.25 : 1;
@@ -98,6 +101,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const { t, lang } = useLanguage();
     const isMobile = useIsMobile();
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const detailCanvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const resizeLimitToastRef = useRef(0);
     const zoomMax = Math.max(10, Math.ceil(artboardHeight / Math.max(artboardWidth, 0.1)) * 3);
@@ -105,6 +109,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     zoomMaxRef.current = zoomMax;
     const [zoom, setZoom] = useState(1);
     const zoomDpiTier = useMemo(() => (zoom <= 2 ? 1 : zoom <= 5 ? 2 : 3), [zoom]);
+    const highQualityDetailZoomActive = zoom >= HIGH_QUALITY_DETAIL_ZOOM;
     const [panX, setPanX] = useState(0);
     const [panY, setPanY] = useState(0);
     const zoomRef = useRef(zoom);
@@ -150,6 +155,9 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const selZoomRectRef = useRef(selZoomRect);
     selZoomRectRef.current = selZoomRect;
     const canvasAreaRef = useRef<HTMLDivElement>(null);
+    const topRulerRef = useRef<HTMLCanvasElement>(null);
+    const leftRulerRef = useRef<HTMLCanvasElement>(null);
+    const rulerSigRef = useRef('');
     const dpiScaleRef = useRef(BASE_DPI_SCALE);
     const lastImageRef = useRef<string | null>(null);
     /** Start at 0×0 so we never paint a wrong aspect (e.g. 360×360) before the first measure — that was the visible “snap”. */
@@ -160,6 +168,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const lastStablePreviewDimsRef = useRef<{ w: number; h: number } | null>(null);
     /** Only auto–fit zoom when preview size or artboard actually changes (not on every parent re-render). */
     const lastViewportFitSigRef = useRef<string>('');
+    /** Only the first measured viewport is allowed to force zoom-to-fit + pan reset. */
+    const hasInitialViewportFitRef = useRef(false);
     const spotPulseRef = useRef(1);
     const spotAnimFrameRef = useRef<number | null>(null);
     const spotOverlayCacheRef = useRef<{ key: string; canvas: HTMLCanvasElement } | null>(null);
@@ -201,6 +211,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     }, [artboardWidth, artboardHeight]);
 
     const minZoomRef = useRef(1);
+    const showFullSheetDimensions =
+      zoom <= minZoomRef.current + 0.01 &&
+      Math.abs(panX) < 1 &&
+      Math.abs(panY) < 1;
 
     // True when artboard width overflows viewport (left-click panning takes priority over design interaction)
     const isHorizOverflow = useCallback(() => {
@@ -2100,7 +2114,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     }, [handleInteractionEnd]);
     
     // Fit entire sheet in the gray preview viewport (same behavior as changing sheet size — not the old paper-box math).
-    const fitToView = useCallback(() => {
+    const fitToView = useCallback((forceReset = false) => {
       const area = canvasAreaRef.current;
       if (!area) return;
       const dims = previewDimsRef.current;
@@ -2118,8 +2132,20 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const fitZoom = Math.min(1, raw);
       const z = Math.max(ZOOM_MIN_ABSOLUTE, Math.min(zoomMaxRef.current, Math.round(fitZoom * 20) / 20));
       minZoomRef.current = z;
-      setZoom(z);
-      queuePanStateCommit(0, 0);
+      const shouldInitialFit = !hasInitialViewportFitRef.current;
+      hasInitialViewportFitRef.current = true;
+      if (forceReset || shouldInitialFit) {
+        setZoom(z);
+        queuePanStateCommit(0, 0);
+      } else {
+        // Selecting a design can change the surrounding controls and cause
+        // the preview to be measured again. That is a layout change, not a
+        // user request to reset the view: preserve the current zoom and only
+        // keep the existing pan valid for the new bounds.
+        const preservedZoom = zoomRef.current;
+        const clamped = clampPanValue(panXRef.current, panYRef.current, preservedZoom);
+        queuePanStateCommit(clamped.x, clamped.y);
+      }
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           suppressTransitionRef.current = false;
@@ -2129,7 +2155,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
     // Reset view to fit the full gangsheet in view
     const resetView = useCallback(() => {
-      fitToView();
+      fitToView(true);
       if (canvasAreaRef.current && !selectionZoomActiveRef.current) {
         requestAnimationFrame(() => {
           if (canvasAreaRef.current) {
@@ -2470,8 +2496,20 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const fitZoom = Math.min(1, raw);
       const z = Math.max(ZOOM_MIN_ABSOLUTE, Math.min(zoomMaxRef.current, Math.round(fitZoom * 20) / 20));
       minZoomRef.current = z;
-      setZoom(z);
-      queuePanStateCommit(0, 0);
+      const shouldInitialViewportFit = !hasInitialViewportFitRef.current;
+      hasInitialViewportFitRef.current = true;
+      if (shouldInitialViewportFit) {
+        setZoom(z);
+        queuePanStateCommit(0, 0);
+      } else {
+        // Selecting a design can resize the surrounding controls by a few
+        // pixels. That measurement change must not undo a user's zoomed view.
+        // Preserve zoom and only clamp it/pan if the new viewport is smaller.
+        const preservedZoom = Math.max(z, Math.min(zoomMaxRef.current, zoomRef.current));
+        const clamped = clampPanValue(panXRef.current, panYRef.current, preservedZoom);
+        setZoom(preservedZoom);
+        queuePanStateCommit(clamped.x, clamped.y);
+      }
       const clearSuppress = () => {
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
@@ -2794,9 +2832,17 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         ctx.fillRect(0, 0, canvasWidth, canvasHeight);
       }
 
+      // Ghost effect: while multi-dragging, the other selected "companion"
+      // designs render semi-transparent alongside the primary one so the
+      // user can see where the whole group is landing. Full opacity
+      // returns the moment the pointer is released.
+      const isMultiDragging = isMultiDragRef.current;
       for (const design of designs) {
         if (design.id === selectedDesignId) continue;
+        const isDraggingCompanion = isMultiDragging && selectedDesignIds.has(design.id);
+        if (isDraggingCompanion) ctx.globalAlpha = 0.77;
         drawSingleDesign(ctx, design, canvasWidth, canvasHeight);
+        if (isDraggingCompanion) ctx.globalAlpha = 1;
         if (overlappingDesigns.has(design.id)) {
           const rect = computeLayerRect(
             design.imageInfo.image.width, design.imageInfo.image.height,
@@ -2833,7 +2879,12 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
       if (!imageInfo || !selectedDesignId) return;
 
+      // Ghost the primary dragged design so the underlying sheet shows
+      // through; full opacity returns the moment the pointer is released.
+      const isMovingPrimary = isDraggingRef.current || isMultiDragRef.current;
+      if (isMovingPrimary) ctx.globalAlpha = 0.72;
       drawImageWithResizePreview(ctx, canvas.width, canvas.height);
+      if (isMovingPrimary) ctx.globalAlpha = 1;
 
       // Draw smart alignment guides
       if (snapGuidesRef.current.length > 0) {
@@ -2983,6 +3034,40 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       doRender();
     }, [imageInfo, resizeSettings, previewDims.height, previewDims.width, artboardWidth, artboardHeight, designTransform, designs, selectedDesignId, selectedDesignIds, drawSingleDesign, overlappingDesigns, previewBgColor, zoomDpiTier, isMobile]);
 
+    const selectedDetailDesign = selectedDesignId
+      ? designs.find(design => design.id === selectedDesignId) ?? null
+      : null;
+    const selectedDetailImage = selectedDetailDesign?.imageInfo.image ?? null;
+    const detailSourceWidth = selectedDetailImage?.naturalWidth || selectedDetailImage?.width || 0;
+    const detailSourceHeight = selectedDetailImage?.naturalHeight || selectedDetailImage?.height || 0;
+    const detailOverlayLossless =
+      detailSourceWidth > 0 &&
+      detailSourceHeight > 0 &&
+      detailSourceWidth * detailSourceHeight <= HIGH_QUALITY_DETAIL_MAX_AREA &&
+      Math.max(detailSourceWidth, detailSourceHeight) <= HIGH_QUALITY_DETAIL_MAX_EDGE;
+    const showHighQualityDetail =
+      highQualityDetailZoomActive &&
+      Boolean(selectedDetailDesign?.halftoned) &&
+      Boolean(selectedDetailImage?.complete) &&
+      detailOverlayLossless;
+
+    useEffect(() => {
+      const canvas = detailCanvasRef.current;
+      if (!canvas || !showHighQualityDetail || !selectedDetailDesign || !selectedDetailImage) return;
+      const sourceWidth = selectedDetailImage.naturalWidth || selectedDetailImage.width;
+      const sourceHeight = selectedDetailImage.naturalHeight || selectedDetailImage.height;
+      if (!sourceWidth || !sourceHeight) return;
+      const rasterWidth = Math.max(1, Math.round(sourceWidth));
+      const rasterHeight = Math.max(1, Math.round(sourceHeight));
+      canvas.width = rasterWidth;
+      canvas.height = rasterHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.clearRect(0, 0, rasterWidth, rasterHeight);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(selectedDetailImage, 0, 0, rasterWidth, rasterHeight);
+    }, [showHighQualityDetail, selectedDetailDesign?.id, selectedDetailImage, selectedDetailImage?.naturalWidth, selectedDetailImage?.naturalHeight]);
+
     const drawImageWithResizePreview = (ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number) => {
       if (!imageInfo) return;
 
@@ -3003,6 +3088,18 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       ctx.translate(cx, cy);
       ctx.rotate((t.rotation * Math.PI) / 180);
       ctx.scale(t.flipX ? -1 : 1, t.flipY ? -1 : 1);
+      if (showHighQualityDetail) {
+        const insetPx = 6 * (canvasWidth / Math.max(1, previewDims.width));
+        ctx.beginPath();
+        ctx.rect(-rect.width / 2, -rect.height / 2, rect.width, rect.height);
+        ctx.rect(
+          -rect.width / 2 + insetPx,
+          -rect.height / 2 + insetPx,
+          Math.max(0, rect.width - insetPx * 2),
+          Math.max(0, rect.height - insetPx * 2),
+        );
+        ctx.clip('evenodd');
+      }
       ctx.drawImage(imageInfo.image, -rect.width / 2, -rect.height / 2, rect.width, rect.height);
       const overlayCanvas = createSpotOverlayCanvasRef.current?.(imageInfo.image) ?? null;
       if (overlayCanvas) {
@@ -3129,6 +3226,132 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       ctx.restore();
     };
 
+    // ---- Rulers: inch tick strips pinned to the top/left edges of the ----
+    // ---- preview area. Overlay-only: they track the sheet's on-screen ----
+    // ---- rect each frame (cheap signature check skips redraws) and    ----
+    // ---- never touch interaction, render, or export code.            ----
+    useEffect(() => {
+      const RULER = 18;
+      let raf = 0;
+
+      const pickSteps = (ppi: number): { minor: number; label: number } => {
+        const candidates = [0.125, 0.25, 0.5, 1, 2, 5, 10, 20];
+        const minor = candidates.find(s => s * ppi >= 7) ?? 20;
+        const label = candidates.find(s => s >= minor && s * ppi >= 26) ?? 20;
+        return { minor, label };
+      };
+
+      const drawStrip = (
+        canvas: HTMLCanvasElement,
+        axis: 'x' | 'y',
+        stripLen: number,          // CSS px length of the strip
+        contentStart: number,      // sheet edge position in area coords
+        contentLen: number,        // sheet length on screen
+        inches: number,            // sheet length in inches
+      ) => {
+        const dpr = window.devicePixelRatio || 1;
+        const w = axis === 'x' ? stripLen : RULER;
+        const h = axis === 'x' ? RULER : stripLen;
+        if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+          canvas.width = Math.round(w * dpr);
+          canvas.height = Math.round(h * dpr);
+        }
+        canvas.style.width = `${w}px`;
+        canvas.style.height = `${h}px`;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = 'rgba(249,250,251,0.94)';
+        ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = '#d1d5db';
+        ctx.beginPath();
+        if (axis === 'x') { ctx.moveTo(0, RULER - 0.5); ctx.lineTo(w, RULER - 0.5); }
+        else { ctx.moveTo(RULER - 0.5, 0); ctx.lineTo(RULER - 0.5, h); }
+        ctx.stroke();
+        if (contentLen <= 0 || inches <= 0) return;
+
+        const ppi = contentLen / inches;
+        const { minor, label } = pickSteps(ppi);
+        // Ruler strip starts at RULER px inside the area, so shift coords.
+        const origin = contentStart - RULER;
+        ctx.fillStyle = '#4b5563';
+        ctx.strokeStyle = '#9ca3af';
+        ctx.font = '8px system-ui, sans-serif';
+        ctx.textBaseline = 'top';
+
+        const drawTick = (inch: number, isLabel: boolean, forceLabelText?: string) => {
+          const pos = origin + inch * ppi;
+          if (pos < -20 || pos > stripLen + 20) return;
+          const len = isLabel ? 7 : inch % (minor * 2) === 0 ? 5 : 3.5;
+          ctx.beginPath();
+          if (axis === 'x') {
+            const px = Math.round(pos) + 0.5;
+            ctx.moveTo(px, RULER - 1);
+            ctx.lineTo(px, RULER - 1 - len);
+          } else {
+            const py = Math.round(pos) + 0.5;
+            ctx.moveTo(RULER - 1, py);
+            ctx.lineTo(RULER - 1 - len, py);
+          }
+          ctx.stroke();
+          if (isLabel) {
+            const text = forceLabelText ?? String(Math.round(inch * 100) / 100);
+            if (axis === 'x') {
+              ctx.textAlign = inch >= inches ? 'right' : 'left';
+              ctx.fillText(text, Math.round(pos) + (inch >= inches ? -2 : 2), 2);
+            } else {
+              ctx.textAlign = 'left';
+              const ty = Math.round(pos) + (inch >= inches ? -9 : 2);
+              ctx.fillText(text, 1, ty);
+            }
+          }
+        };
+
+        for (let inch = 0; inch < inches; inch += minor) {
+          const isLabel = Math.abs(inch / label - Math.round(inch / label)) < 1e-6
+            // Leave room for the exact far-edge label (e.g. "24.5").
+            && (inches - inch) * ppi > 22;
+          drawTick(inch, isLabel);
+        }
+        // Always mark the far edge with its exact value (e.g. 24.5).
+        drawTick(inches, true);
+      };
+
+      const tick = () => {
+        raf = requestAnimationFrame(tick);
+        const area = canvasAreaRef.current;
+        const sheet = canvasRef.current;
+        const topC = topRulerRef.current;
+        const leftC = leftRulerRef.current;
+        if (!area || !sheet || !topC || !leftC) return;
+        const areaRect = area.getBoundingClientRect();
+        const rect = sheet.getBoundingClientRect();
+        if (areaRect.width <= 0 || rect.width <= 0) return;
+        // rect includes the 3px white border on each side, scaled by zoom.
+        const dims = previewDimsRef.current;
+        const scale = dims.width > 0 ? rect.width / (dims.width + 6) : 1;
+        const contentLeft = rect.left - areaRect.left + 3 * scale;
+        const contentTop = rect.top - areaRect.top + 3 * scale;
+        const contentW = rect.width - 6 * scale;
+        const contentH = rect.height - 6 * scale;
+        const sig = [
+          areaRect.width, areaRect.height, contentLeft, contentTop, contentW, contentH,
+          artboardWidth, artboardHeight, window.devicePixelRatio || 1,
+        ].map(v => Math.round(v * 10) / 10).join('|');
+        if (sig === rulerSigRef.current) return;
+        rulerSigRef.current = sig;
+        drawStrip(topC, 'x', Math.max(1, areaRect.width - RULER), contentLeft, contentW, artboardWidth);
+        drawStrip(leftC, 'y', Math.max(1, areaRect.height - RULER), contentTop, contentH, artboardHeight);
+      };
+
+      raf = requestAnimationFrame(tick);
+      return () => {
+        cancelAnimationFrame(raf);
+        rulerSigRef.current = '';
+      };
+    }, [artboardWidth, artboardHeight]);
+
     return (
       <div className="h-full flex flex-col">
         {/* Canvas area - fills available height */}
@@ -3150,6 +3373,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         >
           {previewDims.width > 0 && previewDims.height > 0 ? (
           <>
+          {/* Inch rulers pinned to the top/left edges (overlay only) */}
+          <canvas ref={topRulerRef} className="absolute z-30 pointer-events-none" style={{ left: 18, top: 0 }} />
+          <canvas ref={leftRulerRef} className="absolute z-30 pointer-events-none" style={{ left: 0, top: 18 }} />
+          <div className="absolute z-30 pointer-events-none border-b border-r border-gray-300" style={{ left: 0, top: 0, width: 18, height: 18, background: 'rgba(249,250,251,0.94)' }} />
           <div className="relative" style={{ paddingBottom: 16, paddingRight: 24 }}>
             <div 
               ref={containerRef}
@@ -3161,23 +3388,66 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                 marginLeft: isMobile ? 6 : 0,
               }}
             >
-              <canvas 
-                ref={canvasRef}
-                className="relative z-10 block"
-                style={{ 
-                  width: previewDims.width,
-                  height: previewDims.height,
-                  border: '3px solid #ffffff',
-                  outline: '2px solid #000000',
-                  boxSizing: 'content-box',
+              <div
+                className="relative flex-shrink-0"
+                style={{
+                  width: previewDims.width + 6,
+                  height: previewDims.height + 6,
                   transform: `scale(${zoom}) translate(${panX}px, ${panY}px)`,
                   transformOrigin: 'center',
                   willChange: 'transform',
                   transition: isMobile || isWheelZoomingRef.current || isPanningRef.current || suppressTransitionRef.current || activeScrollAxis ? 'none' : 'transform 0.15s ease-out',
-                  pointerEvents: 'none',
                 }}
-              />
-              
+              >
+                <canvas
+                  ref={canvasRef}
+                  className="absolute z-10 block"
+                  style={{
+                    left: 3,
+                    top: 3,
+                    width: previewDims.width,
+                    height: previewDims.height,
+                    border: '3px solid #ffffff',
+                    outline: '2px solid #000000',
+                    boxSizing: 'content-box',
+                    pointerEvents: 'none',
+                  }}
+                />
+                {showHighQualityDetail && selectedDetailDesign && (
+                  (() => {
+                    const detailRect = computeLayerRect(
+                      selectedDetailImage?.naturalWidth || selectedDetailImage?.width || 1,
+                      selectedDetailImage?.naturalHeight || selectedDetailImage?.height || 1,
+                      selectedDetailDesign.transform,
+                      previewDims.width,
+                      previewDims.height,
+                      artboardWidth,
+                      artboardHeight,
+                      selectedDetailDesign.widthInches,
+                      selectedDetailDesign.heightInches,
+                    );
+                    return (
+                      <canvas
+                        key={`${selectedDetailDesign.id}:${selectedDetailImage?.src || ''}`}
+                        ref={detailCanvasRef}
+                        aria-hidden="true"
+                        className="absolute z-20 pointer-events-none block"
+                        style={{
+                          left: 3 + detailRect.x,
+                          top: 3 + detailRect.y,
+                          width: detailRect.width,
+                          height: detailRect.height,
+                          transformOrigin: 'center',
+                          transform: `rotate(${selectedDetailDesign.transform.rotation}deg) scale(${selectedDetailDesign.transform.flipX ? -1 : 1}, ${selectedDetailDesign.transform.flipY ? -1 : 1})`,
+                          imageRendering: 'pixelated',
+                          clipPath: 'inset(6px)',
+                        }}
+                      />
+                    );
+                  })()
+                )}
+              </div>
+
               {!imageInfo && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                   <p className="text-gray-300 text-sm opacity-50">Upload a design</p>
@@ -3186,12 +3456,16 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
 
             </div>
-            <div className="absolute bottom-0 left-0 right-3.5 flex justify-center pointer-events-none">
-              <span className={`text-gray-700 font-semibold tracking-wide ${lang === 'en' ? 'text-[11px]' : 'text-[10px]'}`} style={{ transform: 'translateY(2px)' }}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
-            </div>
-            <div className="absolute right-1 top-0 bottom-4 flex items-center pointer-events-none">
-              <span className={`text-gray-700 font-semibold tracking-wide ${lang === 'en' ? 'text-[11px]' : 'text-[10px]'}`} style={{ writingMode: 'vertical-rl' }}>{formatLength(artboardHeight, lang)}{lang === "en" ? '"' : ""}</span>
-            </div>
+            {showFullSheetDimensions && (
+              <>
+                <div className="absolute bottom-0 left-0 right-3.5 flex justify-center pointer-events-none">
+                  <span className={`text-gray-700 font-semibold tracking-wide ${lang === 'en' ? 'text-[11px]' : 'text-[10px]'}`} style={{ transform: 'translateY(2px)' }}>{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
+                </div>
+                <div className="absolute right-1 top-0 bottom-4 flex items-center pointer-events-none">
+                  <span className={`text-gray-700 font-semibold tracking-wide ${lang === 'en' ? 'text-[11px]' : 'text-[10px]'}`} style={{ writingMode: 'vertical-rl' }}>{formatLength(artboardHeight, lang)}{lang === "en" ? '"' : ""}</span>
+                </div>
+              </>
+            )}
           </div>
           {/* Horizontal scrollbar */}
           {(() => {

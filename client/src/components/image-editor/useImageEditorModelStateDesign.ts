@@ -1,6 +1,10 @@
 import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from "react";
-import { flushSync } from "react-dom";
 import { useToast } from "@/hooks/use-toast";
+import {
+  useSelectedDesignId,
+  useSelectedDesignIds,
+  useSelectionActions,
+} from "@/state/selection-store";
 import { useHistory, type HistorySnapshot } from "@/hooks/use-history";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useMediaQuery } from "@/hooks/use-media-query";
@@ -11,10 +15,21 @@ import {
   EXPORT_DPI,
   LAYER_THUMBNAIL_SIZE,
 } from "./constants";
-import { clampDesignToArtboard, getRotatedBounds } from "./utils";
+import { clampDesignToArtboard, getRotatedBounds, rotateDesignSelection } from "./utils";
 import { useAddToCartStall } from "./use-add-to-cart-stall";
 import { useLayerAssetUploader } from "./use-layer-asset-uploader";
 import { useRestoreDesignState, type RestoredAsset } from "./use-restore-design-state";
+import {
+  buildEditorDraft,
+  computeDraftSignature,
+  deleteCurrentEditorDraft,
+  getCurrentEditorDraft,
+  isRecoverableImageInfo,
+  rehydrateDesignImageFromDraft,
+  requestPersistentEditorStorage,
+  restoreEditorDraft,
+  saveCurrentEditorDraft,
+} from "@/lib/editor-draft-storage";
 import type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
 import { HOT_PEEL_PROFILE } from "@/lib/profiles";
 import type { ImageEditorProps } from "./types";
@@ -53,6 +68,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   const [isAddingToCart, setIsAddingToCart] = useState(false);
   const [isUpdateFlow, setIsUpdateFlow] = useState(false);
   const [addToCartProgressLabel, setAddToCartProgressLabel] = useState<string | undefined>();
+  const [exportProgressLabel, setExportProgressLabel] = useState<string | undefined>();
   /** Synchronous re-entrancy guard for handleAddToCart; reset wherever isAddingToCart resets. */
   const addToCartInFlightRef = useRef(false);
   const {
@@ -103,13 +119,61 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   }, [clampDuplicateCount]);
   const [designTransform, setDesignTransform] = useState<ImageTransform>(DEFAULT_DESIGN_TRANSFORM);
   const [designs, setDesigns] = useState<DesignItem[]>([]);
+  const [draftRecoveryAvailable, setDraftRecoveryAvailable] = useState(false);
+  const [isRecoveringDraft, setIsRecoveringDraft] = useState(false);
+  const draftFileKeysRef = useRef<Set<string>>(new Set());
+  const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Signature of the last state we serialized to IndexedDB. React re-renders
+  // often produce new Array/Set references without any observable field
+  // changing (e.g. selection toggles, thumbnail-version bumps). If the
+  // signature matches the previous save we skip the debounced write entirely.
+  const lastDraftSignatureRef = useRef<string | null>(null);
+  const draftSaveIdleHandleRef = useRef<number | null>(null);
+  // Snapshot of every input `computeDraftSignature` / `buildEditorDraft`
+  // need, refreshed on every render. Held in a ref so the imperative
+  // `flushDraftSaveNow` (bound to `visibilitychange`/`pagehide`/unmount)
+  // can read the latest values *without* depending on them in its
+  // `useEffect` deps — otherwise the listener would be re-bound on every
+  // state change, which is both wasteful and racy during unload.
+  //
+  // We only include values that participate in the draft; UI-only state
+  // (context menu, mobile panel, etc.) is intentionally omitted.
+  const latestDraftInputsRef = useRef<{
+    profileId: string;
+    designs: DesignItem[];
+    artboardWidth: number;
+    artboardHeight: number;
+    quantity: number;
+    designGap: number;
+    selectedDesignId: string | null;
+    selectedDesignIds: Set<string>;
+    /**
+     * `true` while we should refuse to save — recovery banner is showing,
+     * a recovery restore is in progress, or a heavy processing job (e.g.
+     * add-to-cart) is running. The same gate as the debounced effect.
+     */
+    saveGated: boolean;
+  } | null>(null);
+  const rehydrationAttemptedRef = useRef<Set<string>>(new Set());
+  const rehydrationInFlightRef = useRef<Map<string, Promise<ImageInfo | null>>>(new Map());
   useEffect(() => {
     if (designs.length > 0) return;
     if (initialWidth != null && initialWidth > 0) setArtboardWidth(initialWidth);
     if (initialHeight != null && initialHeight > 0) setArtboardHeight(initialHeight);
   }, [initialWidth, initialHeight, designs.length]);
-  const [selectedDesignId, setSelectedDesignId] = useState<string | null>(null);
-  const [selectedDesignIds, setSelectedDesignIds] = useState<Set<string>>(new Set());
+  // Selection state lives in the Zustand store (`state/selection-store.ts`)
+  // so leaf components (layer rows, per-design badges, etc.) can subscribe
+  // with granular selectors and skip re-renders on unrelated model
+  // changes. These local hooks give the rest of this hook the same
+  // read/write ergonomics as the previous `useState` pair.
+  const selectedDesignId = useSelectedDesignId();
+  const selectedDesignIds = useSelectedDesignIds();
+  const {
+    setSelectedDesignId,
+    setSelectedDesignIds,
+    selectOne: selectOneInStore,
+    selectMany: selectManyInStore,
+  } = useSelectionActions();
   const lastActiveDesignIdRef = useRef<string | null>(null);
   useLayoutEffect(() => {
     if (selectedDesignId !== null) {
@@ -119,8 +183,6 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   const [mobilePanel, setMobilePanel] = useState<"controls" | "preview">("controls");
   const [showDesignInfo, setShowDesignInfo] = useState(true);
   const [selectionZoomActive, setSelectionZoomActive] = useState(false);
-  const [editingLayerName, setEditingLayerName] = useState<string | null>(null);
-  const [editingNameValue, setEditingNameValue] = useState('');
   const clipboardRef = useRef<DesignItem[]>([]);
   const [proportionalLock, setProportionalLock] = useState(true);
   const designInfoRef = useRef<HTMLDivElement>(null);
@@ -182,6 +244,421 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     setQuantity,
     setDesignGap,
   });
+
+  const rehydrateDesignImage = useCallback((designId: string): Promise<ImageInfo | null> => {
+    const inFlight = rehydrationInFlightRef.current.get(designId);
+    if (inFlight) return inFlight;
+    const request = rehydrateDesignImageFromDraft(designId).finally(() => {
+      rehydrationInFlightRef.current.delete(designId);
+    });
+    rehydrationInFlightRef.current.set(designId, request);
+    return request;
+  }, []);
+
+  const getRehydrationAttemptKey = useCallback((design: DesignItem): string => {
+    const file = design.imageInfo?.file;
+    return [
+      design.id,
+      file?.name ?? "",
+      file?.size ?? 0,
+      file?.lastModified ?? 0,
+    ].join(":");
+  }, []);
+
+  useEffect(() => {
+    if (isProcessing || isUploading || designs.length === 0) return;
+
+    for (const design of designs) {
+      if (isRecoverableImageInfo(design.imageInfo)) continue;
+      const attemptKey = getRehydrationAttemptKey(design);
+      if (rehydrationAttemptedRef.current.has(attemptKey)) continue;
+      rehydrationAttemptedRef.current.add(attemptKey);
+
+      void rehydrateDesignImage(design.id).then(rehydratedImageInfo => {
+        if (!rehydratedImageInfo) {
+          console.warn("[editor-draft] could not rehydrate design image", design.id);
+          return;
+        }
+        setDesigns(currentDesigns => currentDesigns.map(current =>
+          current.id === design.id
+            ? { ...current, imageInfo: rehydratedImageInfo }
+            : current,
+        ));
+        if (selectedDesignId === design.id) setImageInfo(rehydratedImageInfo);
+      }).catch(error => {
+        console.warn("[editor-draft] image rehydration failed", error);
+      });
+    }
+  }, [
+    designs,
+    isProcessing,
+    isUploading,
+    getRehydrationAttemptKey,
+    rehydrateDesignImage,
+    selectedDesignId,
+    setImageInfo,
+    setDesigns,
+  ]);
+
+  const ensureDesignImagesAvailable = useCallback(async (
+    sourceDesigns: DesignItem[] = designsRef.current,
+    forceRepairIds?: Set<string>,
+  ): Promise<DesignItem[]> => {
+    const replacements = new Map<string, ImageInfo>();
+    await Promise.all(sourceDesigns.map(async design => {
+      const forceRepair = forceRepairIds?.has(design.id) ?? false;
+      if (!forceRepair && isRecoverableImageInfo(design.imageInfo)) return;
+      const attemptKey = getRehydrationAttemptKey(design);
+      if (rehydrationAttemptedRef.current.has(attemptKey)) {
+        const inFlight = rehydrationInFlightRef.current.get(design.id);
+        if (inFlight) {
+          const rehydrated = await inFlight;
+          if (rehydrated) replacements.set(design.id, rehydrated);
+        }
+        return;
+      }
+      rehydrationAttemptedRef.current.add(attemptKey);
+      const rehydrated = await rehydrateDesignImage(design.id);
+      if (rehydrated) replacements.set(design.id, rehydrated);
+    }));
+    if (replacements.size === 0) return sourceDesigns;
+
+    const nextDesigns = sourceDesigns.map(design => {
+      const imageInfo = replacements.get(design.id);
+      if (imageInfo) {
+        thumbnailCacheRef.current.delete(design.imageInfo.image.src);
+        contentFillCacheRef.current.delete(design.imageInfo.image.src);
+        assetDataUrlCacheRef.current.delete(design.id);
+        restoredLayerAssetRef.current.delete(design.id);
+      }
+      return imageInfo ? { ...design, imageInfo } : design;
+    });
+    designsRef.current = nextDesigns;
+    setDesigns(currentDesigns => currentDesigns.map(design => {
+      const imageInfo = replacements.get(design.id);
+      return imageInfo ? { ...design, imageInfo } : design;
+    }));
+    nextDesigns.forEach(design => {
+      if (design.id === selectedDesignId && replacements.has(design.id)) {
+        setImageInfo(design.imageInfo);
+      }
+    });
+    return nextDesigns;
+  }, [getRehydrationAttemptKey, rehydrateDesignImage, selectedDesignId, setImageInfo, setDesigns]);
+
+  useEffect(() => {
+    void requestPersistentEditorStorage();
+    void getCurrentEditorDraft().then(draft => {
+      if (!draft || draft.designs.length === 0) return;
+      // A remotely saved design/edit flow is authoritative and should never
+      // be replaced by an older browser-local draft.
+      if (initialDesignState?.designId || isEditMode) return;
+      setDraftRecoveryAvailable(true);
+    }).catch(error => {
+      console.warn("[editor-draft] availability check failed", error);
+    });
+  }, [initialDesignState?.designId, isEditMode]);
+
+  const discardEditorDraft = useCallback(async () => {
+    try {
+      await deleteCurrentEditorDraft();
+    } catch (error) {
+      console.warn("[editor-draft] discard failed", error);
+    } finally {
+      draftFileKeysRef.current.clear();
+      lastDraftSignatureRef.current = null;
+      setDraftRecoveryAvailable(false);
+    }
+  }, []);
+
+  const recoverEditorDraft = useCallback(async () => {
+    if (isRecoveringDraft) return;
+    setIsRecoveringDraft(true);
+    try {
+      const draft = await getCurrentEditorDraft();
+      if (!draft) {
+        setDraftRecoveryAvailable(false);
+        return;
+      }
+      const restored = await restoreEditorDraft(draft);
+      if (restored.designs.length === 0) {
+        await discardEditorDraft();
+        return;
+      }
+      setIsProcessing(true);
+      setArtboardWidth(restored.artboardWidth);
+      setArtboardHeight(restored.artboardHeight);
+      setQuantity(restored.quantity);
+      setDesignGap(restored.designGap);
+      setDesigns(restored.designs);
+      setSelectedDesignId(restored.selectedDesignId);
+      setSelectedDesignIds(restored.selectedDesignIds);
+      const selected = restored.designs.find(design => design.id === restored.selectedDesignId);
+      setImageInfo(selected?.imageInfo ?? null);
+      setDesignTransform(selected?.transform ?? DEFAULT_DESIGN_TRANSFORM);
+      draftFileKeysRef.current = new Set(draft.designs.map(design => design.fileKey));
+      // Force the next save-effect to write, since the debounced-save signature
+      // check would otherwise compare against a stale value from a prior draft.
+      lastDraftSignatureRef.current = null;
+      setDraftRecoveryAvailable(false);
+      setIsProcessing(false);
+    } catch (error) {
+      console.error("[editor-draft] restore failed", error);
+      setIsProcessing(false);
+    } finally {
+      setIsRecoveringDraft(false);
+    }
+  }, [
+    discardEditorDraft,
+    isRecoveringDraft,
+    setArtboardHeight,
+    setArtboardWidth,
+    setDesignGap,
+    setQuantity,
+  ]);
+
+  // Refresh the imperative save-inputs snapshot every render. Cheap: one
+  // object allocation with 8 primitive/reference fields. `flushDraftSaveNow`
+  // reads from this ref during page-hide / unmount, so we don't need to
+  // add those state values as `useEffect` deps for the listener effect
+  // (that would rebind the listener on every keystroke and produce a
+  // race where the listener detaches mid-hide).
+  latestDraftInputsRef.current = {
+    profileId: profile.id,
+    designs,
+    artboardWidth,
+    artboardHeight,
+    quantity,
+    designGap: designGap ?? 0,
+    selectedDesignId,
+    selectedDesignIds,
+    saveGated:
+      draftRecoveryAvailable ||
+      isRecoveringDraft ||
+      isProcessing ||
+      designs.length === 0,
+  };
+
+  // Extracted synchronous save so both the debounced idle callback *and*
+  // the unload-flush code path share exactly one code path. Reading from
+  // the ref (rather than closing over reactive state) means the function
+  // identity can be stable — see `flushDraftSaveNow` below.
+  //
+  // The IndexedDB transaction is started synchronously here even though
+  // the promise is not awaited: by web spec, transactions opened before
+  // `visibilitychange:hidden` / `pagehide` / `unload` are guaranteed to
+  // commit before the browser terminates the page. That is the only
+  // reason this approach is safe during tab close.
+  const performDraftSave = useCallback((reason: string) => {
+    const inputs = latestDraftInputsRef.current;
+    if (!inputs) return;
+    if (inputs.saveGated) return;
+    const signature = computeDraftSignature(
+      inputs.profileId,
+      inputs.designs,
+      inputs.artboardWidth,
+      inputs.artboardHeight,
+      inputs.quantity,
+      inputs.designGap,
+      inputs.selectedDesignId,
+      inputs.selectedDesignIds,
+    );
+    if (signature === lastDraftSignatureRef.current) return;
+    const { draft, files } = buildEditorDraft(
+      inputs.profileId,
+      inputs.designs,
+      inputs.artboardWidth,
+      inputs.artboardHeight,
+      inputs.quantity,
+      inputs.designGap,
+      inputs.selectedDesignId,
+      inputs.selectedDesignIds,
+    );
+    const newFiles = files.filter(
+      (file) => !draftFileKeysRef.current.has(file.key),
+    );
+    lastDraftSignatureRef.current = signature;
+    void saveCurrentEditorDraft(draft, newFiles)
+      .then(() => {
+        for (const file of newFiles) draftFileKeysRef.current.add(file.key);
+      })
+      .catch((error) => {
+        lastDraftSignatureRef.current = null;
+        console.warn(`[editor-draft] save failed (${reason})`, error);
+      });
+  }, []);
+
+  // Imperative flush entrypoint. Callable from any code path that needs
+  // to guarantee the latest draft is persisted *before* the current
+  // execution completes: page-hide, pagehide, beforeunload, unmount,
+  // client-side navigation.
+  //
+  // Cancels any scheduled debounce/idle callback first so we don't race
+  // with them (they would otherwise fire against a possibly-stale
+  // signature and log a spurious "save failed" warning if the tab tore
+  // down between our synchronous save and their scheduled run).
+  const flushDraftSaveNow = useCallback((reason: string) => {
+    if (draftSaveTimerRef.current) {
+      clearTimeout(draftSaveTimerRef.current);
+      draftSaveTimerRef.current = null;
+    }
+    const idleHandle = draftSaveIdleHandleRef.current;
+    if (idleHandle != null) {
+      const w = window as Window & {
+        cancelIdleCallback?: (handle: number) => void;
+      };
+      if (typeof w.cancelIdleCallback === "function") {
+        w.cancelIdleCallback(idleHandle);
+      } else {
+        w.clearTimeout(idleHandle);
+      }
+      draftSaveIdleHandleRef.current = null;
+    }
+    performDraftSave(reason);
+  }, [performDraftSave]);
+
+  // Bind the browser lifecycle listeners *once*. Empty deps + ref-based
+  // reads inside the handler are what keep this attach/detach out of
+  // the hot path — nothing rebinds while the user is editing.
+  //
+  // Coverage matrix:
+  //   `visibilitychange:hidden` — tab switch, backgrounding on desktop &
+  //     mobile, and often fires before actual close. Broad coverage on
+  //     Chrome/Edge/Firefox.
+  //   `pagehide` — the *only* reliable "about to unload" signal on
+  //     iOS Safari. Also fires on bfcache entry.
+  //   `beforeunload` — third safety net for desktop browsers. We don't
+  //     `preventDefault` (that would show an unwanted confirmation
+  //     prompt); we only use it as another chance to flush.
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        flushDraftSaveNow("visibilitychange");
+      }
+    };
+    const onPageHide = () => flushDraftSaveNow("pagehide");
+    const onBeforeUnload = () => flushDraftSaveNow("beforeunload");
+
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisibilityChange);
+    }
+    if (typeof window !== "undefined") {
+      window.addEventListener("pagehide", onPageHide);
+      window.addEventListener("beforeunload", onBeforeUnload);
+    }
+    return () => {
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+      }
+      if (typeof window !== "undefined") {
+        window.removeEventListener("pagehide", onPageHide);
+        window.removeEventListener("beforeunload", onBeforeUnload);
+      }
+    };
+  }, [flushDraftSaveNow]);
+
+  // Keep a browser-local recovery point while editing. The first save waits
+  // until designs exist, so initial setup and remote restore are not captured
+  // as accidental blank drafts.
+  //
+  // Two-stage coalescing:
+  //   1. 750 ms debounce collapses bursts of state updates (typing, dragging,
+  //      selection toggles) into a single scheduled write.
+  //   2. `computeDraftSignature` compares the debounced state against the
+  //      last write and short-circuits when they match — React re-renders
+  //      often produce a new `designs` Array reference without any field
+  //      actually differing.
+  //   3. `requestIdleCallback` (when available) waits for a quiet main-thread
+  //      slot before serializing and hitting IndexedDB, so a save never
+  //      contends with an active user interaction. `setTimeout(0)` fallback
+  //      preserves behavior on Safari.
+  useEffect(() => {
+    if (draftRecoveryAvailable || isRecoveringDraft || isProcessing || designs.length === 0) return;
+
+    const signature = computeDraftSignature(
+      profile.id,
+      designs,
+      artboardWidth,
+      artboardHeight,
+      quantity,
+      designGap ?? 0,
+      selectedDesignId,
+      selectedDesignIds,
+    );
+    if (signature === lastDraftSignatureRef.current) return;
+
+    if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
+    draftSaveTimerRef.current = setTimeout(() => {
+      const idleCb = typeof window !== "undefined" && "requestIdleCallback" in window
+        ? window.requestIdleCallback.bind(window)
+        : (fn: () => void) => window.setTimeout(fn, 0);
+      const cancelIdleCb = typeof window !== "undefined" && "cancelIdleCallback" in window
+        ? window.cancelIdleCallback.bind(window)
+        : (id: number) => window.clearTimeout(id);
+      if (draftSaveIdleHandleRef.current != null) cancelIdleCb(draftSaveIdleHandleRef.current);
+      draftSaveIdleHandleRef.current = idleCb(() => {
+        draftSaveIdleHandleRef.current = null;
+        const { draft, files } = buildEditorDraft(
+          profile.id,
+          designs,
+          artboardWidth,
+          artboardHeight,
+          quantity,
+          designGap ?? 0,
+          selectedDesignId,
+          selectedDesignIds,
+        );
+        const newFiles = files.filter(file => !draftFileKeysRef.current.has(file.key));
+        // Optimistically mark the signature as saved. If the write fails we
+        // reset it so the next state change retries; if it succeeds we keep
+        // the file-key set aligned with what actually landed on disk.
+        lastDraftSignatureRef.current = signature;
+        void saveCurrentEditorDraft(draft, newFiles)
+          .then(() => {
+            for (const file of newFiles) draftFileKeysRef.current.add(file.key);
+          })
+          .catch(error => {
+            lastDraftSignatureRef.current = null;
+            console.warn("[editor-draft] save failed", error);
+          });
+      }) as number;
+    }, 750);
+    return () => {
+      if (draftSaveTimerRef.current) {
+        clearTimeout(draftSaveTimerRef.current);
+        draftSaveTimerRef.current = null;
+      }
+    };
+  }, [
+    artboardHeight,
+    artboardWidth,
+    designGap,
+    designs,
+    draftRecoveryAvailable,
+    isProcessing,
+    isRecoveringDraft,
+    profile.id,
+    quantity,
+    selectedDesignId,
+    selectedDesignIds,
+  ]);
+
+  useEffect(() => {
+    if (!draftRecoveryAvailable || designs.length === 0 || isRecoveringDraft) return;
+    // Starting a fresh upload while the recovery banner is visible means the
+    // user chose new work. Remove the old draft so it cannot return later.
+    void discardEditorDraft();
+  }, [discardEditorDraft, draftRecoveryAvailable, designs.length, isRecoveringDraft]);
+
+  // Unmount cleanup — covers client-side navigation (Wouter link click),
+  // route swap, or React re-parenting. The visibilitychange/pagehide
+  // listeners already handle actual browser-level tab close/refresh;
+  // this catches the case where the editor unmounts while the page
+  // itself stays alive. `flushDraftSaveNow` cancels the pending
+  // debounce/idle callbacks internally, then does the synchronous save.
+  useEffect(() => () => {
+    flushDraftSaveNow("unmount");
+  }, [flushDraftSaveNow]);
 
   const multiDragAccumRef = useRef<{ totalDnx: number; totalDny: number; starts: Map<string, {nx: number; ny: number}> } | null>(null);
   const multiResizeStartRef = useRef<Map<string, { nx: number; ny: number; s: number }> | null>(null);
@@ -439,24 +916,118 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     }
   }, [activeImageInfo, onDesignUploaded]);
 
-  const handleSelectDesign = useCallback((id: string | null) => {
-    if (id) lastActiveDesignIdRef.current = id;
-    flushSync(() => {
-      setSelectedDesignId(id);
-      setSelectedDesignIds(id ? new Set([id]) : new Set());
-    });
+  // Clicking (or shift/marquee-selecting) any member of a user-defined
+  // group must select the whole group — otherwise a group-aware tool
+  // (align/rotate/duplicate/arrange) would only ever see one member.
+  // Both entry points (`handleSelectDesign` — single click, and
+  // `handleMultiSelect` — shift-click / marquee) share this expansion
+  // helper. `designsRef` is read imperatively so the expansion is always
+  // against the freshest design list without adding a render-time
+  // dependency to the callback.
+  const expandSelectionToGroups = useCallback((ids: readonly string[]): string[] => {
+    if (ids.length === 0) return [];
+    const src = designsRef.current;
+    if (src.length === 0) return [...ids];
+    const idToGroup = new Map<string, string | undefined>();
+    const groupToMembers = new Map<string, string[]>();
+    for (const d of src) {
+      idToGroup.set(d.id, d.groupId);
+      if (d.groupId) {
+        const arr = groupToMembers.get(d.groupId);
+        if (arr) arr.push(d.id);
+        else groupToMembers.set(d.groupId, [d.id]);
+      }
+    }
+    const expanded = new Set<string>();
+    for (const id of ids) {
+      const gid = idToGroup.get(id);
+      if (gid) {
+        const members = groupToMembers.get(gid);
+        if (members) for (const m of members) expanded.add(m);
+      } else {
+        expanded.add(id);
+      }
+    }
+    return Array.from(expanded);
   }, []);
 
-  const handleMultiSelect = useCallback((ids: string[]) => {
-    setSelectedDesignIds(new Set(ids));
-    if (ids.length === 1) {
-      setSelectedDesignId(ids[0]);
-    } else if (ids.length === 0) {
-      setSelectedDesignId(null);
-    } else {
-      setSelectedDesignId(ids[ids.length - 1]);
-    }
-  }, []);
+  const handleSelectDesign = useCallback(
+    (id: string | null) => {
+      if (!id) {
+        selectOneInStore(null);
+        return;
+      }
+      lastActiveDesignIdRef.current = id;
+      const expanded = expandSelectionToGroups([id]);
+      if (expanded.length <= 1) {
+        selectOneInStore(id);
+      } else {
+        // Preserve the clicked design as the "active" one so keyboard nudge
+        // / transform-badge readouts still make sense; the store's
+        // `selectMany` uses the last id as the primary — we reorder so
+        // the clicked one lands there.
+        const reordered = expanded.filter(x => x !== id).concat(id);
+        selectManyInStore(reordered);
+      }
+    },
+    [selectOneInStore, selectManyInStore, expandSelectionToGroups],
+  );
+
+  const handleMultiSelect = useCallback(
+    (ids: string[]) => {
+      selectManyInStore(expandSelectionToGroups(ids));
+    },
+    [selectManyInStore, expandSelectionToGroups],
+  );
+
+  // Group / Ungroup — data-only operations. Neither changes any
+  // transform, size, or visibility, so undo/redo, draft persistence, and
+  // export pipelines all "just work" via the existing snapshot machinery.
+  //
+  // `handleGroupSelected` requires 2+ selected designs. It mints a fresh
+  // UUID and stamps it into every selected design's `groupId`. If some
+  // (but not all) of the selected designs are already in a *different*
+  // group, they are moved into this new group — matching how PowerPoint /
+  // Illustrator handle re-grouping.
+  const handleGroupSelected = useCallback(() => {
+    const idsToGroup = selectedDesignIds.size > 1
+      ? selectedDesignIds
+      : (selectedDesignId && selectedDesignIds.size === 1
+          ? selectedDesignIds
+          : null);
+    if (!idsToGroup || idsToGroup.size < 2) return;
+    saveSnapshot();
+    const newGroupId = crypto.randomUUID();
+    setDesigns(prev => prev.map(d =>
+      idsToGroup.has(d.id) ? { ...d, groupId: newGroupId } : d,
+    ));
+  }, [selectedDesignId, selectedDesignIds, saveSnapshot]);
+
+  // `handleUngroupSelected` clears `groupId` on every selected design.
+  // If the selection includes members from multiple groups, all of them
+  // are ungrouped in the same operation (a single snapshot). That matches
+  // user expectation when they've deliberately reached into several
+  // groups to break them apart at once.
+  const handleUngroupSelected = useCallback(() => {
+    const anyGrouped = designsRef.current.some(d =>
+      selectedDesignIds.has(d.id) && d.groupId,
+    );
+    if (!anyGrouped) return;
+    saveSnapshot();
+    setDesigns(prev => prev.map(d => {
+      if (!selectedDesignIds.has(d.id) || !d.groupId) return d;
+      const { groupId: _drop, ...rest } = d;
+      return rest;
+    }));
+  }, [selectedDesignIds, saveSnapshot]);
+
+  // Cheap "is any grouped design selected" flag for the context-menu
+  // enable state. Kept as a regular value so React re-renders it when
+  // `designs` / `selectedDesignIds` change — the context menu opens
+  // rarely and this doesn't sit on a hot path.
+  const selectedHasGroup = designs.some(d =>
+    selectedDesignIds.has(d.id) && d.groupId,
+  );
 
   const getLayerThumbnail = useCallback((design: DesignItem): string => {
     try {
@@ -810,6 +1381,12 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   const handleDuplicateSelected = useCallback((): string[] => {
     const toDup = designs.filter(d => selectedDesignIds.has(d.id));
     if (toDup.length === 0) return [];
+    // Group-remap: when a whole group is duplicated, the copies should
+    // form a *new* group with the same intra-group structure — not join
+    // the source group. Otherwise auto-arrange would try to keep 2x
+    // items in one cluster which never matches user intent. Mint one
+    // fresh id per source groupId and rewrite as we go.
+    const groupRemap = new Map<string, string>();
     const newIds: string[] = [];
     const newDesigns: DesignItem[] = toDup.map((d, i) => {
       const newId = crypto.randomUUID();
@@ -817,7 +1394,23 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       const base = d.name.replace(/ copy( \d+)?$/, '');
       const offsetT = { ...d.transform, nx: d.transform.nx + 0.03 + i * 0.01, ny: d.transform.ny };
       const { nx, ny } = clampDesignToArtboard({ ...d, transform: offsetT }, artboardWidth, artboardHeight);
-      return { ...d, id: newId, name: base, transform: { ...d.transform, nx, ny }, printFileName: false };
+      let nextGroupId: string | undefined;
+      if (d.groupId) {
+        let remapped = groupRemap.get(d.groupId);
+        if (!remapped) {
+          remapped = crypto.randomUUID();
+          groupRemap.set(d.groupId, remapped);
+        }
+        nextGroupId = remapped;
+      }
+      return {
+        ...d,
+        id: newId,
+        name: base,
+        transform: { ...d.transform, nx, ny },
+        printFileName: false,
+        groupId: nextGroupId,
+      };
     });
     multiDragAccumRef.current = null;
     multiResizeStartRef.current = null;
@@ -839,13 +1432,18 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     const design = designs.find(d => d.id === selectedDesignId);
     if (!design) return;
     const baseName = design.name.replace(/ copy( \d+)?$/, '');
+    // Copies of a single grouped item are *independent* — they are not
+    // reasonable siblings of the source group (a group of "the same
+    // thing repeated N times" is not a useful cluster to auto-arrange
+    // together). Strip `groupId` so each copy behaves as its own item.
+    const { groupId: _dropGid, ...designNoGroup } = design;
     const newDesigns: DesignItem[] = [];
     for (let i = 0; i < count; i++) {
       const newId = crypto.randomUUID();
       const offsetT = { ...design.transform, nx: design.transform.nx + 0.03 * (i + 1), ny: design.transform.ny };
       const { nx, ny } = clampDesignToArtboard({ ...design, transform: offsetT }, artboardWidth, artboardHeight);
       newDesigns.push({
-        ...design,
+        ...designNoGroup,
         id: newId,
         name: baseName,
         transform: { ...design.transform, nx, ny },
@@ -854,9 +1452,15 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     }
     saveSnapshot();
     setDesigns(prev => [...prev, ...newDesigns]);
-    setSelectedDesignId(newDesigns[newDesigns.length - 1].id);
+    // `selectOneInStore` writes both `selectedDesignId` and
+    // `selectedDesignIds` in one store transaction. `setSelectedDesignId`
+    // alone would leave any prior multi-selection sitting in
+    // `selectedDesignIds`, and the next auto-arrange / multi-resize /
+    // multi-delete would silently target that stale set instead of
+    // the newly-duplicated design.
+    selectOneInStore(newDesigns[newDesigns.length - 1].id);
     setDuplicateCount(1);
-  }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight, selectedDesignIds, handleDuplicateSelected]);
+  }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight, selectedDesignIds, handleDuplicateSelected, selectOneInStore]);
 
   const handleDuplicateAndArrange = useCallback((count: number) => {
     if (selectedDesignIds.size > 1) {
@@ -870,13 +1474,16 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     const design = designs.find(d => d.id === selectedDesignId);
     if (!design) return;
     const baseName = design.name.replace(/ copy( \d+)?$/, '');
+    // See handleDuplicateDesign for rationale — single-source copies
+    // strip the source's groupId to remain independent.
+    const { groupId: _dropGid, ...designNoGroup } = design;
     const newDesigns: DesignItem[] = [];
     for (let i = 0; i < count; i++) {
       const newId = crypto.randomUUID();
       const offsetT = { ...design.transform, nx: design.transform.nx + 0.03 * (i + 1), ny: design.transform.ny };
       const { nx, ny } = clampDesignToArtboard({ ...design, transform: offsetT }, artboardWidth, artboardHeight);
       newDesigns.push({
-        ...design,
+        ...designNoGroup,
         id: newId,
         name: baseName,
         transform: { ...design.transform, nx, ny },
@@ -885,12 +1492,13 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     }
     saveSnapshot();
     setDesigns(prev => [...prev, ...newDesigns]);
-    setSelectedDesignId(newDesigns[newDesigns.length - 1].id);
+    // See handleDuplicateDesign for the torn-state rationale.
+    selectOneInStore(newDesigns[newDesigns.length - 1].id);
     setDuplicateCount(1);
     requestAnimationFrame(() => {
       handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true });
     });
-  }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight, selectedDesignIds, handleDuplicateSelected]);
+  }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight, selectedDesignIds, handleDuplicateSelected, selectOneInStore]);
 
   const handleDuplicateById = useCallback((designId: string) => {
     const design = designs.find(d => d.id === designId);
@@ -899,8 +1507,9 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     const baseName = design.name.replace(/ copy( \d+)?$/, '');
     const offsetT = { ...design.transform, nx: design.transform.nx + 0.03, ny: design.transform.ny };
     const { nx, ny } = clampDesignToArtboard({ ...design, transform: offsetT }, artboardWidth, artboardHeight);
+    const { groupId: _dropGid, ...designNoGroup } = design;
     const newDesign: DesignItem = {
-      ...design,
+      ...designNoGroup,
       id: newId,
       name: baseName,
       transform: { ...design.transform, nx, ny },
@@ -908,8 +1517,9 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     };
     saveSnapshot();
     setDesigns(prev => [...prev, newDesign]);
-    setSelectedDesignId(newId);
-  }, [designs, saveSnapshot, artboardWidth, artboardHeight]);
+    // See handleDuplicateDesign for the torn-state rationale.
+    selectOneInStore(newId);
+  }, [designs, saveSnapshot, artboardWidth, artboardHeight, selectOneInStore]);
 
   const handleRemoveOneCopy = useCallback((baseName: string, sizeKey: string) => {
     const baseNameOf = (name: string) => name.replace(/ copy( \d+)?$/, '');
@@ -939,17 +1549,32 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     if (clipboardRef.current.length === 0) return;
     saveSnapshot();
     const newIds: string[] = [];
+    // Paste of a copied group should preserve the group *relationship*
+    // (so the paste stays clustered under auto-arrange) but under a
+    // *fresh* group id, so it doesn't merge into the source group. Same
+    // remap approach as `handleDuplicateSelected`.
+    const groupRemap = new Map<string, string>();
     const pasted: DesignItem[] = clipboardRef.current.map(d => {
       const newId = crypto.randomUUID();
       newIds.push(newId);
       const offsetT = { ...d.transform, nx: d.transform.nx + 0.03, ny: d.transform.ny + 0.03 };
       const { nx, ny } = clampDesignToArtboard({ ...d, transform: offsetT }, artboardWidth, artboardHeight);
+      let nextGroupId: string | undefined;
+      if (d.groupId) {
+        let remapped = groupRemap.get(d.groupId);
+        if (!remapped) {
+          remapped = crypto.randomUUID();
+          groupRemap.set(d.groupId, remapped);
+        }
+        nextGroupId = remapped;
+      }
       return {
         ...d,
         id: newId,
         name: d.name.replace(/ copy( \d+)?$/, ''),
         transform: { ...d.transform, nx, ny },
         printFileName: false,
+        groupId: nextGroupId,
       };
     });
     setDesigns(prev => [...prev, ...pasted]);
@@ -1037,72 +1662,27 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     saveSnapshot();
     const idsToRotate = selectedDesignIds.size > 1 ? selectedDesignIds : new Set([selectedDesignId]);
 
-    if (idsToRotate.size <= 1) {
-      setDesigns(prev => prev.map(d => {
-        if (!idsToRotate.has(d.id)) return d;
-        const newRot = ((d.transform.rotation + 90) % 360);
-        const rotated = { ...d, transform: { ...d.transform, rotation: newRot } };
-        const { nx, ny } = clampDesignToArtboard(rotated, artboardWidth, artboardHeight);
-        return { ...rotated, transform: { ...rotated.transform, nx, ny } };
-      }));
-    } else {
-      setDesigns(prev => {
-        const rotatedMap = new Map<string, { nx: number; ny: number; rotation: number }>();
-        for (const d of prev) {
-          if (!idsToRotate.has(d.id)) continue;
-          rotatedMap.set(d.id, {
-            nx: d.transform.nx,
-            ny: d.transform.ny,
-            rotation: (d.transform.rotation + 90) % 360,
-          });
-        }
-
-        let shiftR = 0, shiftL = 0, shiftD = 0, shiftU = 0;
-        for (const d of prev) {
-          const u = rotatedMap.get(d.id);
-          if (!u) continue;
-          const rad = (u.rotation * Math.PI) / 180;
-          const cos = Math.abs(Math.cos(rad));
-          const sin = Math.abs(Math.sin(rad));
-          const halfW = (d.widthInches * d.transform.s * cos + d.heightInches * d.transform.s * sin) / 2;
-          const halfH = (d.widthInches * d.transform.s * sin + d.heightInches * d.transform.s * cos) / 2;
-          const minNx = halfW / artboardWidth;
-          const maxNx = 1 - halfW / artboardWidth;
-          const minNy = halfH / artboardHeight;
-          const maxNy = 1 - halfH / artboardHeight;
-          if (minNx <= maxNx) {
-            if (u.nx < minNx) shiftR = Math.max(shiftR, minNx - u.nx);
-            if (u.nx > maxNx) shiftL = Math.max(shiftL, u.nx - maxNx);
-          }
-          if (minNy <= maxNy) {
-            if (u.ny < minNy) shiftD = Math.max(shiftD, minNy - u.ny);
-            if (u.ny > maxNy) shiftU = Math.max(shiftU, u.ny - maxNy);
-          }
-        }
-        const groupDnx = shiftR - shiftL;
-        const groupDny = shiftD - shiftU;
-
-        return prev.map(d => {
-          const u = rotatedMap.get(d.id);
-          if (!u) return d;
-          const rad = (u.rotation * Math.PI) / 180;
-          const cos = Math.abs(Math.cos(rad));
-          const sin = Math.abs(Math.sin(rad));
-          const halfW = (d.widthInches * d.transform.s * cos + d.heightInches * d.transform.s * sin) / 2;
-          const halfH = (d.widthInches * d.transform.s * sin + d.heightInches * d.transform.s * cos) / 2;
-          const adjNx = u.nx + groupDnx;
-          const adjNy = u.ny + groupDny;
-          const clampedNx = Math.max(halfW / artboardWidth, Math.min(1 - halfW / artboardWidth, adjNx));
-          const clampedNy = Math.max(halfH / artboardHeight, Math.min(1 - halfH / artboardHeight, adjNy));
-          return { ...d, transform: { ...d.transform, rotation: u.rotation, nx: clampedNx, ny: clampedNy } };
-        });
+    // Rotate selection units as complete objects. In particular, a selected
+    // group must rotate around the group's bounding-box center instead of
+    // rotating each member around its own center.
+    setDesigns(prev => {
+      const rotated = rotateDesignSelection(
+        prev,
+        idsToRotate,
+        90,
+        artboardWidth,
+        artboardHeight,
+      );
+      if (!rotated) return prev;
+      return prev.map(d => {
+        const next = rotated.get(d.id);
+        return next ? { ...d, transform: { ...d.transform, ...next } } : d;
       });
-    }
-
-    setDesignTransform(prev => {
-      const newRot = ((prev.rotation + 90) % 360);
-      return { ...prev, rotation: newRot };
     });
+    setDesignTransform(prev => ({
+      ...prev,
+      rotation: (prev.rotation + 90) % 360,
+    }));
   }, [selectedDesignId, selectedDesignIds, saveSnapshot, artboardWidth, artboardHeight]);
 
   const handleFlipX = useCallback(() => {
@@ -1148,5 +1728,5 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
 
 
   // Base editor state; arrange/upload/export/cart hooks extend this bag in image-editor-provider.
-  return { onDesignUploaded, profile, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode, toast, t, lang, isMobile, isLgUp, imageInfo, setImageInfo, resizeSettings, setResizeSettings, isProcessing, setIsProcessing, isAddingToCart, setIsAddingToCart, isUpdateFlow, setIsUpdateFlow, addToCartProgressLabel, setAddToCartProgressLabel, addToCartInFlightRef, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, shellShopKeyRef, shellConfigReady, designIdRef, getLayerAssetRef, getLayerScreenedAssetRef, releaseLayerAssetOwnership, refreshAddToCartStallTimeout, isUploading, setIsUploading, uploadProgress, setUploadProgress, artboardWidth, setArtboardWidth, artboardHeight, setArtboardHeight, artboardWidthRef, artboardHeightRef, contentFillCacheRef, handleAutoArrangeRef, quantity, setQuantity, designGap, setDesignGap, duplicateCount, setDuplicateCount, clampDuplicateCount, parseDuplicateCount, handleDuplicateCountKeyDown, designTransform, setDesignTransform, designs, setDesigns, selectedDesignId, setSelectedDesignId, selectedDesignIds, setSelectedDesignIds, mobilePanel, setMobilePanel, showDesignInfo, setShowDesignInfo, selectionZoomActive, setSelectionZoomActive, editingLayerName, setEditingLayerName, editingNameValue, setEditingNameValue, clipboardRef, proportionalLock, setProportionalLock, designInfoRef, sidebarFileRef, headerUploadInputRef, canvasRef, downloadContainer, setDownloadContainer, spotPreviewData, setSpotPreviewData, fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer, copySpotSelectionsRef, contextMenu, setContextMenu, cropModalDesignId, setCropModalDesignId, pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo, mountedRef, designsRef, nudgeSnapshotSavedRef, nudgeTimeoutRef, thumbnailCacheRef, assetDataUrlCacheRef, restoredLayerAssetRef, multiDragAccumRef, multiResizeStartRef, multiRotateStartRef, snapshotCacheRef, getSnapshot, saveSnapshot, applySnapshot, handleUndo, handleRedo, handleInteractionEnd, handleRemoveWhiteBackground, handleWandDelete, wandDeleteModeActive, setWandDeleteModeActive, wandTolerance, setWandTolerance, selectedDesign, activeImageInfo, activeDesignTransform, activeWidthInches, activeHeightInches, activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, handleSelectDesign, handleMultiSelect, getLayerThumbnail, handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta, handleEffectiveSizeChange, isArtboardFull, handleDuplicateDesign, handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleCopySelected, handlePaste, handleDeleteGroup, handleDeleteDesign, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleCanvasContextMenu };
+  return { onDesignUploaded, profile, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode, toast, t, lang, isMobile, isLgUp, imageInfo, setImageInfo, resizeSettings, setResizeSettings, isProcessing, setIsProcessing, isAddingToCart, setIsAddingToCart, isUpdateFlow, setIsUpdateFlow, addToCartProgressLabel, setAddToCartProgressLabel, exportProgressLabel, setExportProgressLabel, addToCartInFlightRef, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, shellShopKeyRef, shellConfigReady, designIdRef, getLayerAssetRef, getLayerScreenedAssetRef, releaseLayerAssetOwnership, refreshAddToCartStallTimeout, isUploading, setIsUploading, uploadProgress, setUploadProgress, artboardWidth, setArtboardWidth, artboardHeight, setArtboardHeight, artboardWidthRef, artboardHeightRef, contentFillCacheRef, handleAutoArrangeRef, quantity, setQuantity, designGap, setDesignGap, duplicateCount, setDuplicateCount, clampDuplicateCount, parseDuplicateCount, handleDuplicateCountKeyDown, designTransform, setDesignTransform, designs, setDesigns, selectedDesignId, setSelectedDesignId, selectedDesignIds, setSelectedDesignIds, mobilePanel, setMobilePanel, showDesignInfo, setShowDesignInfo, selectionZoomActive, setSelectionZoomActive, clipboardRef, proportionalLock, setProportionalLock, designInfoRef, sidebarFileRef, headerUploadInputRef, canvasRef, downloadContainer, setDownloadContainer, spotPreviewData, setSpotPreviewData, fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer, copySpotSelectionsRef, contextMenu, setContextMenu, cropModalDesignId, setCropModalDesignId, pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo, mountedRef, designsRef, nudgeSnapshotSavedRef, nudgeTimeoutRef, thumbnailCacheRef, assetDataUrlCacheRef, restoredLayerAssetRef, multiDragAccumRef, multiResizeStartRef, multiRotateStartRef, snapshotCacheRef, getSnapshot, saveSnapshot, applySnapshot, handleUndo, handleRedo, handleInteractionEnd, handleRemoveWhiteBackground, handleWandDelete, wandDeleteModeActive, setWandDeleteModeActive, wandTolerance, setWandTolerance, selectedDesign, activeImageInfo, activeDesignTransform, activeWidthInches, activeHeightInches, activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, draftRecoveryAvailable, isRecoveringDraft, recoverEditorDraft, discardEditorDraft, rehydrateDesignImage, ensureDesignImagesAvailable, handleSelectDesign, handleMultiSelect, handleGroupSelected, handleUngroupSelected, selectedHasGroup, getLayerThumbnail, handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta, handleEffectiveSizeChange, isArtboardFull, handleDuplicateDesign, handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleCopySelected, handlePaste, handleDeleteGroup, handleDeleteDesign, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleCanvasContextMenu };
 }
