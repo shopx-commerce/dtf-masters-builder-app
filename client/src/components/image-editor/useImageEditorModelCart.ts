@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { uploadProductionToR2, canUseShellRelay } from "@/lib/r2-direct-upload";
 import { EXPORT_DPI, EXPORT_TIMEOUT_MS } from "./constants";
 import {
@@ -18,7 +18,8 @@ import { isRecoverableImageInfo } from "@/lib/editor-draft-storage";
 import { createVectorPrintSourceResolver } from "@/lib/vector-print-source";
 import { getUiSnapshot } from "@/state/ui-store";
 import { resolveShellTargetOrigin } from "@/lib/shell-message";
-import { discardCartSubmitId, mintCartSubmitId } from "@/lib/cart-submit-token";
+import { discardCartSubmitId, isTrustedCartStatus, mintCartSubmitId } from "@/lib/cart-submit-token";
+import { isTrustedShellMessage } from "@/lib/shell-message";
 
 function postMessageToParent(message: unknown, transfer?: Transferable[]): void {
   // This payload carries the production file and every layer's artwork, so it is
@@ -77,6 +78,32 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
     t,
     ensureDesignImagesAvailable,
   } = bag;
+
+  /**
+   * Edit-mode escape hatch: when the saved production file is bad (e.g. a
+   * device silently uploaded a blank sheet), the content-signature shortcut
+   * below would keep reusing it forever because "nothing changed". Checking
+   * this forces a full export + upload on the next update, then resets.
+   */
+  const [forceRegenerateProduction, setForceRegenerateProduction] = useState(false);
+
+  // Cleared only when the shell confirms the update landed (`done`), not when
+  // the message is merely posted: the shell reports failure asynchronously via
+  // `dtf-builder-cart-status: error`, which never enters handleAddToCart's
+  // catch. Resetting at post time would send that retry straight back through
+  // the reuse shortcut with the bad file intact. On `error` or a stall the box
+  // stays checked, so retrying keeps forcing a fresh export.
+  useEffect(() => {
+    const onCartStatus = (event: MessageEvent) => {
+      const data = event.data as { type?: unknown; status?: unknown; requestId?: unknown } | null | undefined;
+      if (data?.type !== "dtf-builder-cart-status" || data.status !== "done") return;
+      if (!isTrustedShellMessage(event, "regenerate-reset")) return;
+      if (!isTrustedCartStatus(data.requestId, data.status)) return;
+      setForceRegenerateProduction(false);
+    };
+    window.addEventListener("message", onCartStatus);
+    return () => window.removeEventListener("message", onCartStatus);
+  }, []);
 
   const buildDesignStatePayload = useCallback(async () => {
     const currentDesigns = designsRef.current;
@@ -654,7 +681,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       };
 
       let canReuseProduction = false;
-      if (isEditMode && existingProduction?.url && profile?.id !== "fluorescent") {
+      if (isEditMode && existingProduction?.url && profile?.id !== "fluorescent" && !forceRegenerateProduction) {
         const savedSig = savedContentSig();
         const curSig = currentContentSig();
         canReuseProduction = Boolean(savedSig && curSig && savedSig === curSig);
@@ -821,11 +848,13 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         addToCartStallTimeoutRef.current = null;
       }
     }
-  }, [artboardWidth, artboardHeight, quantity, shopifyVariants, initialVariantId, shopDomain, toast, t, refreshAddToCartStallTimeout, buildDesignStatePayload, isEditMode, initialDesignState, setIsAddingToCart, setIsUpdateFlow, setIsProcessing, setExportProgressLabel, setAddToCartProgressLabel, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, profile, ensureDesignImagesAvailable]);
+  }, [artboardWidth, artboardHeight, quantity, shopifyVariants, initialVariantId, shopDomain, toast, t, refreshAddToCartStallTimeout, buildDesignStatePayload, isEditMode, initialDesignState, setIsAddingToCart, setIsUpdateFlow, setIsProcessing, setExportProgressLabel, setAddToCartProgressLabel, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, profile, ensureDesignImagesAvailable, forceRegenerateProduction]);
 
   return {
     ...bag,
     buildDesignStatePayload,
     handleAddToCart,
+    forceRegenerateProduction,
+    setForceRegenerateProduction,
   };
 }

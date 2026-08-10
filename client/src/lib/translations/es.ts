@@ -163,6 +163,8 @@ export const es: Record<string, string> = {
   "controls.designsPlural": "{count} diseños",
   "controls.uploadFirst": "Sube una imagen primero",
   "controls.addToCart": "Añadir al carrito",
+  "controls.regenerateFile": "Regenerar archivo",
+  "controls.regenerateFileHint": "Reconstruye y vuelve a subir el archivo de impresión aunque no haya cambios",
   "controls.addingToCart": "Añadiendo al carrito",
   "controls.recommended": "Recomendado",
   "controls.currentBounds": "límites actuales",

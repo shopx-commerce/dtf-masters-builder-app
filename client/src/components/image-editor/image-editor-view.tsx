@@ -82,6 +82,7 @@ export default function ImageEditorView() {
   const {
     t, lang, profile, embedFromShopify, isMobile, isLgUp, isUploading, uploadProgress, isProcessing, exportProgressLabel,
     isAddingToCart, isEditMode, isUpdateFlow, isDragOver, artboardWidth, artboardHeight,
+    forceRegenerateProduction, setForceRegenerateProduction,
     quantity, designGap, duplicateCount, designs, setDesigns, selectedDesignId, setSelectedDesignId,
     selectedDesignIds, setSelectedDesignIds,
     proportionalLock,
@@ -547,6 +548,8 @@ export default function ImageEditorView() {
       addToCartLabel={isEditMode ? "Update Design" : undefined}
       addingStatusLabel={isEditMode ? "Updating" : undefined}
       lockGangsheetSize={isEditMode}
+      regenerateProduction={isEditMode ? forceRegenerateProduction : undefined}
+      onRegenerateProductionChange={isEditMode ? setForceRegenerateProduction : undefined}
       onRemoveWhiteBackground={handleRemoveWhiteBackground}
       wandDeleteActive={wandDeleteModeActive}
       onWandDeleteToggle={handleWandDeleteToggle}

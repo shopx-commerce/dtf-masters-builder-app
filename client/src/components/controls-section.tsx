@@ -76,6 +76,10 @@ interface ControlsSectionProps {
   addToCartLabel?: string;
   addingStatusLabel?: string;
   lockGangsheetSize?: boolean;
+  /** Edit mode only: current state of the "Regenerate file" checkbox. */
+  regenerateProduction?: boolean;
+  /** Edit mode only: when provided, renders the "Regenerate file" checkbox next to the update button. */
+  onRegenerateProductionChange?: (value: boolean) => void;
   onRemoveWhiteBackground?: () => void;
   wandDeleteActive?: boolean;
   onWandDeleteToggle?: () => void;
@@ -138,6 +142,8 @@ function ControlsSection({
   addToCartLabel,
   addingStatusLabel,
   lockGangsheetSize = false,
+  regenerateProduction = false,
+  onRegenerateProductionChange,
   onRemoveWhiteBackground,
   wandDeleteActive = false,
   onWandDeleteToggle,
@@ -862,7 +868,12 @@ function ControlsSection({
 
       {downloadContainer && createPortal(
         <div
-          className={`flex items-center gap-3 bg-white border-t border-gray-200 px-4 py-2 ${
+          /* `flex-wrap`: with the edit-mode "Regenerate file" checkbox in the
+             row, a narrow phone in French can't fit checkbox + button side by
+             side; wrapping drops the button to its own full-width line instead
+             of overflowing. With no checkbox the single flex-1 button never
+             wraps, so other layouts are unaffected. */
+          className={`flex flex-wrap items-center gap-3 bg-white border-t border-gray-200 px-4 py-2 ${
             isMobile ? "fixed bottom-0 left-0 right-0 z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]" : ""
           }`}
           style={isMobile ? { paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" } : undefined}
@@ -873,6 +884,20 @@ function ControlsSection({
             <span className="text-gray-600">·</span>
             <span className={`tabular-nums ${lang !== 'en' ? 'text-[10px]' : ''}`}>{formatLength(artboardWidth, lang)}{lang === 'en' ? '"' : ''} × {formatLength(artboardHeight, lang)}{lang === 'en' ? '"' : ''}</span>
           </div>
+          {onRegenerateProductionChange && (
+            <label
+              className="flex flex-shrink-0 cursor-pointer select-none items-center gap-1.5 text-xs text-gray-700"
+              title={t("controls.regenerateFileHint")}
+            >
+              <input
+                type="checkbox"
+                checked={!!regenerateProduction}
+                onChange={(e) => onRegenerateProductionChange(e.target.checked)}
+                className="h-4 w-4 accent-emerald-600"
+              />
+              <span className="whitespace-nowrap">{t("controls.regenerateFile")}</span>
+            </label>
+          )}
           {hasVariantId && onAddToCart ? (
             <Button
               onClick={onAddToCart}

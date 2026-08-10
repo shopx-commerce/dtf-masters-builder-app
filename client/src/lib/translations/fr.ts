@@ -163,6 +163,8 @@ export const fr: Record<string, string> = {
   "controls.designsPlural": "{count} designs",
   "controls.uploadFirst": "Téléchargez une image d'abord",
   "controls.addToCart": "Ajouter au panier",
+  "controls.regenerateFile": "Régénérer le fichier",
+  "controls.regenerateFileHint": "Reconstruit et téléverse à nouveau le fichier d'impression même sans modification",
   "controls.addingToCart": "Ajout au panier",
   "controls.recommended": "Recommandé",
   "controls.currentBounds": "limites actuelles",

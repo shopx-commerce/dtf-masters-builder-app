@@ -165,6 +165,8 @@ export const en: Record<string, string> = {
   "controls.designsPlural": "{count} designs",
   "controls.uploadFirst": "Upload an image first",
   "controls.addToCart": "Add to Cart",
+  "controls.regenerateFile": "Regenerate file",
+  "controls.regenerateFileHint": "Rebuild and re-upload the print file even if nothing changed",
   "controls.addingToCart": "Adding to cart",
   "controls.recommended": "Recommended",
   "controls.currentBounds": "current bounds",
