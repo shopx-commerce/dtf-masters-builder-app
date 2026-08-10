@@ -7,3 +7,10 @@ uri = "file://recovered/gangsheet-24.5x35-recovered.png"
 type = "image"
 title = "Recovered gangsheet — 24.5\" × 35\" @ 300 DPI"
 description = "Rebuilt from the order's saved design state (design 628bad6f…): the customer's original artwork placed exactly as ordered, with the editor's hard-edge alpha cleanup applied. 7350×10500 px, print-ready replacement for the blank production file."
+
+[[outputs]]
+id = "i861MH4SApjKObekJX1ZP"
+uri = "file://recovered/server-copy-now.png"
+type = "image"
+title = "What the production URL serves right now"
+description = "Fresh download of the customer's production file (v10, rewritten 17:44 UTC) — 24.5\"×35\" at 300 DPI, non-blank."
