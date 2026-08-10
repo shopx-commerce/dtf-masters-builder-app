@@ -526,37 +526,18 @@ export function useImageEditorModelCart(
         });
       })();
 
-      // TEMP PHASE-2-VERIFY LOGGING — remove once Step 11 is confirmed manually.
-      console.log("[PHASE2-VERIFY] eligibility", {
-        productionIsPdf,
-        hasProductionKey: Boolean(productionKey),
-        canReuseProduction,
-        serverRenderEligible,
-        layers: designsRef.current.map((d) => ({
-          name: d.name,
-          hasAsset: Boolean(getLayerAssetRef(d)),
-          halftoned: d.halftoned,
-          hasScreenedAsset: d.halftoned ? Boolean(getLayerScreenedAssetRef(d)) : null,
-        })),
-      });
-
       let productionBlob: Blob | null = null;
       let exportWorkerBuffer: ArrayBuffer | null = null;
       let designState: Awaited<ReturnType<typeof buildDesignStatePayload>>;
       if (canReuseProduction || serverRenderEligible) {
         // No pixel work at all: either nothing rendered changed, or the server is producing the
         // print file. This is the actual speedup — a 816 MP sheet no longer renders in the browser.
-        console.log("[PHASE2-VERIFY] SKIPPING client render — server will produce the print file", {
-          reason: canReuseProduction ? "canReuseProduction" : "serverRenderEligible",
-        });
         designState = await buildDesignStatePayload();
       } else if (productionIsPdf) {
-        console.log("[PHASE2-VERIFY] RENDERING client-side (fluorescent/PDF path — always client-only)");
         const [pdf, fluorescentDesignState] = await Promise.all([exportProductionPdf(), buildDesignStatePayload()]);
         productionBlob = pdf;
         designState = fluorescentDesignState;
       } else {
-        console.log("[PHASE2-VERIFY] RENDERING client-side (ineligible — see eligibility log above for why)");
         const [exp, pngDesignState] = await Promise.all([exportProductionPng(), buildDesignStatePayload()]);
         productionBlob = exp.pngBlob;
         exportWorkerBuffer = exp.exportWorkerBuffer;

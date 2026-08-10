@@ -93,19 +93,8 @@ export function useLayerAssetUploader({
     // Inside the shell the relay is the only reliable transport; uploadUrl is the shell's own.
     const useShellRelay = canUseShellRelay();
     const shopKey = shellShopKeyRef.current?.trim() || "";
-    if (!shopKey || (!uploadUrl && !useShellRelay)) {
-      // TEMP PHASE-2-VERIFY LOGGING — remove once Step 11 is confirmed manually.
-      console.log("[PHASE2-VERIFY] resolveTransport: null (no shop/transport)", {
-        shopKey, uploadUrl, useShellRelay,
-      });
-      return null;
-    }
-    if (!isAddressableDesignId(designIdRef.current)) {
-      console.log("[PHASE2-VERIFY] resolveTransport: null (designId not addressable)", {
-        designId: designIdRef.current,
-      });
-      return null;
-    }
+    if (!shopKey || (!uploadUrl && !useShellRelay)) return null;
+    if (!isAddressableDesignId(designIdRef.current)) return null;
     return { uploadUrl, useShellRelay, shopKey };
   }, [shellUploadUrlRef, shellShopKeyRef, designIdRef]);
 
@@ -119,16 +108,7 @@ export function useLayerAssetUploader({
     const record = recordsRef.current.get(token);
     const source = sourcesRef.current.get(token);
     const transport = resolveTransport();
-    // TEMP PHASE-2-VERIFY LOGGING — remove once Step 11 is confirmed manually.
-    const t0 = performance.now();
-    console.log("[PHASE2-VERIFY] runUpload starting", {
-      token, hasRecord: Boolean(record), hasSource: Boolean(source), hasTransport: Boolean(transport),
-      name: source?.name,
-    });
-    if (!record || !source || !transport) {
-      console.log("[PHASE2-VERIFY] runUpload bailed early — missing record/source/transport", { token });
-      return;
-    }
+    if (!record || !source || !transport) return;
     record.status = "uploading";
     // Still a single flat segment under .../layers/, so the screened key needs no proxy allowlist
     // change — it already clears the existing layer-asset gate.
@@ -138,9 +118,6 @@ export function useLayerAssetUploader({
       const blob = record.kind === "screened"
         ? await layerScreenedToPngBlob(source)
         : await layerBitmapToPngBlob(source);
-      console.log("[PHASE2-VERIFY] runUpload blob encoded, uploading now", {
-        token, bytes: blob.size, msSinceStart: Math.round(performance.now() - t0),
-      });
       const uploaded = await uploadProductionToR2(blob, record.filename, transport.uploadUrl, undefined, {
         objectKey,
         useShellRelay: transport.useShellRelay,
@@ -156,14 +133,8 @@ export function useLayerAssetUploader({
       record.key = key;
       record.url = uploaded.productionUrl;
       record.owned = true;
-      console.log("[PHASE2-VERIFY] runUpload UPLOADED", {
-        token, key, totalMs: Math.round(performance.now() - t0),
-      });
     } catch (err) {
       console.warn("[layer-asset] upload failed:", err);
-      console.log("[PHASE2-VERIFY] runUpload FAILED", {
-        token, totalMs: Math.round(performance.now() - t0), err: String(err),
-      });
       if (record.cancelled) recordsRef.current.delete(token);
       else record.status = "error";
     } finally {
@@ -237,14 +208,7 @@ export function useLayerAssetUploader({
         }
       }
 
-      if (!transport) {
-        // TEMP PHASE-2-VERIFY LOGGING — remove once Step 11 is confirmed manually.
-        console.log("[PHASE2-VERIFY] layer NOT queued yet — no transport this render", {
-          name: design.name, token,
-        });
-        continue;
-      }
-      console.log("[PHASE2-VERIFY] layer queued for upload", { name: design.name, token, atMs: Math.round(performance.now()) });
+      if (!transport) continue;
       records.set(token, {
         status: "pending",
         kind: "source",
@@ -265,11 +229,6 @@ export function useLayerAssetUploader({
     for (const design of designs) {
       if (!design.halftoned) continue;
       const screenedToken = layerScreenedContentToken(design);
-      // TEMP PHASE-2-VERIFY LOGGING — remove once halftone is confirmed manually.
-      console.log("[PHASE2-VERIFY] screened-pass considering", {
-        name: design.name, screenedToken, atMs: Math.round(performance.now()),
-        existingStatus: records.get(screenedToken)?.status,
-      });
       liveTokens.add(screenedToken);
       const pendingGc = gcTimers.get(screenedToken);
       if (pendingGc != null) {
@@ -283,11 +242,7 @@ export function useLayerAssetUploader({
       }
       // No restore seeding here on purpose: restore only ever needs the pre-screen source, since it
       // re-derives the screen client-side. A restored design re-uploads its screened render once.
-      if (!transport) {
-        console.log("[PHASE2-VERIFY] screened-pass NOT queued — no transport this render", { name: design.name, screenedToken });
-        continue;
-      }
-      console.log("[PHASE2-VERIFY] screened-pass QUEUED", { name: design.name, screenedToken, atMs: Math.round(performance.now()) });
+      if (!transport) continue;
       records.set(screenedToken, {
         status: "pending",
         kind: "screened",
@@ -328,10 +283,6 @@ export function useLayerAssetUploader({
     if (!design.halftoned) return null;
     const token = layerScreenedContentToken(design);
     const record = recordsRef.current.get(token);
-    // TEMP PHASE-2-VERIFY LOGGING — remove once halftone is confirmed manually.
-    console.log("[PHASE2-VERIFY] getLayerScreenedAssetRef called", {
-      name: design.name, token, hasRecord: Boolean(record), status: record?.status,
-    });
     if (!record || record.status !== "uploaded" || !record.url || !record.key) return null;
     return { key: record.key, url: record.url, mimeType: record.mimeType, filename: record.filename };
   }, []);
