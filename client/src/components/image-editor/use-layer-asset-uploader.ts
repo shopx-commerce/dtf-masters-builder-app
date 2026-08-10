@@ -5,6 +5,8 @@ import {
   layerAssetStem,
   layerBitmapToPngBlob,
   layerContentToken,
+  layerScreenedContentToken,
+  layerScreenedToPngBlob,
 } from "@/lib/layer-bitmap";
 import { LAYER_ASSET_GC_DELAY_MS, LAYER_ASSET_UPLOAD_CONCURRENCY } from "./constants";
 import type { RestoredAsset } from "./use-restore-design-state";
@@ -19,8 +21,16 @@ export type LayerAssetRef = {
   filename: string;
 };
 
+/**
+ * "source" is the editable pre-screen asset every layer gets. "screened" is the extra, already-
+ * rendered halftone raster that only halftoned layers get — the server cannot reproduce a dot
+ * screen from the source, so the print file would come back smooth without it.
+ */
+type LayerAssetKind = "source" | "screened";
+
 type LayerAssetRecord = {
   status: LayerAssetStatus;
+  kind: LayerAssetKind;
   key: string;
   url: string | null;
   mimeType: string;
@@ -100,9 +110,14 @@ export function useLayerAssetUploader({
     const transport = resolveTransport();
     if (!record || !source || !transport) return;
     record.status = "uploading";
-    const objectKey = `designs/${transport.shopKey}/${designIdRef.current}/layers/${token}-${layerAssetStem(source, token)}.png`;
+    // Still a single flat segment under .../layers/, so the screened key needs no proxy allowlist
+    // change — it already clears the existing layer-asset gate.
+    const suffix = record.kind === "screened" ? "-screened" : "";
+    const objectKey = `designs/${transport.shopKey}/${designIdRef.current}/layers/${token}-${layerAssetStem(source, token)}${suffix}.png`;
     try {
-      const blob = await layerBitmapToPngBlob(source);
+      const blob = record.kind === "screened"
+        ? await layerScreenedToPngBlob(source)
+        : await layerBitmapToPngBlob(source);
       const uploaded = await uploadProductionToR2(blob, record.filename, transport.uploadUrl, undefined, {
         objectKey,
         useShellRelay: transport.useShellRelay,
@@ -181,6 +196,7 @@ export function useLayerAssetUploader({
         if (key) {
           records.set(token, {
             status: "uploaded",
+            kind: "source",
             key,
             url: restored.url,
             mimeType: restored.mimeType || LAYER_ASSET_MIME,
@@ -195,6 +211,7 @@ export function useLayerAssetUploader({
       if (!transport) continue;
       records.set(token, {
         status: "pending",
+        kind: "source",
         key: "",
         url: null,
         mimeType: LAYER_ASSET_MIME,
@@ -204,6 +221,40 @@ export function useLayerAssetUploader({
       });
       sourcesRef.current.set(token, design);
       queueRef.current.push(token);
+    }
+
+    // Second pass: the screened render, halftoned layers only. Its own token, its own record, and
+    // therefore its own independent upload and GC lifecycle — including being swept when a
+    // re-screen swaps imageInfo.image and the old token stops being live.
+    for (const design of designs) {
+      if (!design.halftoned) continue;
+      const screenedToken = layerScreenedContentToken(design);
+      liveTokens.add(screenedToken);
+      const pendingGc = gcTimers.get(screenedToken);
+      if (pendingGc != null) {
+        window.clearTimeout(pendingGc);
+        gcTimers.delete(screenedToken);
+      }
+      const existing = records.get(screenedToken);
+      if (existing) {
+        existing.cancelled = false;
+        continue;
+      }
+      // No restore seeding here on purpose: restore only ever needs the pre-screen source, since it
+      // re-derives the screen client-side. A restored design re-uploads its screened render once.
+      if (!transport) continue;
+      records.set(screenedToken, {
+        status: "pending",
+        kind: "screened",
+        key: "",
+        url: null,
+        mimeType: LAYER_ASSET_MIME,
+        filename: `${layerAssetStem(design, design.id)}-screened.png`,
+        owned: false,
+        cancelled: false,
+      });
+      sourcesRef.current.set(screenedToken, design);
+      queueRef.current.push(screenedToken);
     }
 
     for (const token of records.keys()) {
@@ -224,6 +275,18 @@ export function useLayerAssetUploader({
     return { key: record.key, url: record.url, mimeType: record.mimeType, filename: record.filename };
   }, []);
 
+  /**
+   * Uploaded SCREENED render for a halftoned layer, or null (not halftoned, or not up yet). The
+   * server compositor must use this instead of the editable asset when settings.halftoned is set.
+   */
+  const getLayerScreenedAssetRef = useCallback((design: DesignItem): LayerAssetRef | null => {
+    if (!design.halftoned) return null;
+    const token = layerScreenedContentToken(design);
+    const record = recordsRef.current.get(token);
+    if (!record || record.status !== "uploaded" || !record.url || !record.key) return null;
+    return { key: record.key, url: record.url, mimeType: record.mimeType, filename: record.filename };
+  }, []);
+
   /** Called once a design state referencing these assets is saved: flush pending removals, then drop ownership. */
   const releaseLayerAssetOwnership = useCallback(() => {
     const gcTimers = gcTimersRef.current;
@@ -235,5 +298,5 @@ export function useLayerAssetUploader({
     for (const record of recordsRef.current.values()) record.owned = false;
   }, [releaseToken]);
 
-  return { getLayerAssetRef, releaseLayerAssetOwnership };
+  return { getLayerAssetRef, getLayerScreenedAssetRef, releaseLayerAssetOwnership };
 }

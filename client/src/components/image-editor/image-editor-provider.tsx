@@ -6,6 +6,7 @@ import { useImageEditorModelUploadCrop } from "./useImageEditorModelUploadCrop";
 import { useImageEditorModelHalftone } from "./useImageEditorModelHalftone";
 import { useImageEditorModelExport } from "./useImageEditorModelExport";
 import { useImageEditorModelCart } from "./useImageEditorModelCart";
+import { useCartPreviewUploader } from "./use-cart-preview-uploader";
 import type { EditorActionToolbarProps } from "./editor-action-toolbar";
 import { clampDesignToArtboard, getRotatedBounds } from "./utils";
 import type { DesignItem } from "@/lib/types";
@@ -83,8 +84,19 @@ function useImageEditorModel(props: ImageEditorProps) {
   const p2 = useImageEditorModelUploadCrop({ ...p0, ...p1 });
   const p3 = useImageEditorModelHalftone({ ...p0, ...p1, ...p2 });
   const p4 = useImageEditorModelExport({ ...p0, ...p1, ...p2, ...p3 });
-  const p5 = useImageEditorModelCart({ ...p0, ...p1, ...p2, ...p3, ...p4 });
-  const bag = { ...p0, ...p1, ...p2, ...p3, ...p4, ...p5 };
+  // Hand-picked fields rather than the accumulated bag: this hook's inputs are narrow and explicit,
+  // so what it actually depends on stays readable at the call site.
+  const cartPreview = useCartPreviewUploader({
+    designs: p0.designs,
+    artboardWidth: p0.artboardWidth,
+    artboardHeight: p0.artboardHeight,
+    designIdRef: p0.designIdRef,
+    shellUploadUrlRef: p0.shellUploadUrlRef,
+    shellShopKeyRef: p0.shellShopKeyRef,
+    shellConfigReady: p0.shellConfigReady,
+  });
+  const p5 = useImageEditorModelCart({ ...p0, ...p1, ...p2, ...p3, ...p4, ...cartPreview });
+  const bag = { ...p0, ...p1, ...p2, ...p3, ...p4, ...p5, ...cartPreview };
 
   const handleSetGroupCount = (row: { designs: typeof bag.designs }, targetCount: number) => {
     if (!Number.isInteger(targetCount) || targetCount < 1 || targetCount > 200) return;
