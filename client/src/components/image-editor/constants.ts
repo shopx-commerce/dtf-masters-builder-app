@@ -47,3 +47,18 @@ export const UPLOAD_PROGRESS_HIDE_DELAY_MS = 300;
 export const LAYER_ASSET_UPLOAD_CONCURRENCY = 3;
 /** Grace period before a removed layer's uploaded asset is deleted, so undo can reclaim it. */
 export const LAYER_ASSET_GC_DELAY_MS = 8_000;
+/** Longest side of the small cart-preview image, in pixels. */
+export const CART_PREVIEW_MAX_DIMENSION = 1500;
+/**
+ * Quiet period after the last edit before a cart preview is rendered and uploaded. A whole-sheet
+ * preview is invalidated by every drag/resize/rotate, so without this each mouse-move would queue
+ * an upload.
+ */
+export const CART_PREVIEW_DEBOUNCE_MS = 700;
+/**
+ * How long Add-to-Cart will wait for the current arrangement's preview upload. On timeout the cart
+ * line ships with no preview URL, which the cart already tolerates (it omits the property).
+ */
+export const CART_PREVIEW_WAIT_MS = 8_000;
+/** Render timeout for the small preview. Far below EXPORT_TIMEOUT_MS — this is a ~1500px image. */
+export const CART_PREVIEW_RENDER_TIMEOUT_MS = 30_000;

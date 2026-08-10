@@ -1,5 +1,7 @@
 import { useCallback } from "react";
 import { uploadProductionToR2, canUseShellRelay } from "@/lib/r2-direct-upload";
+import { designProductionObjectKey } from "@/lib/design-object-keys";
+import { designContentSignature } from "@/lib/design-content-signature";
 import { EXPORT_DPI, EXPORT_TIMEOUT_MS } from "./constants";
 import {
   getExportWorker,
@@ -11,7 +13,13 @@ import type { InitialDesignState } from "./types";
 import type { SpotPreviewData } from "../controls-section";
 import { thresholdImageInfo } from "./useImageEditorModelHalftone";
 
-export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
+/**
+ * The extra dependency is declared narrowly rather than folded into the accumulated bag, so it is
+ * obvious at the call site that this hook needs the cart-preview uploader.
+ */
+export function useImageEditorModelCart(
+  bag: ImageEditorBagAfterExport & { getCartPreviewUrl: () => Promise<string | null> },
+) {
   // Only the bag fields these two handlers actually use are destructured here;
   // the full bag is still re-spread into the return so downstream consumers are unaffected.
   const {
@@ -28,6 +36,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
     addToCartStallTimeoutRef,
     lastAddToCartPngBytesRef,
     shellUploadUrlRef,
+    shellShopKeyRef,
     refreshAddToCartStallTimeout,
     artboardWidth,
     artboardHeight,
@@ -40,11 +49,13 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
     restoredLayerAssetRef,
     designIdRef,
     getLayerAssetRef,
+    getLayerScreenedAssetRef,
     releaseLayerAssetOwnership,
     fileToDataUrl,
     addToCartInFlightRef,
     profile,
     spotPreviewData,
+    getCartPreviewUrl,
   } = bag;
 
   const buildDesignStatePayload = useCallback(async () => {
@@ -83,7 +94,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       ).map((l) => [String(l.layerId || ""), l]),
     );
 
-    const layerAssets = await Promise.all(
+    const layerAssetsBase = await Promise.all(
       currentDesigns.map(async (d) => {
         // Eagerly uploaded while designing — send the R2 reference instead of the bytes.
         const uploaded = getLayerAssetRef(d);
@@ -143,6 +154,23 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         };
       }),
     );
+    // Halftoned layers carry a second asset: the already-screened render. The uploaded `asset`
+    // above is deliberately the PRE-screen source (so restore can re-screen once), which the server
+    // cannot turn back into a dot screen — it depends on OKLab tolerance/feather, a strength preset
+    // and the design's printed size. Additive and absent for every non-halftoned layer.
+    const layerAssets = layerAssetsBase.map((entry, index) => {
+      const screened = getLayerScreenedAssetRef(currentDesigns[index]);
+      if (!screened) return entry;
+      return {
+        ...entry,
+        renderedAsset: {
+          filename: screened.filename,
+          mimeType: screened.mimeType,
+          url: screened.url,
+          key: screened.key,
+        },
+      };
+    });
     releaseLayerAssetOwnership();
 
     return {
@@ -176,6 +204,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
     assetDataUrlCacheRef,
     designIdRef,
     getLayerAssetRef,
+    getLayerScreenedAssetRef,
     releaseLayerAssetOwnership,
   ]);
 
@@ -386,25 +415,15 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       };
 
       // Skip re-export/re-upload on update when nothing rendered has actually changed.
-      const existingProduction = (initialDesignState as { production?: { url?: string | null; key?: string | null; previewUrl?: string | null } } | null)?.production;
+      const existingProduction = (initialDesignState as { production?: { url?: string | null; key?: string | null; previewUrl?: string | null; status?: string | null } } | null)?.production;
 
       const roundSig = (v: unknown) => {
         const n = Number(v);
         return Number.isFinite(n) ? n.toFixed(6) : "x";
       };
-      // Must cover every field the renderer reads, or a real visual change could go undetected.
-      const currentContentSig = (): string => {
-        const parts = [`ab:${roundSig(artboardWidth)}x${roundSig(artboardHeight)}`];
-        for (const d of designsRef.current) {
-          const f = d.imageInfo?.file;
-          const fileSig = f ? `${f.name}:${f.size}:${f.lastModified}` : "";
-          const t = d.transform;
-          parts.push(
-            `${d.id}|${roundSig(d.widthInches)}|${roundSig(d.heightInches)}|${roundSig(t.nx)}|${roundSig(t.ny)}|${roundSig(t.s)}|${roundSig(t.rotation)}|${t.flipX ? 1 : 0}|${t.flipY ? 1 : 0}|${d.alphaThresholded ? 1 : 0}|${d.printFileName ? 1 : 0}|${String(d.name || "")}|${fileSig}`,
-          );
-        }
-        return parts.join("~");
-      };
+      // Shared with the cart-preview upload cache — see lib/design-content-signature.ts.
+      const currentContentSig = (): string =>
+        designContentSignature(designsRef.current, artboardWidth, artboardHeight);
       const savedContentSig = (): string | null => {
         const st = initialDesignState as InitialDesignState | null;
         if (!st) return null;
@@ -438,34 +457,22 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         return parts.join("~");
       };
 
+      // Reusable only if a print file genuinely exists. With production now generated
+      // asynchronously, an edit-load can find production.url already set — it is derived from the
+      // deterministic key upfront — while the file itself is still pending or has failed. Checking
+      // the URL alone would treat those as reusable and ship a cart line pointing at nothing.
+      const existingProductionReady =
+        Boolean(existingProduction?.url) &&
+        (existingProduction?.status == null || existingProduction.status === "ready");
+
       let canReuseProduction = false;
-      if (isEditMode && existingProduction?.url && profile?.id !== "fluorescent") {
+      if (isEditMode && existingProductionReady && profile?.id !== "fluorescent") {
         const savedSig = savedContentSig();
         const curSig = currentContentSig();
         canReuseProduction = Boolean(savedSig && curSig && savedSig === curSig);
       }
 
-      let productionBlob: Blob | null = null;
-      let exportWorkerBuffer: ArrayBuffer | null = null;
       const productionIsPdf = profile?.id === "fluorescent";
-      let designState: Awaited<ReturnType<typeof buildDesignStatePayload>>;
-      if (canReuseProduction) {
-        // Only the (small) design-state JSON needs rebuilding — no pixel work at all.
-        designState = await buildDesignStatePayload();
-      } else {
-        if (productionIsPdf) {
-          const [pdf, fluorescentDesignState] = await Promise.all([exportProductionPdf(), buildDesignStatePayload()]);
-          productionBlob = pdf;
-          designState = fluorescentDesignState;
-        } else {
-          const [exp, pngDesignState] = await Promise.all([exportProductionPng(), buildDesignStatePayload()]);
-          productionBlob = exp.pngBlob;
-          exportWorkerBuffer = exp.exportWorkerBuffer;
-          designState = pngDesignState;
-        }
-      }
-      // Reset to 0 on reuse so the stall-timeout watchdog isn't fed a stale byte count.
-      lastAddToCartPngBytesRef.current = productionBlob ? productionBlob.size : 0;
 
       const selectedVariant = shopifyVariants?.find((v) => v.height != null && Math.abs(v.height - artboardHeight) < 0.01);
       const vid = selectedVariant?.id || initialVariantId || '';
@@ -477,14 +484,87 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
       const filename = `gangsheet-${Date.now()}.${productionIsPdf ? "pdf" : "png"}`;
       const existingProductionKey =
         isEditMode && existingProduction?.key ? String(existingProduction.key) : undefined;
-      const productionKey =
+      const reusableProductionKey =
         existingProductionKey &&
         existingProductionKey.toLowerCase().endsWith(productionIsPdf ? ".pdf" : ".png")
           ? existingProductionKey
           : undefined;
+      // A new design gets the deterministic key so the print file URL is knowable before the file
+      // exists. Reuse always wins, so an existing design (legacy key shape included) keeps the
+      // exact key its state JSON and any placed order already point at.
+      // PDF (fluorescent) is deliberately excluded: the deterministic key is .png, and the proxy
+      // has no server-side PDF production path at all.
+      const productionKey =
+        reusableProductionKey ||
+        (productionIsPdf
+          ? undefined
+          : designProductionObjectKey(shellShopKeyRef.current, designIdRef.current) || undefined);
       const uploadUrl = shellUploadUrlRef.current?.trim() || '';
       const uploadInBuilder = canUseShellRelay() || Boolean(uploadUrl);
       const onUploadProgress = (msg: string) => setAddToCartProgressLabel(msg);
+
+      /**
+       * Per-design eligibility to skip the client 300-DPI render and let the server produce the
+       * print file. Deliberately per-design rather than a global switch, so a design the server
+       * cannot yet reproduce simply keeps today's behaviour instead of shipping a wrong file.
+       *
+       *  (a) every layer is already uploaded to R2 as a real asset the server can fetch;
+       *  (b) every halftoned layer also has its screened render uploaded — the server cannot
+       *      re-derive a dot screen, so without this the print file would come back smooth;
+       *  (c) not the fluorescent/PDF profile, whose spot-colour data is never persisted and which
+       *      the server provably cannot reproduce;
+       *  (d) a deterministic production key exists, so the server knows where to write.
+       */
+      const serverRenderEligible = (() => {
+        if (productionIsPdf || !productionKey) return false;
+        const items = designsRef.current;
+        if (!items.length) return false;
+        return items.every((d) => {
+          if (!getLayerAssetRef(d)) return false;
+          if (d.halftoned && !getLayerScreenedAssetRef(d)) return false;
+          return true;
+        });
+      })();
+
+      // TEMP PHASE-2-VERIFY LOGGING — remove once Step 11 is confirmed manually.
+      console.log("[PHASE2-VERIFY] eligibility", {
+        productionIsPdf,
+        hasProductionKey: Boolean(productionKey),
+        canReuseProduction,
+        serverRenderEligible,
+        layers: designsRef.current.map((d) => ({
+          name: d.name,
+          hasAsset: Boolean(getLayerAssetRef(d)),
+          halftoned: d.halftoned,
+          hasScreenedAsset: d.halftoned ? Boolean(getLayerScreenedAssetRef(d)) : null,
+        })),
+      });
+
+      let productionBlob: Blob | null = null;
+      let exportWorkerBuffer: ArrayBuffer | null = null;
+      let designState: Awaited<ReturnType<typeof buildDesignStatePayload>>;
+      if (canReuseProduction || serverRenderEligible) {
+        // No pixel work at all: either nothing rendered changed, or the server is producing the
+        // print file. This is the actual speedup — a 816 MP sheet no longer renders in the browser.
+        console.log("[PHASE2-VERIFY] SKIPPING client render — server will produce the print file", {
+          reason: canReuseProduction ? "canReuseProduction" : "serverRenderEligible",
+        });
+        designState = await buildDesignStatePayload();
+      } else if (productionIsPdf) {
+        console.log("[PHASE2-VERIFY] RENDERING client-side (fluorescent/PDF path — always client-only)");
+        const [pdf, fluorescentDesignState] = await Promise.all([exportProductionPdf(), buildDesignStatePayload()]);
+        productionBlob = pdf;
+        designState = fluorescentDesignState;
+      } else {
+        console.log("[PHASE2-VERIFY] RENDERING client-side (ineligible — see eligibility log above for why)");
+        const [exp, pngDesignState] = await Promise.all([exportProductionPng(), buildDesignStatePayload()]);
+        productionBlob = exp.pngBlob;
+        exportWorkerBuffer = exp.exportWorkerBuffer;
+        designState = pngDesignState;
+      }
+      // Reset to 0 when nothing was rendered, so the stall-timeout watchdog is not fed a stale (or
+      // production-sized) byte count and the loader clears in seconds instead of minutes.
+      lastAddToCartPngBytesRef.current = productionBlob ? productionBlob.size : 0;
 
       let productionUrl: string | null = null;
       let cartPreviewUrl: string | null = null;
@@ -497,9 +577,20 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         cartPreviewUrl = existingProduction.previewUrl ? String(existingProduction.previewUrl) : productionUrl;
         uploadedProductionKey = existingProduction.key ? String(existingProduction.key) : uploadedProductionKey;
         setAddToCartProgressLabel(undefined);
+      } else if (serverRenderEligible) {
+        // Nothing to upload: there is no client-rendered production file. The cart line carries the
+        // deterministic key, and the shell derives the final print-file URL from it — the link is
+        // knowable before the bytes exist. Only the small preview is fetched here.
+        cartPreviewUrl = await getCartPreviewUrl();
+        setAddToCartProgressLabel(undefined);
       } else if (uploadInBuilder) {
         const uploadOpts = {
-          objectKey: productionKey || filename,
+          // Never fall back to `filename` here. A bare filename is not a valid object key, and
+          // since Phase 2 the proxy rejects an unrecognized key outright instead of quietly
+          // swapping in a random one — which surfaced as "The store upload relay did not accept
+          // the PNG production file" on every new design. Omitting objectKey is the correct way
+          // to say "server, you pick".
+          objectKey: productionKey,
           // Inside the shell the relay is the only reliable transport; uploadUrl is the shell's own.
           useShellRelay: canUseShellRelay(),
           productionFormat: productionIsPdf ? "pdf" as const : "png" as const,
@@ -517,9 +608,12 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
             uploadOpts,
           );
           productionUrl = uploaded.productionUrl;
-          cartPreviewUrl = uploaded.cartPreviewUrl || uploaded.productionUrl;
           uploadedProductionKey = uploaded.key || uploadedProductionKey;
           exportBufferForUpload = null;
+          // Prefer the small client-rendered preview over the server's shrink-the-production-PNG
+          // derivative, which no longer exists. Falls back to the full-res URL, which is what the
+          // derivative itself fell back to, so the cart still gets a thumbnail either way.
+          cartPreviewUrl = (await getCartPreviewUrl()) || uploaded.cartPreviewUrl || uploaded.productionUrl;
         } catch (uploadErr) {
           const detail = uploadErr instanceof Error ? uploadErr.message : String(uploadErr);
           console.warn("[handleAddToCart] Builder R2 upload failed, falling back to parent shell:", detail);
@@ -540,12 +634,13 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         designState,
         builderUploaded: Boolean(productionUrl),
         productionFormat: productionIsPdf ? "pdf" : "png",
-        ...(productionUrl
-          ? {
-              productionUrl,
-              productionKey: uploadedProductionKey || undefined,
-              cartPreviewUrl: cartPreviewUrl || productionUrl,
-            }
+        // Sent independently of productionUrl on purpose: when the render is skipped there is no
+        // uploaded URL yet, but the deterministic key must still reach the state JSON and the cart
+        // line — the shell derives the print-file URL from it.
+        ...(uploadedProductionKey ? { productionKey: uploadedProductionKey } : {}),
+        ...(productionUrl ? { productionUrl } : {}),
+        ...(cartPreviewUrl || productionUrl
+          ? { cartPreviewUrl: cartPreviewUrl || productionUrl }
           : {}),
         ...(isEditMode && existingProduction?.url && !productionUrl
           ? { productionUrl: String(existingProduction.url), cartPreviewUrl: existingProduction.previewUrl ? String(existingProduction.previewUrl) : String(existingProduction.url) }
@@ -555,7 +650,10 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
 
       const pngByteLength = lastAddToCartPngBytesRef.current;
 
-      if (!productionUrl) {
+      // `serverRenderEligible` must short-circuit this guard: there is intentionally no production
+      // file to hand over, so treating that as an upload failure would turn every eligible
+      // Add-to-Cart into a hard error.
+      if (!productionUrl && !serverRenderEligible) {
         if (!productionBlob || !productionBlob.size) throw new Error("Empty design file");
         if (canUseShellRelay()) {
           throw new Error(
@@ -594,7 +692,7 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         addToCartStallTimeoutRef.current = null;
       }
     }
-  }, [artboardWidth, artboardHeight, quantity, shopifyVariants, initialVariantId, shopDomain, toast, refreshAddToCartStallTimeout, buildDesignStatePayload, isEditMode, initialDesignState, setIsAddingToCart, setIsUpdateFlow, setIsProcessing, setAddToCartProgressLabel, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, profile, spotPreviewData]);
+  }, [artboardWidth, artboardHeight, quantity, shopifyVariants, initialVariantId, shopDomain, toast, refreshAddToCartStallTimeout, buildDesignStatePayload, isEditMode, initialDesignState, setIsAddingToCart, setIsUpdateFlow, setIsProcessing, setAddToCartProgressLabel, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, shellShopKeyRef, designIdRef, designsRef, getLayerAssetRef, getLayerScreenedAssetRef, getCartPreviewUrl, profile, spotPreviewData]);
 
   return {
     ...bag,
