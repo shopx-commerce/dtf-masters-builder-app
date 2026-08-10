@@ -48,6 +48,15 @@ const SHELL_RELAY_TIMEOUT_MS = 180_000;
  */
 class StoreApiUnreachableError extends Error {}
 
+/**
+ * The relay prepare handshake failed — timeout, shell-reported error, or a
+ * malformed response. Its defining property: no file bytes have moved yet,
+ * so falling back to another route is free. Failures after prepare (part
+ * PUTs, complete) are deliberately NOT this type; by then the shell has
+ * proven it speaks the protocol and bytes may already be in flight.
+ */
+class RelayPrepareError extends Error {}
+
 function newRelayId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -133,11 +142,13 @@ async function prepareViaShellRelay(
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     if (/timed out/i.test(detail)) {
-      throw new Error(
+      throw new RelayPrepareError(
         "Upload prepare timed out — deploy the latest proxy app (shell R2 relay) or refresh the builder page.",
       );
     }
-    throw err;
+    // Typed so callers can tell "prepare never worked" (safe to reroute —
+    // zero bytes sent) apart from failures later in the relay flow.
+    throw new RelayPrepareError(detail);
   }
 }
 
@@ -415,6 +426,44 @@ export async function uploadProductionToR2(
   const expectedFormat = options.productionFormat || (contentType === "application/pdf" ? "pdf" : "png");
   const effectiveContentType = contentType || (expectedFormat === "pdf" ? "application/pdf" : "image/png");
   if (isLegacyDesignUploadUrl(uploadUrl)) {
+    // A legacy /api/upload-design URL form-POSTs the entire production file
+    // through the storefront proxy — the most fragile route for multi-MB
+    // sheets: proxy body limits and worker timeouts surface as 500 HTML
+    // pages, and per-customer extensions/privacy modes block the
+    // cross-origin fetch outright. The live shell that hands this URL out
+    // also implements the R2 relay, so with a parent present the relay goes
+    // first and the heavy bytes PUT straight to R2. The legacy POST remains
+    // the fallback, gated on RelayPrepareError (prepare never worked — no
+    // bytes sent yet, e.g. a handler-less shell hitting the 20s cap); after
+    // a successful prepare the shell speaks the protocol, and re-sending a
+    // half-uploaded sheet through the proxy would double the bandwidth
+    // without fixing anything.
+    if (canUseShellRelay()) {
+      try {
+        return await uploadProductionToR2(body, filename, "", onProgress, {
+          ...options,
+          useShellRelay: true,
+          relayPrepareTimeoutMs: 20_000,
+        });
+      } catch (relayErr) {
+        if (!(relayErr instanceof RelayPrepareError)) throw relayErr;
+        const relayDetail = relayErr.message;
+        onProgress?.("Store relay unavailable — sending the file to the store directly...");
+        try {
+          return await uploadViaLegacyDesignEndpoint(
+            body,
+            filename,
+            uploadUrl,
+            effectiveContentType,
+            expectedFormat,
+            onProgress,
+          );
+        } catch (legacyErr) {
+          const legacyDetail = legacyErr instanceof Error ? legacyErr.message : String(legacyErr);
+          throw new Error(`relay: ${relayDetail}; store upload: ${legacyDetail}`);
+        }
+      }
+    }
     return uploadViaLegacyDesignEndpoint(
       body,
       filename,
