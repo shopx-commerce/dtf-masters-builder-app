@@ -29,9 +29,24 @@ export type R2UploadOptions = {
   productionFormat?: "png" | "pdf";
   /** When true, prepare/complete JSON goes through parent proxy shell (same-origin), not cross-origin fetch. */
   useShellRelay?: boolean;
+  /**
+   * Cap for the relay prepare handshake. Set only by the direct→relay
+   * fallback, where the open question is whether the parent implements the
+   * relay at all — a parent without handlers should fail in seconds, not
+   * hold the customer for the full normal-relay timeout.
+   */
+  relayPrepareTimeoutMs?: number;
 };
 
 const SHELL_RELAY_TIMEOUT_MS = 180_000;
+
+/**
+ * The builder→store prepare/complete fetch failed at the transport layer
+ * (CORS/network), before any HTTP status. Only this failure is worth retrying
+ * through the parent relay — an HTTP error or a failed R2 part PUT would fail
+ * the same way (or worse, double-upload) on a second pass.
+ */
+class StoreApiUnreachableError extends Error {}
 
 function newRelayId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -89,10 +104,11 @@ function waitForShellMessage<T>(
 async function prepareViaShellRelay(
   filename: string,
   totalBytes: number,
-  options: Pick<R2UploadOptions, "objectKey" | "contentType" | "productionFormat"> = {},
+  options: Pick<R2UploadOptions, "objectKey" | "contentType" | "productionFormat" | "relayPrepareTimeoutMs"> = {},
 ): Promise<R2PrepareMeta> {
   const requestId = newRelayId("prep");
-  const wait = waitForShellMessage(requestId, "dtf-builder-r2-prepared", SHELL_RELAY_TIMEOUT_MS, (data) => {
+  const timeoutMs = options.relayPrepareTimeoutMs ?? SHELL_RELAY_TIMEOUT_MS;
+  const wait = waitForShellMessage(requestId, "dtf-builder-r2-prepared", timeoutMs, (data) => {
     const meta = data.meta as R2PrepareMeta | undefined;
     if (!meta?.sessionId) throw new Error("Upload prepare failed");
     return meta;
@@ -157,12 +173,17 @@ async function builderFetch(url: string, init: RequestInit): Promise<Response> {
     return await fetch(url, init);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    if (detail === "Failed to fetch" && canUseShellRelay()) {
-      throw new Error(
+    // Chrome reports a blocked/unreachable fetch as "Failed to fetch", Safari
+    // as "Load failed", Firefox as "NetworkError when attempting to fetch
+    // resource." — same network/CORS failure, three spellings.
+    const isNetworkError =
+      detail === "Failed to fetch" || detail === "Load failed" || /^NetworkError\b/.test(detail);
+    if (isNetworkError && canUseShellRelay()) {
+      throw new StoreApiUnreachableError(
         "Could not reach the store upload API from the builder (cross-origin). Use storefront embed shell relay.",
       );
     }
-    throw new Error(detail === "Failed to fetch" ? `Could not reach upload API: ${url.slice(0, 120)}` : detail);
+    throw new Error(isNetworkError ? `Could not reach upload API: ${url.slice(0, 120)}` : detail);
   }
 }
 
@@ -289,7 +310,7 @@ export async function prepareR2DirectUpload(
   uploadUrl: string,
   filename: string,
   totalBytes: number,
-  options: Pick<R2UploadOptions, "objectKey" | "useShellRelay" | "contentType" | "productionFormat"> = {},
+  options: Pick<R2UploadOptions, "objectKey" | "useShellRelay" | "contentType" | "productionFormat" | "relayPrepareTimeoutMs"> = {},
 ): Promise<R2PrepareMeta> {
   if (shouldUseShellRelay(options)) {
     return prepareViaShellRelay(filename, totalBytes, options);
@@ -403,43 +424,75 @@ export async function uploadProductionToR2(
       onProgress,
     );
   }
-  onProgress?.("Preparing cloud upload...");
-  const meta = await prepareR2DirectUpload(uploadUrl, filename, total, {
-    ...options,
-    contentType: effectiveContentType,
-    productionFormat: expectedFormat,
-  });
+  try {
+    onProgress?.("Preparing cloud upload...");
+    const meta = await prepareR2DirectUpload(uploadUrl, filename, total, {
+      ...options,
+      contentType: effectiveContentType,
+      productionFormat: expectedFormat,
+    });
 
-  const uploadedParts = await uploadPreparedPartsToR2(body, meta, onProgress);
+    const uploadedParts = await uploadPreparedPartsToR2(body, meta, onProgress);
 
-  onProgress?.("Finalizing upload...");
-  const done = await r2DirectComplete(
-    uploadUrl,
-    String(meta.sessionId),
-    Boolean(meta.singlePut),
-    Number(meta.totalParts) || 1,
-    uploadedParts.length ? uploadedParts : undefined,
-    options,
-  );
-  const prod = String(done.productionUrl || done.url || "");
-  if (!prod) throw new Error("No production URL");
-  const returnedPath = (() => {
-    try {
-      return new URL(prod, window.location.href).pathname.toLowerCase();
-    } catch {
-      return prod.toLowerCase();
+    onProgress?.("Finalizing upload...");
+    const done = await r2DirectComplete(
+      uploadUrl,
+      String(meta.sessionId),
+      Boolean(meta.singlePut),
+      Number(meta.totalParts) || 1,
+      uploadedParts.length ? uploadedParts : undefined,
+      options,
+    );
+    const prod = String(done.productionUrl || done.url || "");
+    if (!prod) throw new Error("No production URL");
+    const returnedPath = (() => {
+      try {
+        return new URL(prod, window.location.href).pathname.toLowerCase();
+      } catch {
+        return prod.toLowerCase();
+      }
+    })();
+    const expectedExtension = expectedFormat === "pdf" ? ".pdf" : ".png";
+    if (!returnedPath.endsWith(expectedExtension)) {
+      throw new Error(`Upload returned a non-${expectedFormat.toUpperCase()} production URL`);
     }
-  })();
-  const expectedExtension = expectedFormat === "pdf" ? ".pdf" : ".png";
-  if (!returnedPath.endsWith(expectedExtension)) {
-    throw new Error(`Upload returned a non-${expectedFormat.toUpperCase()} production URL`);
+    return {
+      productionUrl: prod,
+      key: done.key ? String(done.key) : null,
+      previewUrl: prod,
+      cartPreviewUrl: done.cartPreviewUrl ? String(done.cartPreviewUrl) : prod,
+    };
+  } catch (err) {
+    // A shell-provided direct upload URL is unreachable for some customers
+    // from inside the builder iframe — CORS-blocking extensions, Safari
+    // privacy modes, or proxies that expect storefront cookies the
+    // cross-origin fetch never sends. The parent page can still do
+    // prepare/complete on our behalf, so that one failure — and only that
+    // one — gets a retry through the relay instead of failing the order.
+    // HTTP errors and failed R2 part PUTs rethrow untouched: the relay
+    // changes neither, and retrying mid-multipart would re-upload the sheet
+    // while first-attempt PUTs may still be in flight.
+    if (!(err instanceof StoreApiUnreachableError)) throw err;
+    // The retry sets useShellRelay, so a failure inside it rethrows here
+    // without recursing again.
+    if (shouldUseShellRelay(options) || !canUseShellRelay()) throw err;
+    const directDetail = err.message;
+    onProgress?.("Store endpoint unreachable — retrying through the store page...");
+    try {
+      // Short prepare cap: a parent that never implemented the relay should
+      // surface the combined error in ~20s, not hold checkout for the full
+      // 180s handshake timeout. Once prepare answers, the parent clearly
+      // speaks the protocol, so complete keeps the normal generous timeout.
+      return await uploadProductionToR2(body, filename, "", onProgress, {
+        ...options,
+        useShellRelay: true,
+        relayPrepareTimeoutMs: 20_000,
+      });
+    } catch (relayErr) {
+      const relayDetail = relayErr instanceof Error ? relayErr.message : String(relayErr);
+      throw new Error(`direct: ${directDetail}; relay retry: ${relayDetail}`);
+    }
   }
-  return {
-    productionUrl: prod,
-    key: done.key ? String(done.key) : null,
-    previewUrl: prod,
-    cartPreviewUrl: done.cartPreviewUrl ? String(done.cartPreviewUrl) : prod,
-  };
 }
 
 type WorkerR2UploadResult = {

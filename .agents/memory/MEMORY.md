@@ -21,3 +21,4 @@
 - [Halftone selected overlay](halftone-selected-overlay.md) — HD detail overlay must render 1:1 (never downscale halftone dots) and the main canvas draws only the 6px ring under it.
 - [Publish snapshots working tree](publish-working-tree-snapshot.md) — a publish auto-commits and ships uncommitted in-progress work; undo it by reverting the snapshot commit, then republish.
 - [Blank export guards](blank-export-guards.md) — every export path must verify non-transparent output before upload; native-res banded alpha scans only (downsample probes false-flag tiny designs).
+- [Upload relay fallback](upload-relay-fallback.md) — retry blocked direct store fetches via the parent relay; gate on the transport sentinel and probe with a short prepare timeout.
