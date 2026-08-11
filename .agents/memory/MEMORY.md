@@ -23,3 +23,4 @@
 - [Blank export guards](blank-export-guards.md) — every export path must verify non-transparent output before upload; native-res banded alpha scans only (downsample probes false-flag tiny designs).
 - [Upload relay fallback](upload-relay-fallback.md) — retry blocked direct store fetches via the parent relay; gate on the transport sentinel and probe with a short prepare timeout.
 - [Server upload temp files](server-upload-temp-files.md) — disk-not-memory multipart storage, abort-aware temp cleanup (multer leaks on mid-body disconnects), serialized decodes with 503 shed.
+- [Resumable upload sessions](resumable-upload-sessions.md) — bind resume caches to content digests, canonicalize multipart part lists, resume on the preparing route, wake lock while bytes move.
