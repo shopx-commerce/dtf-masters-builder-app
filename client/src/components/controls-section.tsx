@@ -3,13 +3,12 @@ import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ResizeSettings, ImageInfo } from "./image-editor";
-import { Download, Layers, FileCheck, Palette, Eye, EyeOff, ChevronDown, ChevronUp, Info, ShoppingCart, Eraser, WandSparkles, Sparkles, Undo2 } from "lucide-react";
+import { Download, Layers, FileCheck, Palette, Eye, EyeOff, ChevronDown, ChevronUp, Info, ShoppingCart, Sparkles, Undo2 } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
 import { formatLength } from "@/lib/format-length";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { formatVariantPriceForDisplay, getSelectedVariantPrice } from "@/lib/variant-price";
-import { useWandTolerance, useToolActions } from "@/state/tool-store";
 
 export interface SpotPreviewData {
   enabled: boolean;
@@ -80,14 +79,11 @@ interface ControlsSectionProps {
   regenerateProduction?: boolean;
   /** Edit mode only: when provided, renders the "Regenerate file" checkbox next to the update button. */
   onRegenerateProductionChange?: (value: boolean) => void;
-  onRemoveWhiteBackground?: () => void;
-  wandDeleteActive?: boolean;
-  onWandDeleteToggle?: () => void;
-  // NOTE: `wandTolerance` / `onWandToleranceChange` used to live here
-  // and were re-threaded from the model on every 60Hz slider tick,
-  // regenerating the entire context bag. They now live in the Zustand
-  // `tool-store` and the slider subscribes directly — see
-  // `state/tool-store.ts`.
+  // NOTE: the White BG / Magic Wand card that used to render here moved to
+  // the desktop toolbar's "Design tools" dropdown (see
+  // `image-editor/editor-action-toolbar.tsx`), taking its tool props with
+  // it. Wand tolerance lives in the Zustand `tool-store` and the toolbar's
+  // slider subscribes directly — see `state/tool-store.ts`.
 }
 
 const DEFAULT_HEIGHTS: number[] = [];
@@ -144,15 +140,8 @@ function ControlsSection({
   lockGangsheetSize = false,
   regenerateProduction = false,
   onRegenerateProductionChange,
-  onRemoveWhiteBackground,
-  wandDeleteActive = false,
-  onWandDeleteToggle,
 }: ControlsSectionProps) {
   const { t, lang } = useLanguage();
-  // Wand-tolerance slider state comes from the Zustand tool store so
-  // 60Hz slider ticks don't cascade back into the editor bag.
-  const wandTolerance = useWandTolerance();
-  const { setWandTolerance } = useToolActions();
   const isMobile = useIsMobile();
   const isLgUp = useMediaQuery("(min-width: 1024px)");
   const canDownload = !!imageInfo || designCount > 0;
@@ -608,51 +597,6 @@ function ControlsSection({
           )}
         </div>
       </div>
-
-      {imageInfo && (
-        <div className="rounded-lg border border-gray-200 bg-white p-2">
-          <div className="flex items-center gap-1.5">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onRemoveWhiteBackground}
-              className="h-10 flex-1 gap-1.5 rounded-lg border-amber-200 bg-amber-50 text-xs text-amber-700 hover:bg-amber-100"
-              title="Remove contiguous white or off-white background"
-            >
-              <Eraser className="h-4 w-4" />
-              White BG
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onWandDeleteToggle}
-              className={`h-10 flex-1 gap-1.5 rounded-lg text-xs ${wandDeleteActive
-                ? "border-fuchsia-600 bg-fuchsia-600 text-white hover:bg-fuchsia-700"
-                : "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-600 hover:bg-fuchsia-100"}`}
-              title={wandDeleteActive ? "Magic Wand active — click a color to erase it" : "Erase a connected color from the selected design"}
-            >
-              <WandSparkles className="h-4 w-4 shrink-0" aria-hidden="true" />
-              {wandDeleteActive ? "Wand ON" : "Magic Wand"}
-            </Button>
-          </div>
-          {wandDeleteActive && (
-             <label className="mt-2 flex items-center gap-2 text-[12px] text-fuchsia-800">
-              <span className="font-medium">Tol</span>
-              <input
-                type="range"
-                min="1"
-                max="100"
-                value={wandTolerance}
-                onChange={(e) => setWandTolerance(Number(e.target.value))}
-                className="min-w-0 flex-1 accent-fuchsia-600"
-              />
-              <span className="w-6 text-right tabular-nums">{wandTolerance}</span>
-            </label>
-          )}
-        </div>
-      )}
 
       {enableFluorescent && imageInfo && fluorPanelContainer && createPortal(
         <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">

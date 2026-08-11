@@ -10,6 +10,8 @@ import {
   ChevronUp,
   Copy,
   Droplets,
+  Eraser,
+  SlidersHorizontal,
   Sparkles,
   LayoutGrid,
   Link,
@@ -20,12 +22,15 @@ import {
   Trash2,
   Undo2,
   Unlink,
+  WandSparkles,
 } from "lucide-react";
 import { CenterHorizontalIcon, CenterVerticalIcon } from "./center-axis-icons";
+import { HalftoneIcon } from "./halftone-icon";
+import { useWandTolerance, useToolActions } from "@/state/tool-store";
 import { formatLength, getUnitSuffix, useMetric } from "@/lib/format-length";
 import { formatVariantPriceForDisplay } from "@/lib/variant-price";
 import type { ProfileConfig } from "@/lib/profiles";
-import type { ImageInfo, ImageTransform, ResizeSettings } from "@/lib/types";
+import type { HalftoneStrength, ImageInfo, ImageTransform, ResizeSettings } from "@/lib/types";
 import type { PreparedRaster } from "@/lib/prepare-raster-upload";
 import { UPSCALE_FACTORS, type UpscaleFactor } from "@/lib/upscale-manager";
 
@@ -99,6 +104,23 @@ export type EditorActionToolbarProps = {
    * than a permanently greyed one — see `client/src/lib/upscale-support.ts`.
    */
   canIncreaseQuality: boolean;
+  /**
+   * Desktop "Design tools" cluster (White BG / Magic Wand / Halftone), which
+   * replaced the sidebar cards those tools used to occupy. Optional because
+   * the provider's prop bag predates them — the view passes them explicitly
+   * at the render site.
+   */
+  handleRemoveWhiteBackground?: () => void;
+  wandDeleteActive?: boolean;
+  handleWandDeleteToggle?: () => void;
+  halftoneEnabled?: boolean;
+  handleOpenHalftoneMenu?: () => void;
+  halftoneMenuOpen?: boolean;
+  setHalftoneMenuOpen?: (open: boolean) => void;
+  halftoneStrength?: HalftoneStrength;
+  setHalftoneStrength?: (strength: HalftoneStrength) => void;
+  halftoneTopColors?: Array<{ hex: string; name?: string; r: number; g: number; b: number }>;
+  handleApplyHalftone?: (designId: string, r: number, g: number, b: number, strength: HalftoneStrength) => void;
 };
 
 function EditorActionToolbar(props: EditorActionToolbarProps) {
@@ -162,6 +184,17 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
     isUpscaling,
     upscaleProgress,
     canIncreaseQuality,
+    handleRemoveWhiteBackground,
+    wandDeleteActive = false,
+    handleWandDeleteToggle,
+    halftoneEnabled = false,
+    handleOpenHalftoneMenu,
+    halftoneMenuOpen = false,
+    setHalftoneMenuOpen,
+    halftoneStrength = "balanced",
+    setHalftoneStrength,
+    halftoneTopColors = [],
+    handleApplyHalftone,
   } = props;
   const metric = useMetric(lang);
   const maxGangsheetHeight = GANGSHEET_HEIGHTS.length > 0
@@ -181,13 +214,64 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
   const [upscaleScale, setUpscaleScale] = useState<UpscaleFactor>(2);
   const [pixelCleanOpen, setPixelCleanOpen] = useState(false);
   const [alignRotateOpen, setAlignRotateOpen] = useState(false);
+  const [designToolsOpen, setDesignToolsOpen] = useState(false);
+  /** The tool last picked from the Design tools dropdown, offered again as a pill — same idea as the phone bar. */
+  const [lastDesignToolId, setLastDesignToolId] = useState<"whiteBg" | "wand" | "halftone" | null>(null);
   const pixelCleanRef = useRef<HTMLDivElement>(null);
   const alignRotateRef = useRef<HTMLDivElement>(null);
+  const designToolsRef = useRef<HTMLDivElement>(null);
+  // Wand tolerance lives in the Zustand tool store (not props) so slider
+  // ticks stay out of the editor bag — same subscription the sidebar card
+  // used before it moved here.
+  const wandTolerance = useWandTolerance();
+  const { setWandTolerance } = useToolActions();
 
-  // Close either chooser on outside click or Escape; the two are mutually
-  // exclusive so opening one closes the other.
+  /** Mirrors the phone's Design-tools list for the three tools that moved off the sidebar. */
+  const desktopDesignTools = [
+    {
+      id: "whiteBg" as const,
+      label: t("editor.whiteBg"),
+      title: t("editor.whiteBgTitle"),
+      Icon: Eraser,
+      menuTone: "text-amber-700",
+      pillTone: "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100",
+      disabled: !selectedDesignId,
+      run: () => { handleRemoveWhiteBackground?.(); },
+    },
+    {
+      id: "wand" as const,
+      label: t("editor.magicWand"),
+      title: t("editor.magicWandTitle"),
+      Icon: WandSparkles,
+      menuTone: "text-fuchsia-600",
+      pillTone: "border-fuchsia-300 bg-fuchsia-50 text-fuchsia-700 hover:bg-fuchsia-100",
+      disabled: !selectedDesignId,
+      run: () => { handleWandDeleteToggle?.(); },
+    },
+    ...(halftoneEnabled
+      ? [{
+          id: "halftone" as const,
+          label: t("editor.halftone"),
+          title: t("editor.halftoneTitle"),
+          Icon: HalftoneIcon,
+          menuTone: "text-amber-700",
+          pillTone: "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100",
+          disabled: !selectedDesignId && selectedDesignIds.size === 0,
+          run: () => { handleOpenHalftoneMenu?.(); },
+        }]
+      : []),
+  ];
+  const lastDesignTool = lastDesignToolId
+    ? desktopDesignTools.find((tool) => tool.id === lastDesignToolId) ?? null
+    : null;
+
+  // Close any chooser on outside click or Escape; they are mutually
+  // exclusive so opening one closes the others. The Design tools cluster
+  // also anchors the halftone options panel, whose open flag lives in
+  // editor state (`halftoneMenuOpen`) because the phone sheet renders the
+  // same panel from it.
   useEffect(() => {
-    if (!pixelCleanOpen && !alignRotateOpen) return;
+    if (!pixelCleanOpen && !alignRotateOpen && !designToolsOpen && !halftoneMenuOpen) return;
     const onPointerDown = (e: PointerEvent) => {
       const target = e.target as Node;
       if (pixelCleanOpen && pixelCleanRef.current && !pixelCleanRef.current.contains(target)) {
@@ -196,11 +280,17 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
       if (alignRotateOpen && alignRotateRef.current && !alignRotateRef.current.contains(target)) {
         setAlignRotateOpen(false);
       }
+      if (designToolsRef.current && !designToolsRef.current.contains(target)) {
+        if (designToolsOpen) setDesignToolsOpen(false);
+        if (halftoneMenuOpen) setHalftoneMenuOpen?.(false);
+      }
     };
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setPixelCleanOpen(false);
         setAlignRotateOpen(false);
+        setDesignToolsOpen(false);
+        if (halftoneMenuOpen) setHalftoneMenuOpen?.(false);
       }
     };
     document.addEventListener("pointerdown", onPointerDown);
@@ -209,7 +299,7 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [pixelCleanOpen, alignRotateOpen]);
+  }, [pixelCleanOpen, alignRotateOpen, designToolsOpen, halftoneMenuOpen, setHalftoneMenuOpen]);
 
   return (
     <>
@@ -245,6 +335,8 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
               type="button"
               onClick={() => {
                 setAlignRotateOpen(false);
+                setDesignToolsOpen(false);
+                setHalftoneMenuOpen?.(false);
                 setPixelCleanOpen((v) => !v);
               }}
               disabled={designs.length === 0}
@@ -656,6 +748,8 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
               type="button"
               onClick={() => {
                 setPixelCleanOpen(false);
+                setDesignToolsOpen(false);
+                setHalftoneMenuOpen?.(false);
                 setAlignRotateOpen((v) => !v);
               }}
               disabled={!selectedDesignId}
@@ -748,6 +842,151 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
             )}
           </div>
         )}
+        {/* Design tools — White BG / Magic Wand / Halftone behind one button,
+            like the phone's Design tools sheet. The last-picked tool stays
+            next to it as a pill; an armed wand takes the slot with its
+            tolerance slider until it is turned off. */}
+        {!isMobile && (
+          <div className="relative flex items-center gap-1" ref={designToolsRef}>
+            <div className="w-px h-4 bg-gray-100 mx-0.5 hidden lg:block" />
+            <button
+              type="button"
+              onClick={() => {
+                setPixelCleanOpen(false);
+                setAlignRotateOpen(false);
+                setHalftoneMenuOpen?.(false);
+                setDesignToolsOpen((v) => !v);
+              }}
+              disabled={designs.length === 0}
+              aria-expanded={designToolsOpen}
+              aria-haspopup="menu"
+              className={`flex items-center gap-1.5 px-2 py-1 lg:px-3 lg:py-1.5 rounded-md border transition-all whitespace-nowrap text-[11px] lg:text-sm font-medium min-h-[36px] ${
+                designs.length > 0
+                  ? designToolsOpen
+                    ? "border-black bg-black text-white"
+                    : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                  : "border-gray-200 bg-gray-200 text-gray-500 opacity-30 pointer-events-none"
+              }`}
+              title={t("editor.designTools")}
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+              {t("editor.designTools")}
+              <ChevronDown className={`w-3 h-3 transition-transform ${designToolsOpen ? "rotate-180" : ""}`} />
+            </button>
+            {designToolsOpen && (
+              <div
+                role="menu"
+                className="absolute left-0 top-full z-50 mt-1 min-w-[12rem] overflow-hidden rounded-md border border-gray-200 bg-white py-1 shadow-lg"
+              >
+                {desktopDesignTools.map((tool) => (
+                  <button
+                    key={tool.id}
+                    type="button"
+                    role="menuitem"
+                    disabled={tool.disabled}
+                    onClick={() => {
+                      setDesignToolsOpen(false);
+                      setLastDesignToolId(tool.id);
+                      tool.run();
+                    }}
+                    className={`flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] font-medium hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-40 ${tool.menuTone}`}
+                    title={tool.title}
+                  >
+                    <tool.Icon className="h-3.5 w-3.5 flex-shrink-0" />
+                    {tool.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {wandDeleteActive ? (
+              <div
+                className="flex min-h-[36px] flex-shrink-0 items-center gap-1.5 rounded-md border border-fuchsia-400 bg-fuchsia-50 pl-2 pr-1"
+                title={t("editor.magicWandActiveTitle")}
+              >
+                <WandSparkles className="h-3.5 w-3.5 flex-shrink-0 text-fuchsia-600" aria-hidden="true" />
+                <span className="whitespace-nowrap text-[11px] font-bold text-fuchsia-700">{t("editor.magicWandOn")}</span>
+                <input
+                  type="range"
+                  min="1"
+                  max="100"
+                  value={wandTolerance}
+                  onChange={(e) => setWandTolerance(Number(e.target.value))}
+                  className="w-16 flex-shrink-0 accent-fuchsia-600"
+                  aria-label={t("editor.wandTolerance")}
+                  title={t("editor.wandTolerance")}
+                />
+                <span className="w-5 flex-shrink-0 text-right text-[11px] font-semibold tabular-nums text-fuchsia-800">{wandTolerance}</span>
+                <button
+                  type="button"
+                  onClick={() => handleWandDeleteToggle?.()}
+                  className="flex-shrink-0 rounded bg-fuchsia-600 px-1.5 py-1 text-[11px] font-bold text-white transition-colors hover:bg-fuchsia-700"
+                  title={t("editor.wandTurnOff")}
+                >
+                  {t("editor.wandTurnOff")}
+                </button>
+              </div>
+            ) : lastDesignTool ? (
+              <button
+                type="button"
+                onClick={lastDesignTool.run}
+                disabled={lastDesignTool.disabled}
+                className={`flex min-h-[36px] flex-shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-md border px-2 py-1 text-[12px] font-semibold transition-colors disabled:pointer-events-none disabled:opacity-30 ${lastDesignTool.pillTone}`}
+                title={t("editor.applyAgain", { tool: lastDesignTool.label })}
+              >
+                <lastDesignTool.Icon className="h-3.5 w-3.5 flex-shrink-0" />
+                {lastDesignTool.label}
+              </button>
+            ) : null}
+            {halftoneMenuOpen && (selectedDesignId || selectedDesignIds.size > 0) && (
+              <div className="absolute left-0 top-full z-50 mt-1 w-48 rounded-md border border-gray-200 bg-white p-2 shadow-lg">
+                <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">Strength</p>
+                <div className="mb-2 flex gap-1">
+                  {(["light", "balanced", "strong"] as const).map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setHalftoneStrength?.(s)}
+                      className={`flex-1 rounded border py-0.5 text-[10px] font-medium capitalize transition-colors ${halftoneStrength === s ? "border-amber-600 bg-amber-500 text-white" : "border-gray-200 bg-gray-50 text-gray-600 hover:bg-amber-50"}`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHalftoneMenuOpen?.(false);
+                    const id = selectedDesignId ?? [...selectedDesignIds][0];
+                    if (id) handleApplyHalftone?.(id, 0, 0, 0, halftoneStrength);
+                  }}
+                  className="mb-1 w-full rounded bg-gray-900 px-2 py-1.5 text-[11px] font-medium text-white hover:bg-gray-700"
+                >
+                  ⬛ Black garment
+                </button>
+                {halftoneTopColors.length > 0 && (
+                  <div className="mt-1 space-y-1">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Colour garment</p>
+                    {halftoneTopColors.map((c, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => {
+                          setHalftoneMenuOpen?.(false);
+                          const id = selectedDesignId ?? [...selectedDesignIds][0];
+                          if (id) handleApplyHalftone?.(id, c.r, c.g, c.b, halftoneStrength);
+                        }}
+                        className="flex w-full items-center gap-2 rounded px-2 py-1 text-[11px] hover:bg-gray-100"
+                      >
+                        <span className="h-3.5 w-3.5 flex-shrink-0 rounded-full border border-gray-200" style={{ background: c.hex }} />
+                        <span className="truncate text-gray-700">{c.name ?? c.hex}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   </div>
@@ -756,9 +995,10 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
   );
 }
 
-// Wrap in `React.memo` so unrelated view state changes (halftone menu
-// open/close, spot-channel hover, mobile-panel flip) skip re-rendering
-// this ~650-line toolbar. Every callback prop is `useCallback`-wrapped
+// Wrap in `React.memo` so unrelated view state changes (spot-channel
+// hover, mobile-panel flip) skip re-rendering this ~650-line toolbar.
+// Halftone menu state is a toolbar prop now (the Design tools cluster
+// anchors that panel), so its changes legitimately re-render. Every callback prop is `useCallback`-wrapped
 // in the provider (including the three previously plain handlers:
 // `handleSetRotation`, `handleAlignAxis`, `handleSetGroupCount`) so
 // memo's shallow-compare has a real chance to short-circuit.
