@@ -849,7 +849,7 @@ async function uploadBufferToPreparedR2(
   const parts = Array.isArray(meta.parts) ? meta.parts : [];
   if (!parts.length) throw new Error('Upload prepare incomplete');
   const bytes = new Uint8Array(buffer);
-  const partSize = Number(meta.partSize) || 64 * 1024 * 1024;
+  const partSize = Number(meta.partSize) || 8 * 1024 * 1024;
   const totalParts = Number(meta.totalParts) || parts.length;
   const parallelism = Math.max(1, Math.min(Number(meta.parallelism) || 16, totalParts));
   const sorted = parts.slice().sort((a, b) => Number(a.partNumber) - Number(b.partNumber));

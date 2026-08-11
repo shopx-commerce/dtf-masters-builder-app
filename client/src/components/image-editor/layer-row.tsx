@@ -466,7 +466,7 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
         <button
           onClick={handleDuplicateAndArrange}
           className="inline-flex h-7 min-w-0 flex-1 items-center justify-center gap-1 rounded-md border border-fuchsia-400 bg-fuchsia-100 px-1.5 text-[9px] font-bold text-fuchsia-800 shadow-sm shadow-fuchsia-500/20 transition-colors hover:bg-fuchsia-200 layersheet:h-10 layersheet:text-[11px]"
-          title={t("editor.duplicateArrange")}
+          title={t("editor.duplicateArrangeTitle")}
         >
           <Copy className="h-3 w-3 flex-shrink-0" />
           {/* "Apply" rather than the full "Duplicate & Arrange" the tooltip

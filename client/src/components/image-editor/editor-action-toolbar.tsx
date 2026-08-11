@@ -1,4 +1,4 @@
-import { useState, memo } from "react";
+import { useState, memo, useEffect, useRef } from "react";
 import UploadSection from "../upload-section";
 import SizeInput from "./size-input";
 import {
@@ -179,6 +179,37 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
         : t("controls.addToCart");
   const cartButtonTitle = !canAddToCart ? t("controls.uploadFirst") : cartButtonLabel;
   const [upscaleScale, setUpscaleScale] = useState<UpscaleFactor>(2);
+  const [pixelCleanOpen, setPixelCleanOpen] = useState(false);
+  const [alignRotateOpen, setAlignRotateOpen] = useState(false);
+  const pixelCleanRef = useRef<HTMLDivElement>(null);
+  const alignRotateRef = useRef<HTMLDivElement>(null);
+
+  // Close either chooser on outside click or Escape; the two are mutually
+  // exclusive so opening one closes the other.
+  useEffect(() => {
+    if (!pixelCleanOpen && !alignRotateOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as Node;
+      if (pixelCleanOpen && pixelCleanRef.current && !pixelCleanRef.current.contains(target)) {
+        setPixelCleanOpen(false);
+      }
+      if (alignRotateOpen && alignRotateRef.current && !alignRotateRef.current.contains(target)) {
+        setAlignRotateOpen(false);
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setPixelCleanOpen(false);
+        setAlignRotateOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [pixelCleanOpen, alignRotateOpen]);
 
   return (
     <>
@@ -209,32 +240,61 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
           rather than scrolls — "Duplicate & Arrange" was being cut in half. */}
       <div className="flex flex-col gap-1 lg:flex-row lg:flex-wrap lg:gap-1 flex-shrink-0 lg:shrink lg:min-w-0 ml-auto lg:ml-0">
         <div className="flex items-center gap-1">
-          <button
-            onClick={handleThresholdAlpha}
-            disabled={!selectedDesignId && selectedDesignIds.size === 0}
-            className={`flex items-center gap-1.5 px-2 py-1 lg:px-4 lg:py-2 rounded-md transition-all whitespace-nowrap text-[11px] lg:text-sm font-medium shadow-sm min-h-[36px] ${
-              selectedDesignId || selectedDesignIds.size > 0
-                ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#2563EB] border border-[#CBD5E1] shadow-none'
-                : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
-            }`}
-            title={t("editor.cleanAlphaTitle")}
-          >
-            <Droplets className="w-3 h-3 lg:w-4 lg:h-4" />
-            {t("editor.cleanAlpha")}
-          </button>
-          <button
-            onClick={handleThresholdAlphaAll}
-            disabled={designs.length === 0}
-            className={`flex items-center gap-1.5 px-2 py-1 lg:px-4 lg:py-2 rounded-md transition-all whitespace-nowrap text-[11px] lg:text-sm font-medium shadow-sm min-h-[36px] ${
-              designs.length > 0
-                ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#2563EB] border border-[#CBD5E1] shadow-none'
-                : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
-            }`}
-            title={t("editor.cleanAlphaAllTitle")}
-          >
-            <Droplets className="w-3 h-3 lg:w-4 lg:h-4" />
-            {t("editor.cleanAlphaAll")}
-          </button>
+          <div className="relative" ref={pixelCleanRef}>
+            <button
+              type="button"
+              onClick={() => {
+                setAlignRotateOpen(false);
+                setPixelCleanOpen((v) => !v);
+              }}
+              disabled={designs.length === 0}
+              aria-expanded={pixelCleanOpen}
+              aria-haspopup="menu"
+              className={`flex items-center gap-1.5 px-2 py-1 lg:px-4 lg:py-2 rounded-md transition-all whitespace-nowrap text-[11px] lg:text-sm font-medium shadow-sm min-h-[36px] ${
+                designs.length > 0
+                  ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#2563EB] border border-[#CBD5E1] shadow-none'
+                  : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+              }`}
+              title={t("editor.cleanAlphaTitle")}
+            >
+              <Droplets className="w-3 h-3 lg:w-4 lg:h-4" />
+              {t("editor.cleanAlpha")}
+              <ChevronDown className={`w-3 h-3 transition-transform ${pixelCleanOpen ? "rotate-180" : ""}`} />
+            </button>
+            {pixelCleanOpen && (
+              <div
+                role="menu"
+                className="absolute left-0 top-full z-50 mt-1 min-w-[11rem] overflow-hidden rounded-md border border-gray-200 bg-white py-1 shadow-lg"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={!selectedDesignId && selectedDesignIds.size === 0}
+                  onClick={() => {
+                    handleThresholdAlpha();
+                    setPixelCleanOpen(false);
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] font-medium text-[#2563EB] hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-40"
+                >
+                  <Droplets className="h-3.5 w-3.5 flex-shrink-0" />
+                  {t("editor.cleanAlphaSelected")}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={designs.length === 0}
+                  onClick={() => {
+                    handleThresholdAlphaAll();
+                    setPixelCleanOpen(false);
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] font-medium text-[#2563EB] hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-40"
+                >
+                  <Droplets className="h-3.5 w-3.5 flex-shrink-0" />
+                  {t("editor.cleanAlphaFullPage")}
+                </button>
+              </div>
+            )}
+          </div>
           {canIncreaseQuality && (
           <div className="flex items-center gap-0.5">
             <button
@@ -270,19 +330,6 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
         </div>
         {!isMobile && (
           <div className="flex items-center gap-1">
-            <button
-              onClick={() => handleDuplicateDesign(duplicateCount)}
-              disabled={!selectedDesignId}
-              className={`flex items-center gap-1 px-2 py-1 lg:px-4 lg:py-2 rounded-md transition-all whitespace-nowrap text-[11px] lg:text-sm font-medium shadow-sm min-h-[36px] ${
-                selectedDesignId
-                  ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#7C3AED] border border-[#CBD5E1] shadow-none'
-                  : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
-              }`}
-              title={t("editor.duplicate")}
-            >
-              <Copy className="w-3 h-3 lg:w-4 lg:h-4" />
-              {t("editor.duplicate").replace(/ \(.*/, '')}
-            </button>
             {/* `coarse:` sizing, not `lg:`, because a tablet renders this desktop
                 arm on a touch screen. 16px is the threshold below which iOS
                 Safari zooms the page in on focus, and the widget has to widen to
@@ -332,7 +379,7 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
                   ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
                   : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
               }`}
-              title={t("editor.duplicateArrange")}
+              title={t("editor.duplicateArrangeTitle")}
             >
               <Copy className="w-3 h-3 lg:w-4 lg:h-4" />
               {t("editor.duplicateArrange")}
@@ -545,7 +592,7 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
                     ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
                     : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
                 }`}
-                title={t("editor.duplicateArrange")}
+                title={t("editor.duplicateArrangeTitle")}
               >
                 <Copy className="w-3 h-3" />
                 {t("editor.duplicateArrange")}
@@ -599,102 +646,107 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
           </div>
         </div>
       )}
-      {/* Row 3: rotate/align controls (desktop only) */}
+      {/* Align/Rotate — collapsed behind one control so the toolbar stays
+          short; expands with the same rotate + align cluster it replaced. */}
       <div className="flex items-center gap-0.5 flex-shrink-0 flex-wrap lg:flex-nowrap w-full lg:w-auto">
         {!isMobile && (
-          <>
+          <div className="relative flex items-center gap-1" ref={alignRotateRef}>
             <div className="w-px h-4 bg-gray-100 mx-0.5 hidden lg:block" />
             <button
-              onClick={handleRotate90}
+              type="button"
+              onClick={() => {
+                setPixelCleanOpen(false);
+                setAlignRotateOpen((v) => !v);
+              }}
               disabled={!selectedDesignId}
-              className="w-10 h-10 lg:w-[30px] lg:h-[30px] rounded-lg lg:rounded-md border-2 border-black bg-black text-white hover:bg-white hover:text-black transition-colors disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center shadow-sm"
-              title={t("editor.rotate")}
+              aria-expanded={alignRotateOpen}
+              aria-haspopup="true"
+              className={`flex items-center gap-1.5 px-2 py-1 lg:px-3 lg:py-1.5 rounded-md border transition-all whitespace-nowrap text-[11px] lg:text-sm font-medium min-h-[36px] ${
+                selectedDesignId
+                  ? alignRotateOpen
+                    ? "border-black bg-black text-white"
+                    : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                  : "border-gray-200 bg-gray-200 text-gray-500 opacity-30 pointer-events-none"
+              }`}
+              title={t("editor.alignRotateTitle")}
             >
-              <RotateCw className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+              <RotateCw className="w-3.5 h-3.5" />
+              {t("editor.alignRotate")}
+              <ChevronDown className={`w-3 h-3 transition-transform ${alignRotateOpen ? "rotate-180" : ""}`} />
             </button>
-            {selectedDesignId && (
-              <div className="flex items-center gap-1.5 lg:gap-1 rounded-xl lg:rounded-lg border-2 border-black bg-white px-1.5 py-1 lg:px-1 lg:py-0.5 shadow-sm">
-                <span className="min-w-[48px] lg:min-w-[34px] rounded-lg lg:rounded-md border-2 border-black bg-white px-1.5 py-1 lg:px-1 lg:py-0.5 text-center text-[16px] lg:text-[12px] font-bold tabular-nums text-black">{Math.round(activeDesignTransform.rotation || 0)}°</span>
-                {[0, 90, 180, 270].map(deg => (
-                  <button key={deg} onClick={() => handleSetRotation(deg)} className="flex h-9 min-w-10 lg:h-[30px] lg:min-w-7 items-center justify-center rounded-lg lg:rounded-md border border-black bg-white px-1.5 lg:px-1 text-[13px] lg:text-[11px] font-bold tabular-nums text-black hover:bg-black hover:text-white">
-                    {deg}°
+            {alignRotateOpen && selectedDesignId && (
+              <div className="absolute left-0 top-full z-50 mt-1 flex flex-wrap items-center gap-1.5 rounded-xl border-2 border-black bg-white p-2 shadow-lg">
+                <button
+                  onClick={handleRotate90}
+                  className="w-10 h-10 lg:w-[30px] lg:h-[30px] rounded-lg lg:rounded-md border-2 border-black bg-black text-white hover:bg-white hover:text-black transition-colors flex items-center justify-center shadow-sm"
+                  title={t("editor.rotate")}
+                >
+                  <RotateCw className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+                </button>
+                <div className="flex items-center gap-1.5 lg:gap-1 rounded-xl lg:rounded-lg border-2 border-black bg-white px-1.5 py-1 lg:px-1 lg:py-0.5 shadow-sm">
+                  <span className="min-w-[48px] lg:min-w-[34px] rounded-lg lg:rounded-md border-2 border-black bg-white px-1.5 py-1 lg:px-1 lg:py-0.5 text-center text-[16px] lg:text-[12px] font-bold tabular-nums text-black">{Math.round(activeDesignTransform.rotation || 0)}°</span>
+                  {[0, 90, 180, 270].map(deg => (
+                    <button key={deg} onClick={() => handleSetRotation(deg)} className="flex h-9 min-w-10 lg:h-[30px] lg:min-w-7 items-center justify-center rounded-lg lg:rounded-md border border-black bg-white px-1.5 lg:px-1 text-[13px] lg:text-[11px] font-bold tabular-nums text-black hover:bg-black hover:text-white">
+                      {deg}°
+                    </button>
+                  ))}
+                </div>
+                {/* Align cluster — same six buttons as before, still one group;
+                    the axis icons stay custom (see `center-axis-icons.tsx`). */}
+                <div className="flex items-center gap-0.5 lg:gap-px rounded-lg border-2 border-black bg-white px-1 py-0.5 lg:px-0.5 shadow-sm">
+                  <button
+                    onClick={() => handleAlignAxis("vertical")}
+                    className="relative p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
+                    title={t("editor.alignCenterX")}
+                    aria-label={t("editor.alignCenterX")}
+                  >
+                    <CenterHorizontalIcon className="w-5 h-5 lg:w-[18px] lg:h-[18px]" />
                   </button>
-                ))}
+                  <button
+                    onClick={() => handleAlignAxis("horizontal")}
+                    className="relative p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
+                    title={t("editor.alignCenterY")}
+                    aria-label={t("editor.alignCenterY")}
+                  >
+                    <CenterVerticalIcon className="w-5 h-5 lg:w-[18px] lg:h-[18px]" />
+                  </button>
+                  <div className="w-px h-6 lg:h-4 bg-gray-300 mx-0.5" />
+                  <button
+                    onClick={() => handleAlignCorner('tl')}
+                    className="p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
+                    title={t("editor.alignTL")}
+                    aria-label={t("editor.alignTL")}
+                  >
+                    <ArrowUpLeft className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => handleAlignCorner('tr')}
+                    className="p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
+                    title={t("editor.alignTR")}
+                    aria-label={t("editor.alignTR")}
+                  >
+                    <ArrowUpRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => handleAlignCorner('bl')}
+                    className="p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
+                    title={t("editor.alignBL")}
+                    aria-label={t("editor.alignBL")}
+                  >
+                    <ArrowDownLeft className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => handleAlignCorner('br')}
+                    className="p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
+                    title={t("editor.alignBR")}
+                    aria-label={t("editor.alignBR")}
+                  >
+                    <ArrowDownRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+                  </button>
+                </div>
               </div>
             )}
-            {/*
-              Align cluster.
-
-              Six buttons in a single visually-grouped block. Previously the
-              two axis-align buttons lived *inside* the rotation container,
-              which mixed unrelated operations and confused users; the four
-              corner buttons were also on a separate grid with different
-              visibility rules. Now all six share the same enable/disable
-              behavior (`selectedDesignId`), the same disabled affordance,
-              and a single container so their function reads as one group.
-
-              The two axis buttons draw their own icons (see
-              `center-axis-icons.tsx`): the Lucide equivalents plus a corner
-              "X" / "Y" letter were reported as unreadable at this size.
-            */}
-            <div className="flex items-center gap-0.5 lg:gap-px rounded-lg border-2 border-black bg-white px-1 py-0.5 lg:px-0.5 shadow-sm">
-              <button
-                onClick={() => handleAlignAxis("vertical")}
-                disabled={!selectedDesignId}
-                className="relative p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
-                title={t("editor.alignCenterX")}
-                aria-label={t("editor.alignCenterX")}
-              >
-                <CenterHorizontalIcon className="w-5 h-5 lg:w-[18px] lg:h-[18px]" />
-              </button>
-              <button
-                onClick={() => handleAlignAxis("horizontal")}
-                disabled={!selectedDesignId}
-                className="relative p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
-                title={t("editor.alignCenterY")}
-                aria-label={t("editor.alignCenterY")}
-              >
-                <CenterVerticalIcon className="w-5 h-5 lg:w-[18px] lg:h-[18px]" />
-              </button>
-              <div className="w-px h-6 lg:h-4 bg-gray-300 mx-0.5" />
-              <button
-                onClick={() => handleAlignCorner('tl')}
-                disabled={!selectedDesignId}
-                className="p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
-                title={t("editor.alignTL")}
-                aria-label={t("editor.alignTL")}
-              >
-                <ArrowUpLeft className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
-              </button>
-              <button
-                onClick={() => handleAlignCorner('tr')}
-                disabled={!selectedDesignId}
-                className="p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
-                title={t("editor.alignTR")}
-                aria-label={t("editor.alignTR")}
-              >
-                <ArrowUpRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
-              </button>
-              <button
-                onClick={() => handleAlignCorner('bl')}
-                disabled={!selectedDesignId}
-                className="p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
-                title={t("editor.alignBL")}
-                aria-label={t("editor.alignBL")}
-              >
-                <ArrowDownLeft className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
-              </button>
-              <button
-                onClick={() => handleAlignCorner('br')}
-                disabled={!selectedDesignId}
-                className="p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
-                title={t("editor.alignBR")}
-                aria-label={t("editor.alignBR")}
-              >
-                <ArrowDownRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
-              </button>
-            </div>
-          </>
+          </div>
         )}
       </div>
     </div>

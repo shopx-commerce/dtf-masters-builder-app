@@ -241,8 +241,9 @@ async function prepareRasterUploadInner(file: File): Promise<PreparedRaster> {
     // 500 is deliberately included: while a production instance is booting
     // (or was just OOM-killed), the platform itself answers plain 500s —
     // observed live in the deployment log — and those windows pass within
-    // seconds. The endpoint's own deterministic rejections use 400.
-    if (res.status === 500 || res.status === 502 || res.status === 503 || res.status === 504) {
+    // seconds. The endpoint's own deterministic rejections use 400. 408/429
+    // are transient by definition (timeout / rate limit).
+    if (res.status >= 500 || res.status === 408 || res.status === 429) {
       lastNetworkDetail = `HTTP ${res.status}`;
       res = null;
       continue;

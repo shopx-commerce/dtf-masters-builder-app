@@ -227,14 +227,62 @@ export function isOpaqueRasterUpload(image: HTMLImageElement): boolean {
   }
 }
 
+// Full-frame canvas work above this many pixels (or this edge) OOMs mobile
+// Safari and can freeze Chrome, so crops decline and callers must use a
+// bounded copy of the source instead.
+export const MAX_CROP_PIXELS = 16_000_000;
+export const MAX_CROP_EDGE_PX = 4096;
+
+/**
+ * A copy of `image` as a canvas, downscaled only when the source exceeds the
+ * crop limits above. For callers whose null-crop fallback is "use the whole
+ * image": their layout comes from physical inch sizes, so an oversized raster
+ * loses only excess sharpness here, never geometry — and the fallback stays
+ * within the allocation budget the crop guard exists to protect.
+ */
+export function boundedImageCopyCanvas(image: HTMLImageElement): HTMLCanvasElement {
+  const srcW = image.naturalWidth || image.width;
+  const srcH = image.naturalHeight || image.height;
+  const canvas = document.createElement('canvas');
+  if (!(srcW > 0) || !(srcH > 0)) {
+    canvas.width = 1;
+    canvas.height = 1;
+    return canvas;
+  }
+  const scale = Math.min(
+    1,
+    MAX_CROP_EDGE_PX / Math.max(srcW, srcH),
+    Math.sqrt(MAX_CROP_PIXELS / (srcW * srcH)),
+  );
+  canvas.width = Math.max(1, Math.round(srcW * scale));
+  canvas.height = Math.max(1, Math.round(srcH * scale));
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    if (scale < 1) {
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+    }
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  }
+  return canvas;
+}
+
 export function cropImageToContent(image: HTMLImageElement): HTMLCanvasElement | null {
   try {
+    const srcW = image.naturalWidth || image.width;
+    const srcH = image.naturalHeight || image.height;
+    // Full-frame getImageData of a large raster OOMs Chrome (and Safari). Callers
+    // fall back to the uncropped source when this returns null.
+    if (!(srcW > 0) || !(srcH > 0) || srcW * srcH > MAX_CROP_PIXELS || Math.max(srcW, srcH) > MAX_CROP_EDGE_PX) {
+      return null;
+    }
+
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return null;
 
-    canvas.width = image.width;
-    canvas.height = image.height;
+    canvas.width = srcW;
+    canvas.height = srcH;
     ctx.drawImage(image, 0, 0);
 
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -337,12 +385,21 @@ let _cropRequestCounter = 0;
 export function cropImageToContentAsync(image: HTMLImageElement): Promise<HTMLCanvasElement | null> {
   return new Promise((resolve) => {
     try {
+      const srcW = image.naturalWidth || image.width;
+      const srcH = image.naturalHeight || image.height;
+      // Same ceiling as the sync crop — transferring a 30"+ decode into a worker
+      // still requires a full getImageData on the main thread first.
+      if (!(srcW > 0) || !(srcH > 0) || srcW * srcH > MAX_CROP_PIXELS || Math.max(srcW, srcH) > MAX_CROP_EDGE_PX) {
+        resolve(null);
+        return;
+      }
+
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       if (!ctx) { resolve(cropImageToContent(image)); return; }
 
-      canvas.width = image.width;
-      canvas.height = image.height;
+      canvas.width = srcW;
+      canvas.height = srcH;
       ctx.drawImage(image, 0, 0);
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 

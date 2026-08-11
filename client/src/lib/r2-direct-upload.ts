@@ -41,6 +41,55 @@ export type R2UploadOptions = {
 
 const SHELL_RELAY_TIMEOUT_MS = 180_000;
 
+// Part size is a memory/throughput trade. Desktop keeps big parts for fewer
+// round-trips; a phone asks for 8 MB parts so a stalled cellular PUT wastes
+// less progress and each in-flight buffer holds less RAM. The store decides
+// the final size — this is a hint sent with prepare, and `meta.partSize`
+// still wins when present.
+const MOBILE_PREFERRED_PART_BYTES = 8 * 1024 * 1024;
+const DESKTOP_PREFERRED_PART_BYTES = 32 * 1024 * 1024;
+
+export function preferredPartSizeBytes(): number {
+  return isMobileDevice() ? MOBILE_PREFERRED_PART_BYTES : DESKTOP_PREFERRED_PART_BYTES;
+}
+
+/**
+ * PUT via XMLHttpRequest instead of fetch: fetch has no upload progress, and
+ * on iOS a stalled fetch PUT can hang far past any useful patience. XHR gives
+ * byte progress plus a hard timeout, and its failure messages are mapped onto
+ * the same transport-failure spellings the retry loops already match.
+ */
+function putWithXhr(
+  url: string,
+  body: Blob | Uint8Array,
+  headers: Record<string, string> | undefined,
+  onByteProgress?: (loaded: number, total: number) => void,
+): Promise<{ ok: boolean; status: number; etag: string | null }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", url, true);
+    if (headers) {
+      for (const [k, v] of Object.entries(headers)) {
+        try { xhr.setRequestHeader(k, v); } catch { /* forbidden header */ }
+      }
+    }
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable && onByteProgress) onByteProgress(ev.loaded, ev.total);
+    };
+    xhr.onload = () => {
+      const etag = xhr.getResponseHeader("etag") || xhr.getResponseHeader("ETag");
+      resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, etag });
+    };
+    xhr.onerror = () => reject(new Error("Failed to fetch"));
+    xhr.onabort = () => reject(new Error("Upload aborted"));
+    xhr.ontimeout = () => reject(new Error("Upload timed out"));
+    // Long cellular uploads — 10 minutes per request is generous for 8–64 MB.
+    xhr.timeout = 600_000;
+    const payload = body instanceof Blob ? body : new Blob([body as BlobPart]);
+    xhr.send(payload);
+  });
+}
+
 /**
  * The builder→store prepare/complete fetch failed at the transport layer
  * (CORS/network), before any HTTP status. Only this failure is worth retrying
@@ -129,6 +178,7 @@ async function prepareViaShellRelay(
       requestId,
       filename,
       totalBytes,
+      preferredPartSizeBytes: preferredPartSizeBytes(),
       ...(options.contentType ? { contentType: options.contentType } : {}),
       ...(options.productionFormat ? { productionFormat: options.productionFormat } : {}),
       ...(options.objectKey ? { objectKey: options.objectKey } : {}),
@@ -405,6 +455,7 @@ export async function prepareR2DirectUpload(
       step: "r2-direct-prepare",
       filename,
       totalBytes,
+      preferredPartSizeBytes: preferredPartSizeBytes(),
       ...(options.contentType ? { contentType: options.contentType } : {}),
       ...(options.productionFormat ? { productionFormat: options.productionFormat } : {}),
       ...(options.objectKey ? { objectKey: options.objectKey } : {}),
@@ -434,19 +485,51 @@ export async function uploadPreparedPartsToR2(
     const putHeaders = meta.putHeaders || {
       "Content-Type": body instanceof Blob && body.type ? body.type : "application/octet-stream",
     };
-    const putRes = await fetch(String(meta.putUrl), {
-      method: "PUT",
-      body: putBody(body),
-      headers: putHeaders,
-    });
-    if (!putRes.ok) throw new Error(`Cloud upload failed: ${putRes.status}`);
-    return [];
+    // Same retry contract as the part loop below: transport failures and
+    // transient statuses get three tries, deterministic 4xx fail immediately.
+    let lastDetail = "";
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) {
+        onProgress?.("Retrying upload...");
+        await new Promise((r) => setTimeout(r, attempt === 1 ? 800 : 2400));
+      }
+      let putRes: { ok: boolean; status: number; etag: string | null };
+      try {
+        putRes = await putWithXhr(String(meta.putUrl), putBody(body), putHeaders, (loaded, totalBytes) => {
+          if (totalBytes > 0) {
+            const pct = Math.min(100, Math.round((loaded / totalBytes) * 100));
+            onProgress?.(`Uploading print file to cloud (${pct}%)...`);
+          }
+        });
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        const isTransport =
+          detail === "Failed to fetch" || detail === "Load failed" ||
+          /^NetworkError\b/.test(detail) || /timed out/i.test(detail);
+        if (isTransport) {
+          lastDetail = "network/CORS";
+          continue;
+        }
+        throw new Error(`Cloud upload failed: ${detail}`);
+      }
+      if (putRes.ok) return [];
+      if (putRes.status >= 500 || putRes.status === 429 || putRes.status === 408) {
+        lastDetail = String(putRes.status);
+        continue;
+      }
+      throw new Error(`Cloud upload failed: ${putRes.status}`);
+    }
+    throw new Error(
+      lastDetail === "network/CORS"
+        ? "Cloud upload failed (network/CORS). Check R2 CORS and try again."
+        : `Cloud upload failed: ${lastDetail}`,
+    );
   }
 
   const parts = Array.isArray(meta.parts) ? meta.parts : [];
   if (!parts.length) throw new Error("Upload prepare incomplete");
 
-  const partSize = Number(meta.partSize) || 64 * 1024 * 1024;
+  const partSize = Number(meta.partSize) || preferredPartSizeBytes();
   const totalParts = Number(meta.totalParts) || parts.length;
   // Parts are 64 MB by default, and each one in flight is that much memory held by the
   // network stack. Sixteen at once is fine on a desktop and is roughly a gigabyte on a phone
@@ -480,13 +563,14 @@ export async function uploadPreparedPartsToR2(
       } else {
         onProgress?.(`Uploading part ${pn} of ${totalParts}...`);
       }
-      let res: Response;
+      let res: { ok: boolean; status: number; etag: string | null };
       try {
-        res = await fetch(String(part.url), { method: "PUT", body: bodyPart(body, start, end) });
+        res = await putWithXhr(String(part.url), bodyPart(body, start, end), undefined);
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
         const isTransport =
-          detail === "Failed to fetch" || detail === "Load failed" || /^NetworkError\b/.test(detail);
+          detail === "Failed to fetch" || detail === "Load failed" ||
+          /^NetworkError\b/.test(detail) || /timed out/i.test(detail);
         if (isTransport) {
           lastDetail = "network/CORS";
           continue;
@@ -494,7 +578,7 @@ export async function uploadPreparedPartsToR2(
         throw new Error(`Cloud upload part ${pn} failed: ${detail}`);
       }
       if (res.ok) {
-        const etag = res.headers.get("etag") || res.headers.get("ETag");
+        const etag = res.etag;
         if (etag) {
           const record = { partNumber: pn, etag };
           uploadedParts.push(record);

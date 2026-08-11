@@ -1206,7 +1206,7 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       toast({ title: t("toast.invalidImage"), description: t("toast.invalidImageDesc"), variant: "destructive" });
       return;
     }
-    const { widthInches, heightInches } = sane;
+    const { widthInches, heightInches, oversizeFrom } = sane;
 
     saveSnapshot();
     const currentAbH = artboardHeightRef.current;
@@ -1253,8 +1253,12 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     const maxSy = effectiveAbH / heightInches;
     const initialS = Math.min(1, maxSx, maxSy);
 
-    if (initialS < 1) {
-      const origDims = formatDimensions(widthInches, heightInches, lang);
+    if (oversizeFrom || initialS < 1) {
+      const origDims = formatDimensions(
+        oversizeFrom?.widthInches ?? widthInches,
+        oversizeFrom?.heightInches ?? heightInches,
+        lang,
+      );
       const fitDims = formatDimensions(widthInches * initialS, heightInches * initialS, lang);
       toast({
         title: t("toast.imageResized"),
