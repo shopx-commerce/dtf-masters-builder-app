@@ -8,6 +8,7 @@
  * never move high-resolution pixels back over the network.
  */
 
+import { holdScreenAwake } from "./wake-lock";
 import {
   checkFileSizeBudget,
   checkPixelBudget,
@@ -204,6 +205,18 @@ function isNetworkFetchError(err: unknown): err is Error {
 }
 
 export async function prepareRasterUpload(file: File): Promise<PreparedRaster> {
+  // Hold a screen wake lock while the file rides up and the preview comes
+  // back: iOS locking the screen mid-POST suspends the network process and
+  // kills the transfer. Best-effort no-op elsewhere.
+  const releaseWakeLock = await holdScreenAwake();
+  try {
+    return await prepareRasterUploadInner(file);
+  } finally {
+    releaseWakeLock();
+  }
+}
+
+async function prepareRasterUploadInner(file: File): Promise<PreparedRaster> {
   // Every large file rides on this one POST — on phones that means a
   // multi-second cellular upload that dies whenever the connection blips or
   // iOS kills the socket because the customer switched apps. A fresh
