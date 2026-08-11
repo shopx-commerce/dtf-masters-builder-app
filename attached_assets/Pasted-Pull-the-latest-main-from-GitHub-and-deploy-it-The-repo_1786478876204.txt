@@ -1,0 +1,58 @@
+Pull the latest main from GitHub and deploy it. The repo is
+buywitheze-droid/Anynestapplive; the commit you want is 3a6c5d9 ("Trim empty
+space on every upload, and stop exports failing on unreadable print sources").
+That commit is the source of truth — it was written and verified locally, so do
+not overwrite it with the Replit workspace's version of these files.
+
+BEFORE PULLING
+Run `git status` and `git log --oneline -5`. Report what you find before changing
+anything:
+- If the workspace is clean and behind origin/main, just pull.
+- If there are uncommitted local edits, do NOT discard them silently. Show me
+  what they are first. If they touch any of the files in this commit, I need to
+  decide.
+- If Replit has its own commits that origin doesn't, stop and tell me — do not
+  force-push or hard-reset in either direction.
+
+WHAT THE COMMIT CONTAINS
+23 files, all under client/src plus two scripts. Notably it DELETES two files,
+so make sure they are actually gone after the pull rather than lingering:
+  client/src/lib/image-crop-worker.ts   (replaced by tiled bounds measurement)
+  client/src/lib/zip-download.ts        (unreferenced dead code)
+And it ADDS three:
+  client/src/lib/content-bounds.ts
+  client/src/lib/content-bounds-selftest.ts
+  client/src/lib/download-file.ts
+
+WHAT YOU DO NOT NEED TO DO
+No package.json or lockfile changes, so do NOT run npm install — nothing was
+added or upgraded. No server/, shared/, vite.config, tsconfig, .env, or database
+changes either. No migrations, no new secrets. This is entirely client-side, so
+all that's needed is a rebuild and a restart.
+
+If you do end up running npm install for some other reason and it fails with
+ENOTFOUND package-firewall.replit.local, that's a few lockfile entries pointing
+at Replit's internal proxy; repoint those at https://registry.npmjs.org/.
+
+VERIFY
+- `npm run check` should report 19 TypeScript errors. Those 19 are pre-existing
+  and unrelated (true-contour.ts, and StrokeSettings/ShapeSettings import paths).
+  Do NOT try to fix them as part of this — just confirm the count did not go up.
+- `npm run build` should complete clean.
+- `node scripts/verify-png-assembly.mjs` should print "6 passed, 0 failed".
+- `node scripts/verify-download-filename.mjs` should print "49 checks passed".
+
+DO NOT "IMPROVE" THESE — each looks wrong and is deliberate
+- Uploads are no longer size-capped for empty-space trimming. The old 16 MP /
+  4096 px refusals were removed on purpose and must not come back; memory is now
+  bounded by tiling the scan instead.
+- The download URL revoke delay is at least 60 seconds and scales at ~1s/MB.
+  Revoking the blob URL is what ends the download, and the old 5-second delay was
+  truncating large saves. Do not shorten it.
+- The print-source readability guard throws instead of falling back to the editor
+  preview. The preview is capped at 2000px, so falling back shipped a soft file to
+  a printer and called it success. It must stay a hard failure.
+- The export worker receives Blobs and returns a Blob with no transfer list.
+  Blobs are not transferable; that is why the transfer list is gone.
+
+Once it's deployed, confirm the app loads and report the build output.
