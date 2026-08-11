@@ -1,0 +1,1788 @@
+﻿diff --git a/client/src/components/image-editor/editor-action-toolbar.tsx b/client/src/components/image-editor/editor-action-toolbar.tsx
+index 228ad98..fccc8cc 100644
+--- a/client/src/components/image-editor/editor-action-toolbar.tsx
++++ b/client/src/components/image-editor/editor-action-toolbar.tsx
+@@ -1,4 +1,4 @@
+-import { useState, memo } from "react";
++import { useState, memo, useEffect, useRef } from "react";
+ import UploadSection from "../upload-section";
+ import SizeInput from "./size-input";
+ import {
+@@ -130,7 +130,6 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
+     parseDuplicateCount,
+     handleDuplicateCountKeyDown,
+     clampDuplicateCount,
+-    handleDuplicateDesign,
+     handleDeleteDesign,
+     handleDeleteMulti,
+     handleDuplicateAndArrange,
+@@ -184,6 +183,35 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
+         : t("controls.addToCart");
+   const cartButtonTitle = !canAddToCart ? t("controls.uploadFirst") : cartButtonLabel;
+   const [upscaleScale, setUpscaleScale] = useState<UpscaleFactor>(2);
++  const [pixelCleanOpen, setPixelCleanOpen] = useState(false);
++  const [alignRotateOpen, setAlignRotateOpen] = useState(false);
++  const pixelCleanRef = useRef<HTMLDivElement>(null);
++  const alignRotateRef = useRef<HTMLDivElement>(null);
++
++  useEffect(() => {
++    if (!pixelCleanOpen && !alignRotateOpen) return;
++    const onPointerDown = (e: PointerEvent) => {
++      const target = e.target as Node;
++      if (pixelCleanOpen && pixelCleanRef.current && !pixelCleanRef.current.contains(target)) {
++        setPixelCleanOpen(false);
++      }
++      if (alignRotateOpen && alignRotateRef.current && !alignRotateRef.current.contains(target)) {
++        setAlignRotateOpen(false);
++      }
++    };
++    const onKeyDown = (e: KeyboardEvent) => {
++      if (e.key === "Escape") {
++        setPixelCleanOpen(false);
++        setAlignRotateOpen(false);
++      }
++    };
++    document.addEventListener("pointerdown", onPointerDown);
++    document.addEventListener("keydown", onKeyDown);
++    return () => {
++      document.removeEventListener("pointerdown", onPointerDown);
++      document.removeEventListener("keydown", onKeyDown);
++    };
++  }, [pixelCleanOpen, alignRotateOpen]);
+ 
+   return (
+     <>
+@@ -214,32 +242,61 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
+           rather than scrolls ΓÇö "Duplicate & Arrange" was being cut in half. */}
+       <div className="flex flex-col gap-1 lg:flex-row lg:flex-wrap lg:gap-1 flex-shrink-0 lg:shrink lg:min-w-0 ml-auto lg:ml-0">
+         <div className="flex items-center gap-1">
+-          <button
+-            onClick={handleThresholdAlpha}
+-            disabled={!selectedDesignId && selectedDesignIds.size === 0}
+-            className={`flex items-center gap-1.5 px-2 py-1 lg:px-4 lg:py-2 rounded-md transition-all whitespace-nowrap text-[11px] lg:text-sm font-medium shadow-sm min-h-[36px] ${
+-              selectedDesignId || selectedDesignIds.size > 0
+-                ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#2563EB] border border-[#CBD5E1] shadow-none'
+-                : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+-            }`}
+-            title={t("editor.cleanAlphaTitle")}
+-          >
+-            <Droplets className="w-3 h-3 lg:w-4 lg:h-4" />
+-            {t("editor.cleanAlpha")}
+-          </button>
+-          <button
+-            onClick={handleThresholdAlphaAll}
+-            disabled={designs.length === 0}
+-            className={`flex items-center gap-1.5 px-2 py-1 lg:px-4 lg:py-2 rounded-md transition-all whitespace-nowrap text-[11px] lg:text-sm font-medium shadow-sm min-h-[36px] ${
+-              designs.length > 0
+-                ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#2563EB] border border-[#CBD5E1] shadow-none'
+-                : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+-            }`}
+-            title={t("editor.cleanAlphaAllTitle")}
+-          >
+-            <Droplets className="w-3 h-3 lg:w-4 lg:h-4" />
+-            {t("editor.cleanAlphaAll")}
+-          </button>
++          <div className="relative" ref={pixelCleanRef}>
++            <button
++              type="button"
++              onClick={() => {
++                setAlignRotateOpen(false);
++                setPixelCleanOpen((v) => !v);
++              }}
++              disabled={designs.length === 0}
++              aria-expanded={pixelCleanOpen}
++              aria-haspopup="menu"
++              className={`flex items-center gap-1.5 px-2 py-1 lg:px-4 lg:py-2 rounded-md transition-all whitespace-nowrap text-[11px] lg:text-sm font-medium shadow-sm min-h-[36px] ${
++                designs.length > 0
++                  ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#2563EB] border border-[#CBD5E1] shadow-none'
++                  : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
++              }`}
++              title={t("editor.cleanAlphaTitle")}
++            >
++              <Droplets className="w-3 h-3 lg:w-4 lg:h-4" />
++              {t("editor.cleanAlpha")}
++              <ChevronDown className={`w-3 h-3 transition-transform ${pixelCleanOpen ? "rotate-180" : ""}`} />
++            </button>
++            {pixelCleanOpen && (
++              <div
++                role="menu"
++                className="absolute left-0 top-full z-50 mt-1 min-w-[11rem] overflow-hidden rounded-md border border-gray-200 bg-white py-1 shadow-lg"
++              >
++                <button
++                  type="button"
++                  role="menuitem"
++                  disabled={!selectedDesignId && selectedDesignIds.size === 0}
++                  onClick={() => {
++                    handleThresholdAlpha();
++                    setPixelCleanOpen(false);
++                  }}
++                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] font-medium text-[#2563EB] hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-40"
++                >
++                  <Droplets className="h-3.5 w-3.5 flex-shrink-0" />
++                  {t("editor.cleanAlphaSelected")}
++                </button>
++                <button
++                  type="button"
++                  role="menuitem"
++                  disabled={designs.length === 0}
++                  onClick={() => {
++                    handleThresholdAlphaAll();
++                    setPixelCleanOpen(false);
++                  }}
++                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] font-medium text-[#2563EB] hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-40"
++                >
++                  <Droplets className="h-3.5 w-3.5 flex-shrink-0" />
++                  {t("editor.cleanAlphaFullPage")}
++                </button>
++              </div>
++            )}
++          </div>
+           {canIncreaseQuality && (
+           <div className="flex items-center gap-0.5">
+             <button
+@@ -275,19 +332,6 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
+         </div>
+         {!isMobile && (
+           <div className="flex items-center gap-1">
+-            <button
+-              onClick={() => handleDuplicateDesign(duplicateCount)}
+-              disabled={!selectedDesignId}
+-              className={`flex items-center gap-1 px-2 py-1 lg:px-4 lg:py-2 rounded-md transition-all whitespace-nowrap text-[11px] lg:text-sm font-medium shadow-sm min-h-[36px] ${
+-                selectedDesignId
+-                  ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#7C3AED] border border-[#CBD5E1] shadow-none'
+-                  : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+-              }`}
+-              title={t("editor.duplicate")}
+-            >
+-              <Copy className="w-3 h-3 lg:w-4 lg:h-4" />
+-              {t("editor.duplicate").replace(/ \(.*/, '')}
+-            </button>
+             {/* `coarse:` sizing, not `lg:`, because a tablet renders this desktop
+                 arm on a touch screen. 16px is the threshold below which iOS
+                 Safari zooms the page in on focus, and the widget has to widen to
+@@ -337,7 +381,7 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
+                   ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
+                   : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+               }`}
+-              title={t("editor.duplicateArrange")}
++              title={t("editor.duplicateArrangeTitle")}
+             >
+               <Copy className="w-3 h-3 lg:w-4 lg:h-4" />
+               {t("editor.duplicateArrange")}
+@@ -539,102 +583,105 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
+           </div>
+         </div>
+       )}
+-      {/* Row 3: rotate/align controls (desktop only) */}
++      {/* Align/Rotate ΓÇö collapsed behind one subtle control so the toolbar
++          stays short; expands inline with the same rotate + align cluster. */}
+       <div className="flex items-center gap-0.5 flex-shrink-0 flex-wrap lg:flex-nowrap w-full lg:w-auto">
+         {!isMobile && (
+-          <>
++          <div className="relative flex items-center gap-1" ref={alignRotateRef}>
+             <div className="w-px h-4 bg-gray-100 mx-0.5 hidden lg:block" />
+             <button
+-              onClick={handleRotate90}
++              type="button"
++              onClick={() => {
++                setPixelCleanOpen(false);
++                setAlignRotateOpen((v) => !v);
++              }}
+               disabled={!selectedDesignId}
+-              className="w-10 h-10 lg:w-[30px] lg:h-[30px] rounded-lg lg:rounded-md border-2 border-black bg-black text-white hover:bg-white hover:text-black transition-colors disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center shadow-sm"
+-              title={t("editor.rotate")}
++              aria-expanded={alignRotateOpen}
++              aria-haspopup="true"
++              className={`flex items-center gap-1.5 px-2 py-1 lg:px-3 lg:py-1.5 rounded-md border transition-all whitespace-nowrap text-[11px] lg:text-sm font-medium min-h-[36px] ${
++                selectedDesignId
++                  ? alignRotateOpen
++                    ? "border-black bg-black text-white"
++                    : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
++                  : "border-gray-200 bg-gray-200 text-gray-500 opacity-30 pointer-events-none"
++              }`}
++              title={t("editor.alignRotateTitle")}
+             >
+-              <RotateCw className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
++              <RotateCw className="w-3.5 h-3.5" />
++              {t("editor.alignRotate")}
++              <ChevronDown className={`w-3 h-3 transition-transform ${alignRotateOpen ? "rotate-180" : ""}`} />
+             </button>
+-            {selectedDesignId && (
+-              <div className="flex items-center gap-1.5 lg:gap-1 rounded-xl lg:rounded-lg border-2 border-black bg-white px-1.5 py-1 lg:px-1 lg:py-0.5 shadow-sm">
+-                <span className="min-w-[48px] lg:min-w-[34px] rounded-lg lg:rounded-md border-2 border-black bg-white px-1.5 py-1 lg:px-1 lg:py-0.5 text-center text-[16px] lg:text-[12px] font-bold tabular-nums text-black">{Math.round(activeDesignTransform.rotation || 0)}┬░</span>
+-                {[0, 90, 180, 270].map(deg => (
+-                  <button key={deg} onClick={() => handleSetRotation(deg)} className="flex h-9 min-w-10 lg:h-[30px] lg:min-w-7 items-center justify-center rounded-lg lg:rounded-md border border-black bg-white px-1.5 lg:px-1 text-[13px] lg:text-[11px] font-bold tabular-nums text-black hover:bg-black hover:text-white">
+-                    {deg}┬░
++            {alignRotateOpen && selectedDesignId && (
++              <div className="absolute left-0 top-full z-50 mt-1 flex flex-wrap items-center gap-1.5 rounded-xl border-2 border-black bg-white p-2 shadow-lg">
++                <button
++                  onClick={handleRotate90}
++                  className="w-10 h-10 lg:w-[30px] lg:h-[30px] rounded-lg lg:rounded-md border-2 border-black bg-black text-white hover:bg-white hover:text-black transition-colors flex items-center justify-center shadow-sm"
++                  title={t("editor.rotate")}
++                >
++                  <RotateCw className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
++                </button>
++                <div className="flex items-center gap-1.5 lg:gap-1 rounded-xl lg:rounded-lg border-2 border-black bg-white px-1.5 py-1 lg:px-1 lg:py-0.5 shadow-sm">
++                  <span className="min-w-[48px] lg:min-w-[34px] rounded-lg lg:rounded-md border-2 border-black bg-white px-1.5 py-1 lg:px-1 lg:py-0.5 text-center text-[16px] lg:text-[12px] font-bold tabular-nums text-black">{Math.round(activeDesignTransform.rotation || 0)}┬░</span>
++                  {[0, 90, 180, 270].map(deg => (
++                    <button key={deg} onClick={() => handleSetRotation(deg)} className="flex h-9 min-w-10 lg:h-[30px] lg:min-w-7 items-center justify-center rounded-lg lg:rounded-md border border-black bg-white px-1.5 lg:px-1 text-[13px] lg:text-[11px] font-bold tabular-nums text-black hover:bg-black hover:text-white">
++                      {deg}┬░
++                    </button>
++                  ))}
++                </div>
++                <div className="flex items-center gap-0.5 lg:gap-px rounded-lg border-2 border-black bg-white px-1 py-0.5 lg:px-0.5 shadow-sm">
++                  <button
++                    onClick={() => handleAlignAxis("vertical")}
++                    className="relative p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
++                    title={t("editor.alignCenterX")}
++                    aria-label={t("editor.alignCenterX")}
++                  >
++                    <CenterHorizontalIcon className="w-5 h-5 lg:w-[18px] lg:h-[18px]" />
++                  </button>
++                  <button
++                    onClick={() => handleAlignAxis("horizontal")}
++                    className="relative p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
++                    title={t("editor.alignCenterY")}
++                    aria-label={t("editor.alignCenterY")}
++                  >
++                    <CenterVerticalIcon className="w-5 h-5 lg:w-[18px] lg:h-[18px]" />
+                   </button>
+-                ))}
++                  <div className="w-px h-6 lg:h-4 bg-gray-300 mx-0.5" />
++                  <button
++                    onClick={() => handleAlignCorner('tl')}
++                    className="p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
++                    title={t("editor.alignTL")}
++                    aria-label={t("editor.alignTL")}
++                  >
++                    <ArrowUpLeft className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
++                  </button>
++                  <button
++                    onClick={() => handleAlignCorner('tr')}
++                    className="p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
++                    title={t("editor.alignTR")}
++                    aria-label={t("editor.alignTR")}
++                  >
++                    <ArrowUpRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
++                  </button>
++                  <button
++                    onClick={() => handleAlignCorner('bl')}
++                    className="p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
++                    title={t("editor.alignBL")}
++                    aria-label={t("editor.alignBL")}
++                  >
++                    <ArrowDownLeft className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
++                  </button>
++                  <button
++                    onClick={() => handleAlignCorner('br')}
++                    className="p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
++                    title={t("editor.alignBR")}
++                    aria-label={t("editor.alignBR")}
++                  >
++                    <ArrowDownRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
++                  </button>
++                </div>
+               </div>
+             )}
+-            {/*
+-              Align cluster.
+-
+-              Six buttons in a single visually-grouped block. Previously the
+-              two axis-align buttons lived *inside* the rotation container,
+-              which mixed unrelated operations and confused users; the four
+-              corner buttons were also on a separate grid with different
+-              visibility rules. Now all six share the same enable/disable
+-              behavior (`selectedDesignId`), the same disabled affordance,
+-              and a single container so their function reads as one group.
+-
+-              The two axis buttons draw their own icons (see
+-              `center-axis-icons.tsx`): the Lucide equivalents plus a corner
+-              "X" / "Y" letter were reported as unreadable at this size.
+-            */}
+-            <div className="flex items-center gap-0.5 lg:gap-px rounded-lg border-2 border-black bg-white px-1 py-0.5 lg:px-0.5 shadow-sm">
+-              <button
+-                onClick={() => handleAlignAxis("vertical")}
+-                disabled={!selectedDesignId}
+-                className="relative p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
+-                title={t("editor.alignCenterX")}
+-                aria-label={t("editor.alignCenterX")}
+-              >
+-                <CenterHorizontalIcon className="w-5 h-5 lg:w-[18px] lg:h-[18px]" />
+-              </button>
+-              <button
+-                onClick={() => handleAlignAxis("horizontal")}
+-                disabled={!selectedDesignId}
+-                className="relative p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
+-                title={t("editor.alignCenterY")}
+-                aria-label={t("editor.alignCenterY")}
+-              >
+-                <CenterVerticalIcon className="w-5 h-5 lg:w-[18px] lg:h-[18px]" />
+-              </button>
+-              <div className="w-px h-6 lg:h-4 bg-gray-300 mx-0.5" />
+-              <button
+-                onClick={() => handleAlignCorner('tl')}
+-                disabled={!selectedDesignId}
+-                className="p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
+-                title={t("editor.alignTL")}
+-                aria-label={t("editor.alignTL")}
+-              >
+-                <ArrowUpLeft className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+-              </button>
+-              <button
+-                onClick={() => handleAlignCorner('tr')}
+-                disabled={!selectedDesignId}
+-                className="p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
+-                title={t("editor.alignTR")}
+-                aria-label={t("editor.alignTR")}
+-              >
+-                <ArrowUpRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+-              </button>
+-              <button
+-                onClick={() => handleAlignCorner('bl')}
+-                disabled={!selectedDesignId}
+-                className="p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
+-                title={t("editor.alignBL")}
+-                aria-label={t("editor.alignBL")}
+-              >
+-                <ArrowDownLeft className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+-              </button>
+-              <button
+-                onClick={() => handleAlignCorner('br')}
+-                disabled={!selectedDesignId}
+-                className="p-2 lg:p-1 rounded-md border border-black bg-white text-black hover:bg-black hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none min-w-[42px] min-h-[42px] lg:min-w-[30px] lg:min-h-[30px] flex items-center justify-center"
+-                title={t("editor.alignBR")}
+-                aria-label={t("editor.alignBR")}
+-              >
+-                <ArrowDownRight className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+-              </button>
+-            </div>
+-          </>
++          </div>
+         )}
+       </div>
+     </div>
+diff --git a/client/src/components/image-editor/image-editor-view.tsx b/client/src/components/image-editor/image-editor-view.tsx
+index dc9455b..55975b4 100644
+--- a/client/src/components/image-editor/image-editor-view.tsx
++++ b/client/src/components/image-editor/image-editor-view.tsx
+@@ -62,7 +62,7 @@ type DesignToolId =
+   | "whiteBg"
+   | "wand"
+   | "cleanAlpha"
+-  | "cleanAlphaAll"
++  | "alignRotate"
+   | "flipH"
+   | "flipV"
+   | "upscale"
+@@ -154,6 +154,8 @@ export default function ImageEditorView() {
+    */
+   const [designToolsOpen, setDesignToolsOpen] = useState(false);
+   const [toolsCollapseSignal, setToolsCollapseSignal] = useState(0);
++  const [alignRotatePanelOpen, setAlignRotatePanelOpen] = useState(false);
++  const [pixelCleanPanelOpen, setPixelCleanPanelOpen] = useState(false);
+   /**
+    * Where the canvas's backdrop-colour swatches land on the phone: the right-hand end of the
+    * view bar, which is on screen for the whole session.
+@@ -428,6 +430,23 @@ export default function ImageEditorView() {
+    * records it the same way.
+    */
+   const designTools: DesignTool[] = !mobileLayout ? [] : [
++    {
++      id: "alignRotate",
++      label: t("editor.alignRotate"),
++      title: t("editor.alignRotateTitle"),
++      Icon: RotateCw,
++      tone: alignRotatePanelOpen
++        ? "border-black bg-black text-white"
++        : "border-gray-300 bg-white text-gray-700 hover:bg-gray-100",
++      pillTone: "border-gray-300 bg-white text-gray-700",
++      disabled: !selectedDesignId,
++      run: () => {
++        setPixelCleanPanelOpen(false);
++        setAlignRotatePanelOpen((v) => !v);
++        setDesignToolsOpen(true);
++        setLayersOpen(false);
++      },
++    },
+     {
+       id: "whiteBg",
+       label: t("editor.whiteBg"),
+@@ -453,20 +472,17 @@ export default function ImageEditorView() {
+       label: t("editor.cleanAlpha"),
+       title: t("editor.cleanAlphaTitle"),
+       Icon: Droplets,
+-      tone: "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]",
+-      pillTone: "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]",
+-      disabled: !selectedDesignId && selectedDesignIds.size === 0,
+-      run: handleThresholdAlpha,
+-    },
+-    {
+-      id: "cleanAlphaAll",
+-      label: t("editor.cleanAlphaAll"),
+-      title: t("editor.cleanAlphaAllTitle"),
+-      Icon: Droplets,
+-      tone: "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]",
++      tone: pixelCleanPanelOpen
++        ? "border-[#2563EB] bg-[#2563EB] text-white"
++        : "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]",
+       pillTone: "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]",
+       disabled: designs.length === 0,
+-      run: handleThresholdAlphaAll,
++      run: () => {
++        setAlignRotatePanelOpen(false);
++        setPixelCleanPanelOpen((v) => !v);
++        setDesignToolsOpen(true);
++        setLayersOpen(false);
++      },
+     },
+     {
+       id: "flipH",
+@@ -488,9 +504,6 @@ export default function ImageEditorView() {
+       disabled: !selectedDesignId,
+       run: handleFlipY,
+     },
+-    /* Auto-Arrange sits with the tools now rather than in the bar. Imports and copy-count
+-       changes already arrange as they land, so pressing it is the exception rather than the
+-       routine, and it was holding the only labelled slot on the row. */
+     {
+       id: "autoArrange",
+       label: t("editor.autoArrange"),
+@@ -536,21 +549,21 @@ export default function ImageEditorView() {
+             : "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100",
+           pillTone: "border-amber-300 bg-amber-50 text-amber-700",
+           disabled: !selectedDesignId && selectedDesignIds.size === 0,
+-          /* Its options render inside the sheet, so repeating it from the pill has to bring
+-             the sheet back up or the menu would open somewhere nobody can see. */
+           run: () => { setDesignToolsOpen(true); setLayersOpen(false); handleOpenHalftoneMenu(); },
+         }]
+       : []),
+   ];
+ 
+   /**
+-   * Halftone is the one tool that opens options instead of applying, so it must not collapse
+-   * the sheet it just drew them into.
++   * Halftone / Align-Rotate / Pixel Clean open options instead of applying, so
++   * they must not collapse the sheet they just drew into.
+    */
+   const runTool = (tool: DesignTool) => {
+     setLastToolId(tool.id);
+     tool.run();
+-    if (tool.id !== "halftone") minimiseToolsAndFocus();
++    if (tool.id !== "halftone" && tool.id !== "alignRotate" && tool.id !== "cleanAlpha") {
++      minimiseToolsAndFocus();
++    }
+   };
+ 
+   const lastTool = lastToolId ? designTools.find((tool) => tool.id === lastToolId) ?? null : null;
+@@ -1137,30 +1150,7 @@ export default function ImageEditorView() {
+ 
+                       {level !== "peek" && (
+                         <>
+-                          <div className="flex flex-nowrap items-center justify-start gap-0.5 overflow-x-auto">
+-                            <button onClick={handleRotate90} disabled={!selectedDesignId} className="h-8 w-8 flex-shrink-0 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.rotate")}><RotateCw className="mx-auto h-4 w-4" /></button>
+-                            <div className="h-5 w-px flex-shrink-0 bg-gray-200" />
+-                            <button onClick={() => actionToolbarProps.handleAlignAxis("vertical")} disabled={!selectedDesignId} className="h-8 w-8 flex-shrink-0 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-cyan-500 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.alignCenterX")} aria-label={t("editor.alignCenterX")}><CenterHorizontalIcon className="mx-auto h-4 w-4" /></button>
+-                            <button onClick={() => actionToolbarProps.handleAlignAxis("horizontal")} disabled={!selectedDesignId} className="h-8 w-8 flex-shrink-0 rounded border border-gray-300 bg-white text-gray-600 transition-colors hover:bg-gray-100 hover:text-cyan-500 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.alignCenterY")} aria-label={t("editor.alignCenterY")}><CenterVerticalIcon className="mx-auto h-4 w-4" /></button>
+-                            <div className="h-5 w-px flex-shrink-0 bg-gray-200" />
+-                            <button onClick={() => handleAlignCorner('tl')} disabled={!selectedDesignId} className="h-8 w-8 flex-shrink-0 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.alignTL")}><ArrowUpLeft className="mx-auto h-4 w-4" /></button>
+-                            <button onClick={() => handleAlignCorner('tr')} disabled={!selectedDesignId} className="h-8 w-8 flex-shrink-0 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.alignTR")}><ArrowUpRight className="mx-auto h-4 w-4" /></button>
+-                            <button onClick={() => handleAlignCorner('bl')} disabled={!selectedDesignId} className="h-8 w-8 flex-shrink-0 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.alignBL")}><ArrowDownLeft className="mx-auto h-4 w-4" /></button>
+-                            <button onClick={() => handleAlignCorner('br')} disabled={!selectedDesignId} className="h-8 w-8 flex-shrink-0 rounded text-gray-600 hover:bg-gray-100 hover:text-cyan-400 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-11" title={t("editor.alignBR")}><ArrowDownRight className="mx-auto h-4 w-4" /></button>
+-                          </div>
+-
+                           <div className="flex flex-nowrap items-center justify-start gap-2 overflow-x-auto">
+-                            <button
+-                              onClick={() => handleDuplicateDesign(duplicateCount)}
+-                              disabled={!selectedDesignId}
+-                              className={`flex-shrink-0 rounded-md px-2 py-2 text-[11px] font-medium transition-all coarse:min-h-[44px] ${selectedDesignId ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#7C3AED]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`}
+-                              title={t("editor.duplicate")}
+-                            >
+-                              <span className="inline-flex w-full items-center justify-center gap-1 text-center whitespace-nowrap leading-snug">
+-                                <Copy className="h-3.5 w-3.5 flex-shrink-0" />
+-                                <span>{t("editor.duplicate").replace(/ \(.*/, "")}</span>
+-                              </span>
+-                            </button>
+                             {/* Hit area and glyph are separate boxes on a coarse
+                                 pointer, the same trade `size-input.tsx` and
+                                 `layer-row.tsx` make: the two chevrons keep their
+@@ -1199,9 +1189,6 @@ export default function ImageEditorView() {
+                                   title={t("editor.increaseCopies")}
+                                   aria-label={t("editor.increaseCopies")}
+                                 >
+-                                  {/* Same bezel and same ΓêÆ/+ as the layers and size
+-                                      steppers ΓÇö this one kept chevrons on both pointers
+-                                      and was the odd one out of the three. */}
+                                   <span className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-50 text-gray-600 group-hover:bg-gray-100">
+                                     <Plus className="h-3 w-3" strokeWidth={3} />
+                                   </span>
+@@ -1224,7 +1211,7 @@ export default function ImageEditorView() {
+                               onClick={() => handleDuplicateAndArrange(duplicateCount)}
+                               disabled={!selectedDesignId}
+                                className={`flex-shrink-0 rounded-md px-2 py-2 text-[12px] font-semibold transition-all coarse:min-h-[44px] ${selectedDesignId ? "border border-[#CBD5E1] bg-[#F1F5F9] text-[#0891B2]" : "pointer-events-none bg-gray-200 text-gray-500 opacity-30"}`}
+-                              title={t("editor.duplicateArrange")}
++                              title={t("editor.duplicateArrangeTitle")}
+                             >
+                               <span className="inline-flex w-full items-center justify-center gap-1 text-center whitespace-nowrap leading-snug">
+                                 <Copy className="h-3.5 w-3.5 flex-shrink-0" />
+@@ -1428,7 +1415,12 @@ export default function ImageEditorView() {
+                   handleLeading={
+                     <button
+                       type="button"
+-                      onClick={(e) => { e.stopPropagation(); setDesignToolsOpen(false); }}
++                      onClick={(e) => {
++                        e.stopPropagation();
++                        setDesignToolsOpen(false);
++                        setAlignRotatePanelOpen(false);
++                        setPixelCleanPanelOpen(false);
++                      }}
+                       onPointerDown={(e) => e.stopPropagation()}
+                       className="flex h-11 w-11 items-center justify-center text-gray-500 hover:text-gray-800"
+                       aria-label={t("editor.closeDesignTools")}
+@@ -1480,7 +1472,12 @@ export default function ImageEditorView() {
+                                 disabled={tool.disabled}
+                                 className={`flex items-center justify-center gap-1 whitespace-nowrap rounded-md border px-2 py-2 text-[11px] font-medium transition-all disabled:pointer-events-none disabled:opacity-30 coarse:min-h-[44px] ${tool.tone}`}
+                                 title={tool.title}
+-                                aria-expanded={tool.id === "halftone" ? halftoneMenuOpen : undefined}
++                                aria-expanded={
++                                  tool.id === "halftone" ? halftoneMenuOpen
++                                    : tool.id === "alignRotate" ? alignRotatePanelOpen
++                                      : tool.id === "cleanAlpha" ? pixelCleanPanelOpen
++                                        : undefined
++                                }
+                               >
+                                 <tool.Icon className="h-3.5 w-3.5 flex-shrink-0" />
+                                 <span className="truncate">{tool.label}</span>
+@@ -1488,6 +1485,73 @@ export default function ImageEditorView() {
+                             ))}
+                           </div>
+ 
++                          {alignRotatePanelOpen && selectedDesignId && (
++                            <div className="rounded-md border border-gray-200 bg-gray-50 p-1.5">
++                              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-600">{t("editor.alignRotate")}</p>
++                              <div className="flex flex-wrap items-center gap-1">
++                                <button
++                                  type="button"
++                                  onClick={() => { handleRotate90(); minimiseToolsAndFocus(); }}
++                                  className="h-11 w-11 rounded-md border border-gray-300 bg-white text-gray-700"
++                                  title={t("editor.rotate")}
++                                >
++                                  <RotateCw className="mx-auto h-4 w-4" />
++                                </button>
++                                {[0, 90, 180, 270].map((deg) => (
++                                  <button
++                                    key={deg}
++                                    type="button"
++                                    onClick={() => { actionToolbarProps.handleSetRotation(deg); minimiseToolsAndFocus(); }}
++                                    className="h-11 min-w-11 rounded-md border border-gray-300 bg-white px-2 text-[12px] font-bold tabular-nums text-gray-800"
++                                  >
++                                    {deg}┬░
++                                  </button>
++                                ))}
++                                <div className="h-8 w-px bg-gray-200" />
++                                <button type="button" onClick={() => { actionToolbarProps.handleAlignAxis("vertical"); minimiseToolsAndFocus(); }} className="h-11 w-11 rounded-md border border-gray-300 bg-white" title={t("editor.alignCenterX")} aria-label={t("editor.alignCenterX")}><CenterHorizontalIcon className="mx-auto h-4 w-4" /></button>
++                                <button type="button" onClick={() => { actionToolbarProps.handleAlignAxis("horizontal"); minimiseToolsAndFocus(); }} className="h-11 w-11 rounded-md border border-gray-300 bg-white" title={t("editor.alignCenterY")} aria-label={t("editor.alignCenterY")}><CenterVerticalIcon className="mx-auto h-4 w-4" /></button>
++                                <button type="button" onClick={() => { handleAlignCorner("tl"); minimiseToolsAndFocus(); }} className="h-11 w-11 rounded-md border border-gray-300 bg-white" title={t("editor.alignTL")}><ArrowUpLeft className="mx-auto h-4 w-4" /></button>
++                                <button type="button" onClick={() => { handleAlignCorner("tr"); minimiseToolsAndFocus(); }} className="h-11 w-11 rounded-md border border-gray-300 bg-white" title={t("editor.alignTR")}><ArrowUpRight className="mx-auto h-4 w-4" /></button>
++                                <button type="button" onClick={() => { handleAlignCorner("bl"); minimiseToolsAndFocus(); }} className="h-11 w-11 rounded-md border border-gray-300 bg-white" title={t("editor.alignBL")}><ArrowDownLeft className="mx-auto h-4 w-4" /></button>
++                                <button type="button" onClick={() => { handleAlignCorner("br"); minimiseToolsAndFocus(); }} className="h-11 w-11 rounded-md border border-gray-300 bg-white" title={t("editor.alignBR")}><ArrowDownRight className="mx-auto h-4 w-4" /></button>
++                              </div>
++                            </div>
++                          )}
++
++                          {pixelCleanPanelOpen && (
++                            <div className="rounded-md border border-slate-200 bg-slate-50 p-1.5">
++                              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-600">{t("editor.cleanAlpha")}</p>
++                              <div className="grid grid-cols-2 gap-1.5">
++                                <button
++                                  type="button"
++                                  disabled={!selectedDesignId && selectedDesignIds.size === 0}
++                                  onClick={() => {
++                                    handleThresholdAlpha();
++                                    setPixelCleanPanelOpen(false);
++                                    minimiseToolsAndFocus();
++                                  }}
++                                  className="flex items-center justify-center gap-1 rounded-md border border-[#CBD5E1] bg-[#F1F5F9] px-2 py-2 text-[11px] font-medium text-[#2563EB] disabled:opacity-40 coarse:min-h-[44px]"
++                                >
++                                  <Droplets className="h-3.5 w-3.5" />
++                                  {t("editor.cleanAlphaSelected")}
++                                </button>
++                                <button
++                                  type="button"
++                                  disabled={designs.length === 0}
++                                  onClick={() => {
++                                    handleThresholdAlphaAll();
++                                    setPixelCleanPanelOpen(false);
++                                    minimiseToolsAndFocus();
++                                  }}
++                                  className="flex items-center justify-center gap-1 rounded-md border border-[#CBD5E1] bg-[#F1F5F9] px-2 py-2 text-[11px] font-medium text-[#2563EB] disabled:opacity-40 coarse:min-h-[44px]"
++                                >
++                                  <Droplets className="h-3.5 w-3.5" />
++                                  {t("editor.cleanAlphaFullPage")}
++                                </button>
++                              </div>
++                            </div>
++                          )}
++
+                           {/* Inline below the grid, not the popover the desktop
+                               uses: a popover anchored inside a sheet that owns
+                               its own scroll is clipped by it, and there is no
+@@ -1729,8 +1793,7 @@ export default function ImageEditorView() {
+           onClick={(e) => e.stopPropagation()}
+         >
+           {([
+-            { icon: Copy, label: t("editor.duplicate").replace(/ \(.*/, '') + ` (${duplicateCount})`, shortcut: 'Ctrl+D', action: () => { handleDuplicateDesign(duplicateCount); setContextMenu(null); }, disabled: false },
+-            { icon: Copy, label: t("editor.duplicateArrange") + ` (${duplicateCount})`, shortcut: '', action: () => { handleDuplicateAndArrange(duplicateCount); setContextMenu(null); }, disabled: false },
++            { icon: Copy, label: t("editor.duplicateArrange") + (duplicateCount > 1 ? ` (${duplicateCount})` : ""), shortcut: '', action: () => { handleDuplicateAndArrange(duplicateCount); setContextMenu(null); }, disabled: false },
+             { icon: Trash2, label: t("editor.delete").replace(/ \(.*/, ''), shortcut: 'Del', action: () => { if (selectedDesignIds.size > 1) handleDeleteMulti(selectedDesignIds); else handleDeleteDesign(contextMenu.designId); setContextMenu(null); }, disabled: false },
+             null,
+             { icon: RotateCw, label: t("editor.rotate").replace(/ \(.*/, ''), shortcut: 'R', action: () => { handleRotate90(); setContextMenu(null); }, disabled: false },
+diff --git a/client/src/components/image-editor/layer-row.tsx b/client/src/components/image-editor/layer-row.tsx
+index a1fb94a..ca20a2a 100644
+--- a/client/src/components/image-editor/layer-row.tsx
++++ b/client/src/components/image-editor/layer-row.tsx
+@@ -519,7 +519,7 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
+         <button
+           onClick={handleDuplicateAndArrange}
+           className="inline-flex h-7 min-w-0 flex-1 items-center justify-center gap-1 rounded-md border border-fuchsia-400 bg-fuchsia-100 px-1.5 text-[9px] font-bold text-fuchsia-800 shadow-sm shadow-fuchsia-500/20 transition-colors hover:bg-fuchsia-200 layersheet:h-10 layersheet:text-[11px]"
+-          title={t("editor.duplicateArrange")}
++          title={t("editor.duplicateArrangeTitle")}
+         >
+           <Copy className="h-3 w-3 flex-shrink-0" />
+           {/* "Apply" rather than the full "Duplicate & Arrange" the tooltip
+diff --git a/client/src/components/image-editor/useImageEditorModelArrangeKeyboard.ts b/client/src/components/image-editor/useImageEditorModelArrangeKeyboard.ts
+index 83df32e..e26c806 100644
+--- a/client/src/components/image-editor/useImageEditorModelArrangeKeyboard.ts
++++ b/client/src/components/image-editor/useImageEditorModelArrangeKeyboard.ts
+@@ -1522,7 +1522,7 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
+       toast({ title: t("toast.invalidImage"), description: t("toast.invalidImageDesc"), variant: "destructive" });
+       return;
+     }
+-    const { widthInches, heightInches } = sane;
++    const { widthInches, heightInches, oversizeFrom } = sane;
+ 
+     saveSnapshot();
+     const currentAbH = artboardHeightRef.current;
+@@ -1569,8 +1569,12 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
+     const maxSy = effectiveAbH / heightInches;
+     const initialS = Math.min(1, maxSx, maxSy);
+ 
+-    if (initialS < 1) {
+-      const origDims = formatDimensions(widthInches, heightInches, lang);
++    if (oversizeFrom || initialS < 1) {
++      const origDims = formatDimensions(
++        oversizeFrom?.widthInches ?? widthInches,
++        oversizeFrom?.heightInches ?? heightInches,
++        lang,
++      );
+       const fitDims = formatDimensions(widthInches * initialS, heightInches * initialS, lang);
+       toast({
+         title: t("toast.imageResized"),
+diff --git a/client/src/components/image-editor/useImageEditorModelUploadCrop.ts b/client/src/components/image-editor/useImageEditorModelUploadCrop.ts
+index f04b543..020165f 100644
+--- a/client/src/components/image-editor/useImageEditorModelUploadCrop.ts
++++ b/client/src/components/image-editor/useImageEditorModelUploadCrop.ts
+@@ -305,7 +305,12 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
+     const dpi = await resolveUploadDpi(file, image, opts?.dpi);
+ 
+     let croppedCanvas: HTMLCanvasElement | null = null;
+-    if (opts?.skipCrop) {
++    const fbW = image.naturalWidth || image.width;
++    const fbH = image.naturalHeight || image.height;
++    const tooBigForInlineCanvas =
++      fbW * fbH > 16_000_000 || Math.max(fbW, fbH) > 4096;
++
++    if (opts?.skipCrop && !tooBigForInlineCanvas) {
+       const fullCanvas = document.createElement("canvas");
+       fullCanvas.width = image.width;
+       fullCanvas.height = image.height;
+@@ -315,7 +320,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
+         croppedCanvas = fullCanvas;
+       }
+     }
+-    if (!croppedCanvas) {
++    if (!croppedCanvas && !tooBigForInlineCanvas) {
+       try { croppedCanvas = cropImageToContent(image); } catch { /* use original */ }
+     }
+ 
+@@ -488,8 +493,18 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
+         inchWidthPx = sourceW;
+         inchHeightPx = sourceH;
+       } else {
++        const srcPxW = image.naturalWidth || image.width;
++        const srcPxH = image.naturalHeight || image.height;
++        // Full-size canvas copy / getImageData crashes Chrome on large 30"+
++        // rasters. Skip inline crop when the bitmap is too big and keep the
++        // original file as the print source (same as the prepare path).
++        const tooBigForInlineCanvas =
++          srcPxW * srcPxH > 16_000_000 || Math.max(srcPxW, srcPxH) > 4096;
++
+         let croppedCanvas: HTMLCanvasElement | null = null;
+-        if (matchesArtboard) {
++        if (tooBigForInlineCanvas) {
++          croppedCanvas = null;
++        } else if (matchesArtboard) {
+           const fullCanvas = document.createElement("canvas");
+           fullCanvas.width = image.width;
+           fullCanvas.height = image.height;
+@@ -499,7 +514,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
+             croppedCanvas = fullCanvas;
+           }
+         }
+-        if (!croppedCanvas) {
++        if (!croppedCanvas && !tooBigForInlineCanvas) {
+           if (isOpaqueRasterUpload(image)) {
+             const fullCanvas = document.createElement("canvas");
+             fullCanvas.width = image.width;
+@@ -514,10 +529,19 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
+           }
+         }
+         if (!croppedCanvas) {
+-          console.error("Failed to crop image, using original");
+-          await handleFallbackImage(file, image, { dpi, skipCrop: matchesArtboard });
+-          return;
+-        }
++          if (tooBigForInlineCanvas) {
++            // Keep original bytes; preview is downsampled below.
++            setUploadProgress(60);
++            exportBlob = file;
++            croppedImg = image;
++            inchWidthPx = sourceW;
++            inchHeightPx = sourceH;
++          } else {
++            console.error("Failed to crop image, using original");
++            await handleFallbackImage(file, image, { dpi, skipCrop: matchesArtboard });
++            return;
++          }
++        } else {
+ 
+         setUploadProgress(60);
+         const blob = await canvasToBlob(croppedCanvas);
+@@ -536,6 +560,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
+         exportBlob = blob;
+         inchWidthPx = croppedImg.naturalWidth || croppedImg.width;
+         inchHeightPx = croppedImg.naturalHeight || croppedImg.height;
++        }
+       }
+ 
+       if (document.activeElement instanceof HTMLElement) {
+@@ -546,6 +571,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
+       const previewW = croppedImg.naturalWidth || croppedImg.width;
+       const previewH = croppedImg.naturalHeight || croppedImg.height;
+       const maxDim = Math.max(previewW, previewH);
++      let downsampledPreviewBlob: Blob | null = null;
+ 
+       if (maxDim > maxStoredDimension) {
+         setUploadProgress(75);
+@@ -568,6 +594,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
+         if (dsBlob) {
+           try {
+             croppedImg = await loadImageFromBlob(dsBlob);
++            downsampledPreviewBlob = dsBlob;
+           } catch { /* keep original croppedImg */ }
+         }
+       } else {
+@@ -590,6 +617,11 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
+       let previewFile = file;
+       if (prepared) {
+         previewFile = prepared.previewFile;
++      } else if (downsampledPreviewBlob) {
++        previewFile = new File([downsampledPreviewBlob], pngUploadName(file.name), {
++          type: "image/png",
++          lastModified: file.lastModified,
++        });
+       } else if (previewW !== image.width || previewH !== image.height) {
+         previewFile = new File([exportBlob], pngUploadName(file.name), {
+           type: "image/png",
+diff --git a/client/src/components/image-editor/utils.ts b/client/src/components/image-editor/utils.ts
+index 869dd86..b70300d 100644
+--- a/client/src/components/image-editor/utils.ts
++++ b/client/src/components/image-editor/utils.ts
+@@ -26,6 +26,17 @@ const MIN_DESIGN_INCHES = 0.01;
+  */
+ const MAX_DESIGN_INCHES = 10_000;
+ 
++/**
++ * Imports whose *shorter* side is still ΓëÑ 24.6" cannot fit a 24.5" gangsheet
++ * even after rotation (both axes exceed the sheet width). Cap those to a safe
++ * default print size while preserving aspect ratio.
++ *
++ * A 24.5" ├ù 60" file is fine ΓÇö the 24.5" side can sit on the sheet width.
++ * A 24.6" ├ù 24.6" (or larger on both axes) is not.
++ */
++export const OVERSIZE_IMPORT_MIN_SIDE_IN = 24.6;
++export const OVERSIZE_IMPORT_TARGET_IN = 12;
++
+ /**
+  * Clamp an imported design's physical size to something every downstream
+  * calculation can survive, or `null` when the file gave us nothing usable.
+@@ -38,21 +49,40 @@ const MAX_DESIGN_INCHES = 10_000;
+  * be laid out, arranged, or exported again, in this session or any future one.
+  *
+  * Oversized-but-real sizes are scaled proportionally so the aspect ratio the
+- * customer authored survives the clamp.
++ * customer authored survives the clamp. Designs that cannot fit the gangsheet
++ * even when rotated (both sides ΓëÑ {@link OVERSIZE_IMPORT_MIN_SIDE_IN}) are
++ * further reduced to {@link OVERSIZE_IMPORT_TARGET_IN} on the longest side so
++ * nest/export math stays within mobile memory budgets.
+  */
+ function sanitizeDesignInches(
+   widthInches: number,
+   heightInches: number,
+-): { widthInches: number; heightInches: number } | null {
++): {
++  widthInches: number;
++  heightInches: number;
++  /** Pre-fit size when an oversize gangsheet clamp ran. */
++  oversizeFrom?: { widthInches: number; heightInches: number };
++} | null {
+   const usable = (n: number) => Number.isFinite(n) && n > 0;
+   if (!usable(widthInches) || !usable(heightInches)) return null;
+ 
+   const overshoot = Math.max(widthInches, heightInches) / MAX_DESIGN_INCHES;
+   const scale = overshoot > 1 ? 1 / overshoot : 1;
+-  return {
+-    widthInches: Math.max(MIN_DESIGN_INCHES, widthInches * scale),
+-    heightInches: Math.max(MIN_DESIGN_INCHES, heightInches * scale),
+-  };
++  let w = Math.max(MIN_DESIGN_INCHES, widthInches * scale);
++  let h = Math.max(MIN_DESIGN_INCHES, heightInches * scale);
++
++  // Only when BOTH sides are ΓëÑ 24.6" ΓÇö can't fit 24.5" width even rotated.
++  const shortest = Math.min(w, h);
++  if (shortest >= OVERSIZE_IMPORT_MIN_SIDE_IN) {
++    const from = { widthInches: w, heightInches: h };
++    const longest = Math.max(w, h);
++    const fit = OVERSIZE_IMPORT_TARGET_IN / longest;
++    w = Math.max(MIN_DESIGN_INCHES, parseFloat((w * fit).toFixed(4)));
++    h = Math.max(MIN_DESIGN_INCHES, parseFloat((h * fit).toFixed(4)));
++    return { widthInches: w, heightInches: h, oversizeFrom: from };
++  }
++
++  return { widthInches: w, heightInches: h };
+ }
+ 
+ function inchesFromPixelsPair(pw: number, ph: number, dpi: number): { widthInches: number; heightInches: number } {
+@@ -72,9 +102,19 @@ function normalizeRasterDpiForInches(dpi: number): number {
+ }
+ 
+ function imageHasCleanAlpha(img: HTMLImageElement): boolean {
++  // Never read back the full bitmap ΓÇö a 30" @ 300 DPI source (or a 4096px
++  // prepare preview) is tens of megapixels, and `getImageData` of that size
++  // OOMs Chrome and Safari alike. Sample a small probe like isOpaqueRasterUpload.
++  const PROBE_MAX_EDGE = 512;
++  const iw = img.naturalWidth || img.width;
++  const ih = img.naturalHeight || img.height;
++  if (!(iw > 0) || !(ih > 0)) return false;
++  const scale = Math.min(1, PROBE_MAX_EDGE / Math.max(iw, ih));
++  const w = Math.max(1, Math.round(iw * scale));
++  const h = Math.max(1, Math.round(ih * scale));
+   const c = document.createElement('canvas');
+-  c.width = img.width;
+-  c.height = img.height;
++  c.width = w;
++  c.height = h;
+   // Read back immediately below, so the canvas must be CPU-backed. Without the
+   // hint Chrome keeps it on the GPU and `getImageData` blocks the main thread
+   // waiting for a flush ΓÇö measured elsewhere in this app as seconds of freeze on
+@@ -82,8 +122,11 @@ function imageHasCleanAlpha(img: HTMLImageElement): boolean {
+   // only drawn to and composited: there the hint forces CPU backing and costs.
+   const ctx = c.getContext('2d', { willReadFrequently: true });
+   if (!ctx) return false;
+-  ctx.drawImage(img, 0, 0);
+-  const { data, width, height } = ctx.getImageData(0, 0, c.width, c.height);
++  // Nearest-neighbour so soft edges from smoothing don't fake semi-transparent
++  // pixels on an otherwise binary cutout.
++  ctx.imageSmoothingEnabled = false;
++  ctx.drawImage(img, 0, 0, w, h);
++  const { data, width, height } = ctx.getImageData(0, 0, w, h);
+   return hasCleanAlpha(data, width, height);
+ }
+ 
+diff --git a/client/src/lib/export-worker.ts b/client/src/lib/export-worker.ts
+index 6df88b0..4c24703 100644
+--- a/client/src/lib/export-worker.ts
++++ b/client/src/lib/export-worker.ts
+@@ -782,7 +782,7 @@ async function uploadBufferToPreparedR2(
+   const parts = Array.isArray(meta.parts) ? meta.parts : [];
+   if (!parts.length) throw new Error('Upload prepare incomplete');
+   const bytes = new Uint8Array(buffer);
+-  const partSize = Number(meta.partSize) || 64 * 1024 * 1024;
++  const partSize = Number(meta.partSize) || 8 * 1024 * 1024;
+   const totalParts = Number(meta.totalParts) || parts.length;
+   const parallelism = Math.max(1, Math.min(Number(meta.parallelism) || 16, totalParts));
+   const sorted = parts.slice().sort((a, b) => Number(a.partNumber) - Number(b.partNumber));
+diff --git a/client/src/lib/image-crop.ts b/client/src/lib/image-crop.ts
+index 2933440..49dfdbc 100644
+--- a/client/src/lib/image-crop.ts
++++ b/client/src/lib/image-crop.ts
+@@ -229,12 +229,20 @@ export function isOpaqueRasterUpload(image: HTMLImageElement): boolean {
+ 
+ export function cropImageToContent(image: HTMLImageElement): HTMLCanvasElement | null {
+   try {
++    const srcW = image.naturalWidth || image.width;
++    const srcH = image.naturalHeight || image.height;
++    // Full-frame getImageData of a large raster OOMs Chrome (and Safari). Callers
++    // fall back to the uncropped source when this returns null.
++    if (!(srcW > 0) || !(srcH > 0) || srcW * srcH > 16_000_000 || Math.max(srcW, srcH) > 4096) {
++      return null;
++    }
++
+     const canvas = document.createElement('canvas');
+     const ctx = canvas.getContext('2d', { willReadFrequently: true });
+     if (!ctx) return null;
+ 
+-    canvas.width = image.width;
+-    canvas.height = image.height;
++    canvas.width = srcW;
++    canvas.height = srcH;
+     ctx.drawImage(image, 0, 0);
+ 
+     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+@@ -337,12 +345,21 @@ let _cropRequestCounter = 0;
+ export function cropImageToContentAsync(image: HTMLImageElement): Promise<HTMLCanvasElement | null> {
+   return new Promise((resolve) => {
+     try {
++      const srcW = image.naturalWidth || image.width;
++      const srcH = image.naturalHeight || image.height;
++      // Same ceiling as the sync crop ΓÇö transferring a 30"+ decode into a worker
++      // still requires a full getImageData on the main thread first.
++      if (!(srcW > 0) || !(srcH > 0) || srcW * srcH > 16_000_000 || Math.max(srcW, srcH) > 4096) {
++        resolve(null);
++        return;
++      }
++
+       const canvas = document.createElement('canvas');
+       const ctx = canvas.getContext('2d', { willReadFrequently: true });
+       if (!ctx) { resolve(cropImageToContent(image)); return; }
+ 
+-      canvas.width = image.width;
+-      canvas.height = image.height;
++      canvas.width = srcW;
++      canvas.height = srcH;
+       ctx.drawImage(image, 0, 0);
+       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+ 
+diff --git a/client/src/lib/image-utils.ts b/client/src/lib/image-utils.ts
+index 9d60f05..c67d21e 100644
+--- a/client/src/lib/image-utils.ts
++++ b/client/src/lib/image-utils.ts
+@@ -16,10 +16,11 @@ export function calculateImageDimensions(width: number, height: number, dpi: num
+   let widthInches = parseFloat((width / dpi).toFixed(1));
+   let heightInches = parseFloat((height / dpi).toFixed(1));
+   
+-  // Auto-resize: if either dimension exceeds 6", scale down to max 3"
+-  if (widthInches > 6 || heightInches > 6) {
++  // Auto-resize only when BOTH sides are ΓëÑ 24.6" ΓÇö can't fit a 24.5" sheet
++  // even when rotated. A 24.5" ├ù 60" import is allowed (short side fits width).
++  if (widthInches >= 24.6 && heightInches >= 24.6) {
+     const maxDimension = Math.max(widthInches, heightInches);
+-    const scale = 3 / maxDimension;
++    const scale = 12 / maxDimension;
+     widthInches = parseFloat((widthInches * scale).toFixed(1));
+     heightInches = parseFloat((heightInches * scale).toFixed(1));
+   }
+diff --git a/client/src/lib/prepare-raster-upload.ts b/client/src/lib/prepare-raster-upload.ts
+index f21017a..a5d69e5 100644
+--- a/client/src/lib/prepare-raster-upload.ts
++++ b/client/src/lib/prepare-raster-upload.ts
+@@ -179,50 +179,85 @@ export async function isSupportedRasterContainer(file: File): Promise<boolean> {
+ }
+ 
+ export async function prepareRasterUpload(file: File): Promise<PreparedRaster> {
+-  const form = new FormData();
+-  form.append("image", file);
+-  const res = await fetch("/api/prepare-raster-upload", { method: "POST", body: form });
+-  if (!res.ok) {
+-    let message = `Prepare failed (${res.status})`;
++  const maxAttempts = 3;
++  let lastError: unknown;
++
++  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+     try {
+-      const errJson = (await res.json()) as { error?: string };
+-      if (errJson?.error) message = errJson.error;
+-    } catch {
+-      /* keep the status-based message */
+-    }
+-    throw new Error(message);
+-  }
++      const form = new FormData();
++      form.append("image", file);
++      const res = await fetch("/api/prepare-raster-upload", { method: "POST", body: form });
++      if (!res.ok) {
++        let message = `Prepare failed (${res.status})`;
++        try {
++          const errJson = (await res.json()) as { error?: string };
++          if (errJson?.error) message = errJson.error;
++        } catch {
++          /* keep the status-based message */
++        }
++        // 4xx (except 408/429) is not worth retrying ΓÇö the file itself was rejected.
++        const retryableStatus = res.status >= 500 || res.status === 408 || res.status === 429;
++        if (!retryableStatus || attempt === maxAttempts) {
++          throw new Error(message);
++        }
++        lastError = new Error(message);
++        await new Promise((r) => setTimeout(r, 1000 * 2 ** (attempt - 1) + Math.floor(Math.random() * 250)));
++        continue;
++      }
+ 
+-  const num = (name: string) => Number(res.headers.get(name));
+-  const sourceWidth = num("X-Anynest-Source-Width");
+-  const sourceHeight = num("X-Anynest-Source-Height");
+-  const cropWidth = num("X-Anynest-Crop-Width");
+-  const cropHeight = num("X-Anynest-Crop-Height");
+-  if (!(sourceWidth > 0) || !(sourceHeight > 0) || !(cropWidth > 0) || !(cropHeight > 0)) {
+-    throw new Error("Prepare response was missing dimension headers");
+-  }
++      const num = (name: string) => Number(res.headers.get(name));
++      const sourceWidth = num("X-Anynest-Source-Width");
++      const sourceHeight = num("X-Anynest-Source-Height");
++      const cropWidth = num("X-Anynest-Crop-Width");
++      const cropHeight = num("X-Anynest-Crop-Height");
++      if (!(sourceWidth > 0) || !(sourceHeight > 0) || !(cropWidth > 0) || !(cropHeight > 0)) {
++        throw new Error("Prepare response was missing dimension headers");
++      }
+ 
+-  const previewBlob = await res.blob();
+-  const previewImage = await loadImageFromBlob(previewBlob);
+-  const baseName = file.name.replace(/\.\w+$/, "") || "design";
++      const previewBlob = await res.blob();
++      const previewImage = await loadImageFromBlob(previewBlob);
++      const baseName = file.name.replace(/\.\w+$/, "") || "design";
+ 
+-  return {
+-    previewImage,
+-    previewFile: new File([previewBlob], `${baseName}.png`, { type: "image/png" }),
+-    sourceBlob: file,
+-    sourceCrop: {
+-      x: Math.max(0, num("X-Anynest-Crop-X") || 0),
+-      y: Math.max(0, num("X-Anynest-Crop-Y") || 0),
+-      width: cropWidth,
+-      height: cropHeight,
+-    },
+-    sourceWidth,
+-    sourceHeight,
+-    dpi: num("X-Anynest-Density") || 72,
+-    sourceMegapixels: num("X-Anynest-Source-MP") || (sourceWidth * sourceHeight) / 1_000_000,
+-    binaryAlpha: res.headers.get("X-Anynest-Binary-Alpha") === "1",
+-    hasTransparency: res.headers.get("X-Anynest-Has-Transparency") === "1",
+-  };
++      return {
++        previewImage,
++        previewFile: new File([previewBlob], `${baseName}.png`, { type: "image/png" }),
++        sourceBlob: file,
++        sourceCrop: {
++          x: Math.max(0, num("X-Anynest-Crop-X") || 0),
++          y: Math.max(0, num("X-Anynest-Crop-Y") || 0),
++          width: cropWidth,
++          height: cropHeight,
++        },
++        sourceWidth,
++        sourceHeight,
++        dpi: num("X-Anynest-Density") || 72,
++        sourceMegapixels: num("X-Anynest-Source-MP") || (sourceWidth * sourceHeight) / 1_000_000,
++        binaryAlpha: res.headers.get("X-Anynest-Binary-Alpha") === "1",
++        hasTransparency: res.headers.get("X-Anynest-Has-Transparency") === "1",
++      };
++    } catch (err) {
++      lastError = err;
++      const detail = err instanceof Error ? err.message : String(err);
++      const isNetwork =
++        detail === "Failed to fetch" ||
++        /network|interrupted|timeout|Failed to load/i.test(detail);
++      const isRetryablePrepare = /Prepare failed \(5\d\d\)|Prepare failed \(408\)|Prepare failed \(429\)/.test(detail);
++      if ((isNetwork || isRetryablePrepare) && attempt < maxAttempts) {
++        await new Promise((r) => setTimeout(r, 1000 * 2 ** (attempt - 1) + Math.floor(Math.random() * 250)));
++        continue;
++      }
++      if (isNetwork) {
++        throw new Error(
++          "Your connection was interrupted during upload. Please check your internet and try again.",
++        );
++      }
++      throw err instanceof Error ? err : new Error(String(err));
++    }
++  }
++
++  throw lastError instanceof Error
++    ? lastError
++    : new Error("Prepare failed after retries");
+ }
+ 
+ export function describeBudgetRejection(
+diff --git a/client/src/lib/r2-direct-upload.ts b/client/src/lib/r2-direct-upload.ts
+index 4bee8f8..e442e85 100644
+--- a/client/src/lib/r2-direct-upload.ts
++++ b/client/src/lib/r2-direct-upload.ts
+@@ -4,25 +4,85 @@ import { isMobileDevice } from "./upload-queue";
+ type UploadJson = Record<string, unknown>;
+ export type R2UploadBody = Blob | ArrayBuffer | Uint8Array;
+ 
++/** Mobile cellular dies on 64 MB parts ΓÇö prefer small chunks on phones. */
++const MOBILE_PREFERRED_PART_BYTES = 8 * 1024 * 1024;
++const DESKTOP_PREFERRED_PART_BYTES = 32 * 1024 * 1024;
++const DEFAULT_PART_BYTES = 64 * 1024 * 1024;
++
++function preferredPartSizeBytes(): number {
++  return isMobileDevice() ? MOBILE_PREFERRED_PART_BYTES : DESKTOP_PREFERRED_PART_BYTES;
++}
++
++function sleep(ms: number): Promise<void> {
++  return new Promise((r) => setTimeout(r, ms));
++}
++
++/** Exponential backoff with light jitter (attempt 1 ΓåÆ ~1s, 2 ΓåÆ ~2s, 3 ΓåÆ ~4s). */
++function backoffMs(attempt: number): number {
++  const base = Math.min(8_000, 1000 * 2 ** (attempt - 1));
++  return base + Math.floor(Math.random() * 250);
++}
++
++function isNetworkFailureMessage(detail: string): boolean {
++  return (
++    detail === "Failed to fetch" ||
++    /network|interrupted|timeout|abort|load failed|failed to load/i.test(detail)
++  );
++}
++
+ // ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ // Screen Wake Lock
+ //
+ // iOS suspends Safari's network process when the screen locks ΓÇö the #1
+ // confirmed cause of failed uploads on iPhone. Acquiring a "screen" wake lock
+ // keeps the display on (and the network stack alive) for the duration of the
+-// upload. Degrades silently on browsers that don't support the API.
++// upload. Re-acquires when the tab becomes visible again (lock is released on
++// hide). Degrades silently on browsers that don't support the API.
+ // ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+-type WakeLockSentinel = { release(): Promise<void> };
++type WakeLockSentinel = { release(): Promise<void>; addEventListener?(type: string, listener: () => void): void };
+ 
+-async function acquireWakeLock(): Promise<WakeLockSentinel | null> {
+-  try {
+-    const nav = navigator as unknown as {
+-      wakeLock?: { request(type: string): Promise<WakeLockSentinel> };
+-    };
+-    return nav.wakeLock ? await nav.wakeLock.request("screen") : null;
+-  } catch {
+-    return null; // permission denied, unsupported, or page not visible
++class WakeLockSession {
++  private sentinel: WakeLockSentinel | null = null;
++  private released = false;
++  private readonly onVisibility = () => {
++    if (this.released) return;
++    if (document.visibilityState === "visible") {
++      void this.acquire();
++    }
++  };
++
++  async start(): Promise<void> {
++    document.addEventListener("visibilitychange", this.onVisibility);
++    await this.acquire();
++  }
++
++  private async acquire(): Promise<void> {
++    if (this.released) return;
++    try {
++      const nav = navigator as unknown as {
++        wakeLock?: { request(type: string): Promise<WakeLockSentinel> };
++      };
++      if (!nav.wakeLock) return;
++      this.sentinel = await nav.wakeLock.request("screen");
++      this.sentinel.addEventListener?.("release", () => {
++        // Browser released it (often on hide) ΓÇö reacquire when visible again.
++        if (!this.released && document.visibilityState === "visible") {
++          void this.acquire();
++        }
++      });
++    } catch {
++      this.sentinel = null;
++    }
++  }
++
++  release(): void {
++    if (this.released) return;
++    this.released = true;
++    document.removeEventListener("visibilitychange", this.onVisibility);
++    const s = this.sentinel;
++    this.sentinel = null;
++    s?.release().catch(() => {});
+   }
+ }
+ 
+@@ -32,11 +92,15 @@ async function acquireWakeLock(): Promise<WakeLockSentinel | null> {
+ // After each multipart part succeeds its etag is persisted to localStorage so
+ // that a retry (connection drop, screen lock before Wake Lock fires, tab
+ // restore) can skip already-finished parts and only re-send the remainder.
+-// Keys are namespaced by the server-issued sessionId and expire after 24 h;
+-// they are cleared immediately on a successful complete().
++//
++// Fingerprint keys (filename + byte length) let a brand-new prepare() reuse the
++// previous sessionId when the store honors `resumeSessionId` ΓÇö otherwise a
++// retry used to mint a new session and throw away completed parts.
++// Keys expire after 24 h and are cleared immediately on a successful complete().
+ // ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+ const RESUME_KEY_PREFIX = "anynest_upload_resume_";
++const RESUME_FINGERPRINT_PREFIX = "anynest_upload_fp_";
+ const RESUME_TTL_MS = 24 * 60 * 60 * 1000;
+ 
+ interface ResumeState {
+@@ -44,6 +108,16 @@ interface ResumeState {
+   expires: number;
+ }
+ 
++interface FingerprintResume {
++  sessionId: string;
++  totalBytes: number;
++  expires: number;
++}
++
++function uploadFingerprint(filename: string, totalBytes: number): string {
++  return `${totalBytes}:${filename}`;
++}
++
+ function loadResumeState(sessionId: string): Array<{ partNumber: number; etag: string }> {
+   try {
+     const raw = localStorage.getItem(RESUME_KEY_PREFIX + sessionId);
+@@ -83,6 +157,74 @@ function clearResumeState(sessionId: string): void {
+   try { localStorage.removeItem(RESUME_KEY_PREFIX + sessionId); } catch {}
+ }
+ 
++function loadFingerprintResume(fingerprint: string): FingerprintResume | null {
++  try {
++    const raw = localStorage.getItem(RESUME_FINGERPRINT_PREFIX + fingerprint);
++    if (!raw) return null;
++    const state: FingerprintResume = JSON.parse(raw);
++    if (Date.now() > state.expires || !state.sessionId) {
++      localStorage.removeItem(RESUME_FINGERPRINT_PREFIX + fingerprint);
++      return null;
++    }
++    return state;
++  } catch {
++    return null;
++  }
++}
++
++function saveFingerprintResume(fingerprint: string, sessionId: string, totalBytes: number): void {
++  try {
++    localStorage.setItem(RESUME_FINGERPRINT_PREFIX + fingerprint, JSON.stringify({
++      sessionId,
++      totalBytes,
++      expires: Date.now() + RESUME_TTL_MS,
++    } satisfies FingerprintResume));
++  } catch {
++    /* best-effort */
++  }
++}
++
++function clearFingerprintResume(fingerprint: string): void {
++  try { localStorage.removeItem(RESUME_FINGERPRINT_PREFIX + fingerprint); } catch {}
++}
++
++/**
++ * PUT via XHR ΓÇö more reliable than fetch for large bodies on iOS Safari, and
++ * gives upload progress events. Never uses keepalive (Safari 64KB limit).
++ */
++function putWithXhr(
++  url: string,
++  body: Blob | Uint8Array,
++  headers: Record<string, string> | undefined,
++  onByteProgress?: (loaded: number, total: number) => void,
++): Promise<{ ok: boolean; status: number; etag: string | null }> {
++  return new Promise((resolve, reject) => {
++    const xhr = new XMLHttpRequest();
++    xhr.open("PUT", url, true);
++    if (headers) {
++      for (const [k, v] of Object.entries(headers)) {
++        try { xhr.setRequestHeader(k, v); } catch { /* forbidden header */ }
++      }
++    }
++    xhr.upload.onprogress = (ev) => {
++      if (ev.lengthComputable && onByteProgress) onByteProgress(ev.loaded, ev.total);
++    };
++    xhr.onload = () => {
++      const etag =
++        xhr.getResponseHeader("etag") ||
++        xhr.getResponseHeader("ETag");
++      resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, etag });
++    };
++    xhr.onerror = () => reject(new Error("Failed to fetch"));
++    xhr.onabort = () => reject(new Error("Upload aborted"));
++    xhr.ontimeout = () => reject(new Error("Upload timed out"));
++    // Long cellular uploads ΓÇö 10 minutes per part is generous for 8ΓÇô64 MB.
++    xhr.timeout = 600_000;
++    const payload = body instanceof Blob ? body : new Blob([body as BlobPart]);
++    xhr.send(payload);
++  });
++}
++
+ export type R2PrepareMeta = {
+   sessionId: string;
+   singlePut?: boolean;
+@@ -168,7 +310,10 @@ function waitForShellMessage<T>(
+ async function prepareViaShellRelay(
+   filename: string,
+   totalBytes: number,
+-  options: Pick<R2UploadOptions, "objectKey" | "contentType" | "productionFormat"> = {},
++  options: Pick<R2UploadOptions, "objectKey" | "contentType" | "productionFormat"> & {
++    preferredPartSizeBytes?: number;
++    resumeSessionId?: string;
++  } = {},
+ ): Promise<R2PrepareMeta> {
+   const requestId = newRelayId("prep");
+   const wait = waitForShellMessage(requestId, "dtf-builder-r2-prepared", SHELL_RELAY_TIMEOUT_MS, (data) => {
+@@ -182,6 +327,8 @@ async function prepareViaShellRelay(
+       requestId,
+       filename,
+       totalBytes,
++      preferredPartSizeBytes: options.preferredPartSizeBytes ?? preferredPartSizeBytes(),
++      ...(options.resumeSessionId ? { resumeSessionId: options.resumeSessionId } : {}),
+       ...(options.contentType ? { contentType: options.contentType } : {}),
+       ...(options.productionFormat ? { productionFormat: options.productionFormat } : {}),
+       ...(options.objectKey ? { objectKey: options.objectKey } : {}),
+@@ -368,10 +515,17 @@ export async function prepareR2DirectUpload(
+   uploadUrl: string,
+   filename: string,
+   totalBytes: number,
+-  options: Pick<R2UploadOptions, "objectKey" | "useShellRelay" | "contentType" | "productionFormat"> = {},
++  options: Pick<R2UploadOptions, "objectKey" | "useShellRelay" | "contentType" | "productionFormat"> & {
++    preferredPartSizeBytes?: number;
++    resumeSessionId?: string;
++  } = {},
+ ): Promise<R2PrepareMeta> {
++  const partSize = options.preferredPartSizeBytes ?? preferredPartSizeBytes();
+   if (shouldUseShellRelay(options)) {
+-    return prepareViaShellRelay(filename, totalBytes, options);
++    return prepareViaShellRelay(filename, totalBytes, {
++      ...options,
++      preferredPartSizeBytes: partSize,
++    });
+   }
+   const prepareRes = await builderFetch(uploadUrl, {
+     method: "POST",
+@@ -380,6 +534,8 @@ export async function prepareR2DirectUpload(
+       step: "r2-direct-prepare",
+       filename,
+       totalBytes,
++      preferredPartSizeBytes: partSize,
++      ...(options.resumeSessionId ? { resumeSessionId: options.resumeSessionId } : {}),
+       ...(options.contentType ? { contentType: options.contentType } : {}),
+       ...(options.productionFormat ? { productionFormat: options.productionFormat } : {}),
+       ...(options.objectKey ? { objectKey: options.objectKey } : {}),
+@@ -405,18 +561,23 @@ export async function uploadPreparedPartsToR2(
+     };
+     // Retry up to 3├ù on network failures (iOS flaky connections).
+     for (let attempt = 1; attempt <= 3; attempt++) {
+-      let putRes: Response;
+       try {
+-        putRes = await fetch(String(meta.putUrl), {
+-          method: "PUT",
+-          body: putBody(body),
+-          headers: putHeaders,
+-        });
++        const putRes = await putWithXhr(
++          String(meta.putUrl),
++          putBody(body),
++          putHeaders,
++          (loaded, partTotal) => {
++            const pct = partTotal > 0 ? Math.round((loaded / partTotal) * 100) : 0;
++            onProgress?.(`Uploading print fileΓÇª ${pct}%`);
++          },
++        );
++        if (!putRes.ok) throw new Error(`Cloud upload failed: ${putRes.status}`);
++        return [];
+       } catch (err) {
+         const detail = err instanceof Error ? err.message : String(err);
+-        const isNetwork = detail === "Failed to fetch" || /network/i.test(detail);
++        const isNetwork = isNetworkFailureMessage(detail);
+         if (isNetwork && attempt < 3) {
+-          await new Promise((r) => setTimeout(r, attempt * 1000));
++          await sleep(backoffMs(attempt));
+           continue;
+         }
+         throw new Error(
+@@ -425,8 +586,6 @@ export async function uploadPreparedPartsToR2(
+             : `Cloud upload failed: ${detail}`,
+         );
+       }
+-      if (!putRes.ok) throw new Error(`Cloud upload failed: ${putRes.status}`);
+-      return [];
+     }
+     return [];
+   }
+@@ -434,12 +593,10 @@ export async function uploadPreparedPartsToR2(
+   const parts = Array.isArray(meta.parts) ? meta.parts : [];
+   if (!parts.length) throw new Error("Upload prepare incomplete");
+ 
+-  const partSize = Number(meta.partSize) || 64 * 1024 * 1024;
++  // Prefer server-provided part size; fall back to mobile-safe default rather than 64 MB.
++  const partSize = Number(meta.partSize) || preferredPartSizeBytes() || DEFAULT_PART_BYTES;
+   const totalParts = Number(meta.totalParts) || parts.length;
+-  // Parts are 64 MB by default, and each one in flight is that much memory held by the
+-  // network stack. Sixteen at once is fine on a desktop and is roughly a gigabyte on a phone
+-  // that has already just built the sheet ΓÇö over the budget iOS allows a tab, where the
+-  // failure surfaces as an upload error rather than anything mentioning memory.
++  // Parts hold memory in the network stack while in flight. Cap concurrency on phones.
+   const maxInFlight = isMobileDevice() ? 2 : 16;
+   const parallelism = Math.max(1, Math.min(Number(meta.parallelism) || maxInFlight, maxInFlight, totalParts));
+   const sorted = parts.slice().sort((a, b) => Number(a.partNumber) - Number(b.partNumber));
+@@ -452,6 +609,7 @@ export async function uploadPreparedPartsToR2(
+     console.info(`[r2-upload] resuming ΓÇö ${savedParts.length} of ${totalParts} parts already uploaded`);
+   }
+   const uploadedParts: Array<{ partNumber: number; etag: string }> = [...savedParts];
++  let completedCount = savedParts.length;
+ 
+   async function uploadPart(part: { partNumber: number; url: string }) {
+     const pn = Number(part.partNumber);
+@@ -464,36 +622,44 @@ export async function uploadPreparedPartsToR2(
+       return;
+     }
+ 
+-    // Auto-retry on flaky connections (common on iOS mobile networks).
+-    // Three attempts with 1 s ΓåÆ 2 s ΓåÆ 4 s back-off before giving up.
+     const maxAttempts = 3;
+     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+       onProgress?.(`Uploading part ${pn} of ${totalParts}${attempt > 1 ? ` (retry ${attempt - 1})` : ""}...`);
+-      let res: Response;
+       try {
+-        res = await fetch(String(part.url), { method: "PUT", body: bodyPart(body, start, end) });
++        const res = await putWithXhr(
++          String(part.url),
++          bodyPart(body, start, end),
++          undefined,
++          (loaded, partTotal) => {
++            const pct = partTotal > 0 ? Math.round((loaded / partTotal) * 100) : 0;
++            onProgress?.(
++              `Uploading part ${pn} of ${totalParts}ΓÇª ${pct}% (${completedCount}/${totalParts} done)`,
++            );
++          },
++        );
++        if (!res.ok) throw new Error(`Cloud upload part ${pn} failed: ${res.status}`);
++        if (res.etag) {
++          const completed = { partNumber: pn, etag: res.etag };
++          uploadedParts.push(completed);
++          if (resumeId) savePartProgress(resumeId, completed);
++        }
++        completedCount += 1;
++        return;
+       } catch (err) {
+         const detail = err instanceof Error ? err.message : String(err);
+-        const isNetwork = detail === "Failed to fetch" || /network/i.test(detail);
++        const isNetwork = isNetworkFailureMessage(detail);
+         if (isNetwork && attempt < maxAttempts) {
+-          await new Promise((r) => setTimeout(r, attempt * 1000));
++          await sleep(backoffMs(attempt));
+           continue;
+         }
+         throw new Error(
+           isNetwork
+             ? "Your connection was interrupted during upload. Please check your internet and try again."
+-            : `Cloud upload part ${pn} failed: ${detail}`,
++            : detail.startsWith("Cloud upload part")
++              ? detail
++              : `Cloud upload part ${pn} failed: ${detail}`,
+         );
+       }
+-      if (!res.ok) throw new Error(`Cloud upload part ${pn} failed: ${res.status}`);
+-      const etag = res.headers.get("etag") || res.headers.get("ETag");
+-      if (etag) {
+-        const completed = { partNumber: pn, etag };
+-        uploadedParts.push(completed);
+-        // Persist immediately so a subsequent interruption can resume.
+-        if (resumeId) savePartProgress(resumeId, completed);
+-      }
+-      return; // success
+     }
+   }
+ 
+@@ -521,100 +687,115 @@ export async function uploadProductionToR2(
+   // Hold the screen awake for the duration of this upload.
+   // On iOS, screen-lock suspends the network process and kills in-flight
+   // uploads ΓÇö this is the #1 confirmed failure mode on iPhone.
+-  // The API is a no-op on desktop and degrades silently where unsupported.
+-  const wakeLock = await acquireWakeLock();
+-  let _wakeLockReleased = false;
+-  const releaseWakeLock = () => {
+-    if (_wakeLockReleased) return;
+-    _wakeLockReleased = true;
+-    wakeLock?.release().catch(() => {});
+-  };
++  // Re-acquires when the tab becomes visible again after unlock/app-switch.
++  const wakeLock = new WakeLockSession();
++  await wakeLock.start();
+ 
+-  const contentType = body instanceof Blob && body.type ? body.type : undefined;
+-  const expectedFormat = options.productionFormat || (contentType === "application/pdf" ? "pdf" : "png");
+-  const effectiveContentType = contentType || (expectedFormat === "pdf" ? "application/pdf" : "image/png");
+-  // Legacy /api/upload-design endpoints upload the entire file in a single
+-  // multipart POST, which exhausts server memory on large gangsheets (the
+-  // original root cause of the "store refused the file" 500 errors on big
+-  // sheets). Always try the modern R2 prepareΓåÆuploadΓåÆcomplete path first.
+-  // Only fall back to legacy if the modern path itself is unavailable.
+-  if (isLegacyDesignUploadUrl(uploadUrl) && !options.useShellRelay) {
+-    try {
+-      // Attempt modern path first
+-    } catch {
+-      // Modern path not available for this URL ΓÇö fall through to legacy below.
+-      return uploadViaLegacyDesignEndpoint(
+-        body, filename, uploadUrl, effectiveContentType, expectedFormat, onProgress,
+-      );
+-    }
+-  }
+-  onProgress?.("Preparing cloud upload...");
+-  // Attempt direct R2 upload. If the browser blocks the cross-origin PUT
+-  // (common on locked-down iOS networks), automatically retry the whole
+-  // prepareΓåÆuploadΓåÆcomplete cycle via the store-page shell relay instead.
+-  let meta: R2PrepareMeta;
+-  let uploadedParts: Array<{ partNumber: number; etag: string }>;
+   try {
+-    meta = await prepareR2DirectUpload(uploadUrl, filename, total, {
++    const contentType = body instanceof Blob && body.type ? body.type : undefined;
++    const expectedFormat = options.productionFormat || (contentType === "application/pdf" ? "pdf" : "png");
++    const effectiveContentType = contentType || (expectedFormat === "pdf" ? "application/pdf" : "image/png");
++    // Legacy /api/upload-design endpoints upload the entire file in a single
++    // multipart POST, which exhausts server memory on large gangsheets (the
++    // original root cause of the "store refused the file" 500 errors on big
++    // sheets). Always try the modern R2 prepareΓåÆuploadΓåÆcomplete path first.
++    // Only fall back to legacy if the modern path itself is unavailable.
++    if (isLegacyDesignUploadUrl(uploadUrl) && !options.useShellRelay) {
++      try {
++        // Attempt modern path first
++      } catch {
++        // Modern path not available for this URL ΓÇö fall through to legacy below.
++        return uploadViaLegacyDesignEndpoint(
++          body, filename, uploadUrl, effectiveContentType, expectedFormat, onProgress,
++        );
++      }
++    }
++    onProgress?.("Preparing cloud upload...");
++    const fingerprint = uploadFingerprint(filename, total);
++    const prior = loadFingerprintResume(fingerprint);
++    const resumeSessionId =
++      prior && prior.totalBytes === total ? prior.sessionId : undefined;
++
++    // Attempt direct R2 upload. If the browser blocks the cross-origin PUT
++    // (common on locked-down iOS networks), automatically retry the whole
++    // prepareΓåÆuploadΓåÆcomplete cycle via the store-page shell relay instead.
++    let meta: R2PrepareMeta;
++    let uploadedParts: Array<{ partNumber: number; etag: string }>;
++    const prepareOpts = {
+       ...options,
+       contentType: effectiveContentType,
+       productionFormat: expectedFormat,
+-    });
+-    uploadedParts = await uploadPreparedPartsToR2(body, meta, onProgress);
+-  } catch (directErr) {
+-    const detail = directErr instanceof Error ? directErr.message : String(directErr);
+-    const isNetworkBlock = /interrupted|Failed to fetch|network|CORS/i.test(detail);
+-    if (isNetworkBlock && canUseShellRelay() && !options.useShellRelay) {
+-      // Retry through the store page proxy ΓÇö the parent window has broader
+-      // network permissions and can reach R2 when the builder iframe cannot.
+-      console.warn("[r2-upload] Direct upload blocked, retrying via store-page relay:", detail);
+-      onProgress?.("Retrying upload through store...");
+-      meta = await prepareR2DirectUpload(uploadUrl, filename, total, {
+-        ...options,
+-        contentType: effectiveContentType,
+-        productionFormat: expectedFormat,
+-        useShellRelay: true,
+-      });
++      preferredPartSizeBytes: preferredPartSizeBytes(),
++      ...(resumeSessionId ? { resumeSessionId } : {}),
++    };
++    try {
++      meta = await prepareR2DirectUpload(uploadUrl, filename, total, prepareOpts);
++      if (meta.sessionId) {
++        saveFingerprintResume(fingerprint, String(meta.sessionId), total);
++        // If the store minted a brand-new session, drop orphaned part etags
++        // from a previous session for the same file so we don't send stale ETags.
++        if (resumeSessionId && String(meta.sessionId) !== resumeSessionId) {
++          clearResumeState(resumeSessionId);
++        }
++      }
+       uploadedParts = await uploadPreparedPartsToR2(body, meta, onProgress);
+-    } else {
+-      releaseWakeLock();
+-      throw directErr;
++    } catch (directErr) {
++      const detail = directErr instanceof Error ? directErr.message : String(directErr);
++      const isNetworkBlock = /interrupted|Failed to fetch|network|CORS/i.test(detail);
++      if (isNetworkBlock && canUseShellRelay() && !options.useShellRelay) {
++        // Retry through the store page proxy ΓÇö the parent window has broader
++        // network permissions and can reach R2 when the builder iframe cannot.
++        console.warn("[r2-upload] Direct upload blocked, retrying via store-page relay:", detail);
++        onProgress?.("Retrying upload through store...");
++        meta = await prepareR2DirectUpload(uploadUrl, filename, total, {
++          ...prepareOpts,
++          useShellRelay: true,
++        });
++        if (meta.sessionId) {
++          saveFingerprintResume(fingerprint, String(meta.sessionId), total);
++        }
++        uploadedParts = await uploadPreparedPartsToR2(body, meta, onProgress);
++      } else {
++        throw directErr;
++      }
+     }
+-  }
+ 
+-  onProgress?.("Finalizing upload...");
+-  const done = await r2DirectComplete(
+-    uploadUrl,
+-    String(meta.sessionId),
+-    Boolean(meta.singlePut),
+-    Number(meta.totalParts) || 1,
+-    uploadedParts.length ? uploadedParts : undefined,
+-    options,
+-  );
+-  const prod = String(done.productionUrl || done.url || "");
+-  if (!prod) throw new Error("No production URL");
+-  const returnedPath = (() => {
+-    try {
+-      return new URL(prod, window.location.href).pathname.toLowerCase();
+-    } catch {
+-      return prod.toLowerCase();
++    onProgress?.("Finalizing upload...");
++    const done = await r2DirectComplete(
++      uploadUrl,
++      String(meta.sessionId),
++      Boolean(meta.singlePut),
++      Number(meta.totalParts) || 1,
++      uploadedParts.length ? uploadedParts : undefined,
++      options,
++    );
++    const prod = String(done.productionUrl || done.url || "");
++    if (!prod) throw new Error("No production URL");
++    const returnedPath = (() => {
++      try {
++        return new URL(prod, window.location.href).pathname.toLowerCase();
++      } catch {
++        return prod.toLowerCase();
++      }
++    })();
++    const expectedExtension = expectedFormat === "pdf" ? ".pdf" : ".png";
++    if (!returnedPath.endsWith(expectedExtension)) {
++      throw new Error(`Upload returned a non-${expectedFormat.toUpperCase()} production URL`);
+     }
+-  })();
+-  const expectedExtension = expectedFormat === "pdf" ? ".pdf" : ".png";
+-  if (!returnedPath.endsWith(expectedExtension)) {
+-    throw new Error(`Upload returned a non-${expectedFormat.toUpperCase()} production URL`);
+-  }
+ 
+-  // Upload complete ΓÇö clear persisted resume state and release the screen lock.
+-  if (meta.sessionId) clearResumeState(String(meta.sessionId));
+-  releaseWakeLock();
++    // Upload complete ΓÇö clear persisted resume state.
++    if (meta.sessionId) clearResumeState(String(meta.sessionId));
++    clearFingerprintResume(fingerprint);
+ 
+-  return {
+-    productionUrl: prod,
+-    key: done.key ? String(done.key) : null,
+-    previewUrl: prod,
+-    cartPreviewUrl: done.cartPreviewUrl ? String(done.cartPreviewUrl) : prod,
+-  };
++    return {
++      productionUrl: prod,
++      key: done.key ? String(done.key) : null,
++      previewUrl: prod,
++      cartPreviewUrl: done.cartPreviewUrl ? String(done.cartPreviewUrl) : prod,
++    };
++  } finally {
++    wakeLock.release();
++  }
+ }
+ 
+ type WorkerR2UploadResult = {
+diff --git a/client/src/lib/translations/en.ts b/client/src/lib/translations/en.ts
+index cca5677..a5703f7 100644
+--- a/client/src/lib/translations/en.ts
++++ b/client/src/lib/translations/en.ts
+@@ -104,11 +104,14 @@ export const en: Record<string, string> = {
+   "editor.alignCenterX": "Center left to right",
+   "editor.alignCenterY": "Center top to bottom",
+   "editor.duplicate": "Duplicate (Ctrl+D)",
+-  "editor.duplicateArrange": "Duplicate & Arrange",
++  "editor.duplicateArrange": "Duplicate",
++  "editor.duplicateArrangeTitle": "Duplicate and auto-arrange on the sheet",
+   "editor.apply": "Apply",
+   "editor.delete": "Delete (Del)",
+   "editor.cleanAlpha": "Pixel Clean",
+-  "editor.cleanAlphaTitle": "Remove Semi Transparencies from selected design(s)",
++  "editor.cleanAlphaTitle": "Remove semi-transparencies ΓÇö choose selected design(s) or the full page",
++  "editor.cleanAlphaSelected": "Selected design",
++  "editor.cleanAlphaFullPage": "Full page",
+   "editor.crop": "Crop",
+   "editor.cropTitle": "Crop Image",
+   "editor.cropDesc": "Drag the handles to select the area to keep. Use the center to move the selection.",
+@@ -116,6 +119,8 @@ export const en: Record<string, string> = {
+   "editor.cropApply": "Apply Crop",
+   "editor.cleanAlphaAll": "Full Page Pixel Clean",
+   "editor.cleanAlphaAllTitle": "Remove Semi Transparencies from ALL designs on the gangsheet",
++  "editor.alignRotate": "Align/Rotate",
++  "editor.alignRotateTitle": "Rotate and align the selected design",
+   "editor.flipH": "Flip Horizontal",
+   "editor.flipV": "Flip Vertical",
+   "editor.selectAll": "Select All",
+diff --git a/client/src/lib/translations/es.ts b/client/src/lib/translations/es.ts
+index 14b3624..e25e2c5 100644
+--- a/client/src/lib/translations/es.ts
++++ b/client/src/lib/translations/es.ts
+@@ -102,11 +102,14 @@ export const es: Record<string, string> = {
+   "editor.alignCenterX": "Centrar de izquierda a derecha",
+   "editor.alignCenterY": "Centrar de arriba a abajo",
+   "editor.duplicate": "Duplicar (Ctrl+D)",
+-  "editor.duplicateArrange": "Duplicar y Organizar",
++  "editor.duplicateArrange": "Duplicar",
++  "editor.duplicateArrangeTitle": "Duplicar y organizar autom├íticamente en la hoja",
+   "editor.apply": "Aplicar",
+   "editor.delete": "Eliminar (Del)",
+   "editor.cleanAlpha": "Limpieza P├¡xel",
+-  "editor.cleanAlphaTitle": "Eliminar semi-transparencias de los dise├▒os seleccionados",
++  "editor.cleanAlphaTitle": "Eliminar semi-transparencias ΓÇö elige dise├▒os seleccionados o p├ígina completa",
++  "editor.cleanAlphaSelected": "Dise├▒o seleccionado",
++  "editor.cleanAlphaFullPage": "P├ígina completa",
+   "editor.crop": "Recortar",
+   "editor.cropTitle": "Recortar imagen",
+   "editor.cropDesc": "Arrastra los controles para seleccionar el ├írea a conservar. Usa el centro para mover la selecci├│n.",
+@@ -114,6 +117,8 @@ export const es: Record<string, string> = {
+   "editor.cropApply": "Aplicar recorte",
+   "editor.cleanAlphaAll": "Limpieza P├ígina Completa",
+   "editor.cleanAlphaAllTitle": "Eliminar semi-transparencias de TODOS los dise├▒os en la hoja",
++  "editor.alignRotate": "Alinear/Rotar",
++  "editor.alignRotateTitle": "Rotar y alinear el dise├▒o seleccionado",
+   "editor.flipH": "Voltear Horizontal",
+   "editor.flipV": "Voltear Vertical",
+   "editor.selectAll": "Seleccionar Todo",
+diff --git a/client/src/lib/translations/fr.ts b/client/src/lib/translations/fr.ts
+index 7152d3d..e0066a1 100644
+--- a/client/src/lib/translations/fr.ts
++++ b/client/src/lib/translations/fr.ts
+@@ -102,11 +102,14 @@ export const fr: Record<string, string> = {
+   "editor.alignCenterX": "Centrer de gauche ├á droite",
+   "editor.alignCenterY": "Centrer de haut en bas",
+   "editor.duplicate": "Dupliquer (Ctrl+D)",
+-  "editor.duplicateArrange": "Dupliquer et Organiser",
++  "editor.duplicateArrange": "Dupliquer",
++  "editor.duplicateArrangeTitle": "Dupliquer et organiser automatiquement sur la feuille",
+   "editor.apply": "Appliquer",
+   "editor.delete": "Supprimer (Suppr)",
+   "editor.cleanAlpha": "Nettoyage Pixel",
+-  "editor.cleanAlphaTitle": "Supprimer les semi-transparences des designs s├⌐lectionn├⌐s",
++  "editor.cleanAlphaTitle": "Supprimer les semi-transparences ΓÇö choisissez le design s├⌐lectionn├⌐ ou toute la page",
++  "editor.cleanAlphaSelected": "Design s├⌐lectionn├⌐",
++  "editor.cleanAlphaFullPage": "Page enti├¿re",
+   "editor.crop": "Recadrer",
+   "editor.cropTitle": "Recadrer l'image",
+   "editor.cropDesc": "Glissez les poign├⌐es pour s├⌐lectionner la zone ├á conserver. Utilisez le centre pour d├⌐placer la s├⌐lection.",
+@@ -114,6 +117,8 @@ export const fr: Record<string, string> = {
+   "editor.cropApply": "Appliquer le recadrage",
+   "editor.cleanAlphaAll": "Nettoyage Page Enti├¿re",
+   "editor.cleanAlphaAllTitle": "Supprimer les semi-transparences de TOUS les designs sur la feuille",
++  "editor.alignRotate": "Aligner/Tourner",
++  "editor.alignRotateTitle": "Tourner et aligner le design s├⌐lectionn├⌐",
+   "editor.flipH": "Retourner Horizontalement",
+   "editor.flipV": "Retourner Verticalement",
+   "editor.selectAll": "Tout S├⌐lectionner",

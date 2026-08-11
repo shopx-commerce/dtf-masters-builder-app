@@ -1,0 +1,136 @@
+How Fill Sheet works — end to end
+1. The button and what it calls
+The Fill Sheet button lives in two places:
+
+Desktop: editor-action-toolbar.tsx — a button in the toolbar's Row 2
+Mobile: image-editor-view.tsx — inside the Design Tools sheet grid
+Both call handleFillEmptySpace() from the model hook.
+
+2. handleFillEmptySpace() — the orchestrator
+Located in useImageEditorModelArrangeKeyboard.ts around line 1265.
+
+Step A — Pick the reference design
+
+const ref = selectedDesignId
+  ? designs.find(d => d.id === selectedDesignId)   // use selected design
+  : designs.reduce((a, b) =>                        // else use the smallest one
+      a.widthInches * a.transform.s * a.heightInches * a.transform.s <=
+      b.widthInches * b.transform.s * b.heightInches * b.transform.s ? a : b
+    );
+
+The "reference" design is the template for all copies that get added.
+
+Step B — Predict the count
+
+const fillCount = Math.min(
+  computeFillCount(ref, designs, gap, artboardWidth, artboardHeight),
+  Math.max(0, 500 - designs.length),   // hard cap: never exceed 500 total
+);
+
+Step C — Clone the reference design
+
+const copies: DesignItem[] = Array.from({ length: fillCount }, () => ({
+  ...ref,
+  id: generateId(),          // brand-new ID for each copy
+  transform: { ...ref.transform, nx: 0.5, ny: 0.5 }, // stack at canvas center
+}));
+
+All copies start at the center — placement is not computed here. The packer does that.
+
+Step D — Add copies and run auto-arrange
+
+setDesigns(prev => [...prev, ...copies]);
+handleAutoArrange({
+  arrangeAll: true,
+  fullRepack: true,     // rearrange EVERYTHING, not just new additions
+  skipSnapshot: true,
+  trimOverflow: true,   // CRITICAL: removes any fill copies that don't fit
+  fillIds: new Set(copies.map(c => c.id)),
+});
+
+The fillIds set is the key safety mechanism — it tells the packer which designs are "expendable fill copies" vs. originals the customer placed.
+
+3. computeFillCount() — how many copies to add
+This is the math that was recently fixed. The formula:
+
+// Sheet dimensions in inches
+const rw = ref.widthInches * ref.transform.s;   // effective width
+const rh = getEffectiveHeight(ref);             // effective height (+ filename stamp if any)
+const g  = gap;                                 // spacing between designs (e.g. 0.25")
+// ── Exact grid capacity — try both orientations ──
+const colsN = Math.floor((sheetW + g) / (rw + g));
+const rowsN = Math.floor((sheetH + g) / (rh + g));
+let totalCapacity = colsN * rowsN;
+// For non-square designs, also try rotated 90°
+if (Math.abs(rw - rh) > 0.01) {
+  const colsR = Math.floor((sheetW + g) / (rh + g));
+  const rowsR = Math.floor((sheetH + g) / (rw + g));
+  totalCapacity = Math.max(totalCapacity, colsR * rowsR);
+}
+// ── How many slots are already consumed? ──
+const consumedSlots = designs.reduce((acc, d) => {
+  const dw = d.widthInches * d.transform.s;
+  const dh = getEffectiveHeight(d);
+  return acc + (dw + g) * (dh + g) / refCellArea;  // area-weighted
+}, 0);
+// ── Net copies to add, with a 5% overshoot ──
+// The packer trims overflow-fill copies automatically (trimOverflow: true)
+return Math.max(0, Math.round((totalCapacity - consumedSlots) * 1.05) + 1);
+
+Why 5% overshoot? The packer already has safe overflow trimming. An undercount leaves visible empty strips; a small overcount costs nothing because the extras are silently removed.
+
+4. handleAutoArrange() — the packer
+Located in useImageEditorModelArrangeKeyboard.ts, calls runArrange() in a web worker (arrange-worker.ts).
+
+The arrange system tries multiple packing algorithms and picks the best result by height:
+
+Grid packer — only used when all designs are the same size (±0.2"); exact column/row layout
+Skyline packer — shelf-based, fast, good for similar heights
+Mixed-orient packer — skyline but flips wide designs that are better rotated
+MaxRects packer — best packing quality; tries BSSF, BAF, BL, BLSF placement heuristics with both BestShortSideFit and BestAreaFit guillotine splitting
+Each packer returns { result: PlacedItem[]; maxHeight: number }. The winner is the one with the smallest maxHeight.
+
+Each PlacedItem has:
+
+{
+  id: string;
+  nx: number;    // normalized x center (0–1 of sheet width)
+  ny: number;    // normalized y center (0–1 of sheet height)
+  rotation: number;   // 0 or 90
+  overflows: boolean; // true if this item didn't fit
+}
+
+5. The overflow trim (applyResult)
+After the packer runs, applyResult() checks trimOverflow: true:
+
+// Find all placed items that overflowed
+const overflowPlacedIds = new Set(result.filter(p => p.overflows).map(p => p.id));
+// Only remove fill copies — NEVER remove originals
+const removeIds = fillIds
+  ? new Set([...overflowPlacedIds].filter(id => fillIds.has(id)))
+  : overflowPlacedIds;
+// Delete them from state
+setDesigns(prev => prev.filter(d => !removeIds.has(d.id)));
+
+This is the safety net: originals the customer placed are protected even if the packer marked them overflowing.
+
+6. The canFill guard (button enabled/disabled state)
+const canFill = useMemo(() => {
+  if (isFilling || designs.length === 0) return false;
+  const ref = /* smallest or selected design */;
+  return computeFillCount(ref, designs, gap, artboardWidth, artboardHeight) >= 1;
+}, [designs, selectedDesignId, artboardWidth, artboardHeight, designGap]);
+
+The button is disabled when: nothing is on the sheet, a fill is already running, or computeFillCount returns 0 (sheet is already full).
+
+Key files to copy
+File	What it contains
+useImageEditorModelArrangeKeyboard.ts	computeFillCount, handleFillEmptySpace, canFill
+arrange-core.ts	gridPack, skylinePack, maxRectsPack, packingHeightLowerBound
+arrange-worker.ts	Web worker wrapper — calls runArrange off the main thread
+Minimal reproduction checklist
+State: designs: DesignItem[], each with widthInches, heightInches, transform.s (scale), transform.nx/ny (normalized position)
+computeFillCount: exact grid formula above — no magic constants
+Clone + ID: give each copy a fresh ID; start at center
+Packer: at minimum, a MaxRects packer that returns overflows: true for items that don't fit
+trimOverflow: after packing, delete fill copies whose overflows === true; leave originals alone
