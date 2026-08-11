@@ -197,6 +197,10 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       preserveSelection?: boolean;
       arrangeAll?: boolean;
       fullRepack?: boolean;
+      /** Delete overflowing designs listed in `fillIds` instead of growing the sheet for them. */
+      trimOverflow?: boolean;
+      /** Ids of expendable Fill Sheet copies — the only designs `trimOverflow` may delete. */
+      fillIds?: Set<string>;
       /** Internal to the arrange hook: a height-ladder step continuing the run in flight. */
       continuation?: boolean;
     }

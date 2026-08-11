@@ -15,7 +15,7 @@ import { formatDimensions, formatLength, useMetric, getUnitSuffix } from "@/lib/
 import { useWandTolerance, useToolActions } from "@/state/tool-store";
 import {
   ArrowDownLeft, ArrowDownRight, ArrowUpLeft, ArrowUpRight, Copy,
-  Droplets, Eraser, FlipHorizontal2, FlipVertical2, Group, Layers, LayoutGrid, Link, Loader2, Minus, Plus, Redo2, RotateCw,
+  Droplets, Eraser, FlipHorizontal2, FlipVertical2, Grid2x2Plus, Group, Layers, LayoutGrid, Link, Loader2, Minus, Plus, Redo2, RotateCw,
   SlidersHorizontal, Sparkles, Trash2, Undo2, Ungroup, Unlink, WandSparkles, X, XCircle,
 } from "lucide-react";
 import { CenterHorizontalIcon, CenterVerticalIcon } from "./center-axis-icons";
@@ -49,7 +49,8 @@ type DesignToolId =
   | "flipV"
   | "upscale"
   | "halftone"
-  | "autoArrange";
+  | "autoArrange"
+  | "fillSheet";
 
 interface DesignTool {
   id: DesignToolId;
@@ -85,7 +86,7 @@ export default function ImageEditorView() {
     handleEffectiveSizeChange, handleResizeChange, handleDuplicateDesign,
     handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleSetGroupCount,
     handleDeleteDesign, handleDeleteGroup, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleAlignCorner,
-    handleAutoArrange, handleArtboardHeightPick, handleThresholdAlpha,
+    handleAutoArrange, canFill, handleFillEmptySpace, handleArtboardHeightPick, handleThresholdAlpha,
     handleThresholdAlphaAll, handleCropDesign, handleCropApply, handleDownload, handleAddToCart,
     handleApplyHalftone, handleOpenHalftoneMenu, halftoneStrength, setHalftoneStrength,
     halftoneMenuOpen, setHalftoneMenuOpen, halftoneTopColors,
@@ -518,6 +519,16 @@ export default function ImageEditorView() {
       pillTone: "border-pink-600 bg-pink-500 text-black",
       disabled: designs.length < 2 && selectedDesignIds.size < 2,
       run: () => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2, fullRepack: true }),
+    },
+    {
+      id: "fillSheet",
+      label: t("editor.fillSheet"),
+      title: t("editor.fillSheetTitle"),
+      Icon: Grid2x2Plus,
+      tone: "border-emerald-600 bg-emerald-500 text-white hover:bg-emerald-600",
+      pillTone: "border-emerald-600 bg-emerald-500 text-white",
+      disabled: !canFill,
+      run: handleFillEmptySpace,
     },
     ...(canIncreaseQuality
       ? [{

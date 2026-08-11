@@ -103,6 +103,8 @@ export const es: Record<string, string> = {
   "editor.alignCenterY": "Centrar de arriba a abajo",
   "editor.duplicate": "Duplicar (Ctrl+D)",
   "editor.duplicateArrange": "Duplicar",
+  "editor.fillSheet": "Llenar hoja",
+  "editor.fillSheetTitle": "Rellena el espacio vacío con copias del diseño seleccionado (o del más pequeño)",
   "editor.duplicateArrangeTitle": "Duplicar y organizar automáticamente en la hoja",
   "editor.apply": "Aplicar",
   "editor.delete": "Eliminar (Del)",

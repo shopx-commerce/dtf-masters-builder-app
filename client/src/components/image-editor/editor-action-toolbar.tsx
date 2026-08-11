@@ -10,6 +10,7 @@ import {
   Copy,
   Droplets,
   Eraser,
+  Grid2x2Plus,
   SlidersHorizontal,
   Sparkles,
   LayoutGrid,
@@ -62,6 +63,8 @@ export type EditorActionToolbarProps = {
   handleDeleteDesign: (id: string) => void;
   handleDeleteMulti: (ids: Set<string>) => void;
   handleDuplicateAndArrange: (count: number) => void;
+  canFill: boolean;
+  handleFillEmptySpace: () => void;
   designGap: number | undefined;
   setDesignGap: (v: number | undefined) => void;
   handleAutoArrangeRef: React.MutableRefObject<(opts?: { skipSnapshot?: boolean; preserveSelection?: boolean; fullRepack?: boolean }) => void>;
@@ -148,6 +151,8 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
     handleDeleteDesign,
     handleDeleteMulti,
     handleDuplicateAndArrange,
+    canFill,
+    handleFillEmptySpace,
     designGap,
     setDesignGap,
     handleAutoArrangeRef,
@@ -555,6 +560,19 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
                 <Copy className="w-3 h-3" />
                 {t("editor.duplicateArrange")}
               </button>
+              <button
+                onClick={handleFillEmptySpace}
+                disabled={!canFill}
+                className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all whitespace-nowrap text-[10px] font-medium shadow-sm min-h-[36px] ${
+                  canFill
+                    ? 'bg-emerald-500 hover:bg-emerald-600 text-white border border-emerald-600'
+                    : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+                }`}
+                title={t("editor.fillSheetTitle")}
+              >
+                <Grid2x2Plus className="w-3 h-3" />
+                {t("editor.fillSheet")}
+              </button>
             </div>
           )}
         </>
@@ -617,6 +635,22 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
             >
               <Copy className="w-3 h-3 lg:w-4 lg:h-4" />
               {t("editor.duplicateArrange")}
+            </button>
+            {/* Fill Sheet rides in the duplication group: it is duplication,
+                just "as many as fit" instead of a chosen count. Enabled with
+                no selection too — it falls back to the smallest design. */}
+            <button
+              onClick={handleFillEmptySpace}
+              disabled={!canFill}
+              className={`flex items-center gap-1 px-2 py-1 lg:px-4 lg:py-2 rounded-md transition-all whitespace-nowrap ${lang !== 'en' ? 'text-[11px] lg:text-sm' : 'text-[12px] lg:text-sm'} font-semibold min-h-[36px] coarse:min-h-[44px] ${
+                canFill
+                  ? 'bg-emerald-500 hover:bg-emerald-600 text-white border border-emerald-600 shadow-md shadow-emerald-500/25'
+                  : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+              }`}
+              title={t("editor.fillSheetTitle")}
+            >
+              <Grid2x2Plus className="w-3 h-3 lg:w-4 lg:h-4 flex-shrink-0" />
+              {t("editor.fillSheet")}
             </button>
           </div>
           <button

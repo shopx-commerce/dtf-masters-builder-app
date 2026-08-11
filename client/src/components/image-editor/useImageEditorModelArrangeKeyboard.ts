@@ -42,6 +42,71 @@ const GROUP_PREFIX = "group:";
  */
 const IMPORT_RESEAT_POLL_MS = 150;
 
+/** Fill Sheet never pushes the design count past this — the editor has to stay interactive. */
+const MAX_FILL_TOTAL_DESIGNS = 500;
+
+/**
+ * The gap the packer falls back to when no margin is chosen — a mirror of
+ * `GAP` in arrange-core's `runArrange`. Fill Sheet's capacity math has to
+ * assume the same spacing the packer will actually use, or the copy count
+ * and the packing disagree.
+ */
+const ARRANGE_DEFAULT_GAP = 0.25;
+
+/**
+ * The design Fill Sheet clones: the selected one, else the smallest on the
+ * sheet — the smallest is the one most likely to squeeze into leftover gaps.
+ */
+function pickFillReference(designs: DesignItem[], selectedDesignId: string | null): DesignItem | null {
+  if (designs.length === 0) return null;
+  if (selectedDesignId) {
+    const selected = designs.find(d => d.id === selectedDesignId);
+    if (selected) return selected;
+  }
+  return designs.reduce((a, b) =>
+    a.widthInches * a.transform.s * getEffectiveHeight(a) <=
+    b.widthInches * b.transform.s * getEffectiveHeight(b) ? a : b
+  );
+}
+
+/**
+ * How many copies of `ref` Fill Sheet should add: exact grid capacity of the
+ * sheet in whichever orientation holds more, minus an area-weighted estimate
+ * of the slots existing designs consume, plus a 5% overshoot. Deliberately
+ * optimistic — the packer beats a naive grid often enough that undercounting
+ * leaves visible empty strips, while extra copies cost nothing because the
+ * arrange that follows deletes overflowing fill copies (`trimOverflow`).
+ */
+function computeFillCount(
+  ref: DesignItem,
+  designs: DesignItem[],
+  gap: number,
+  sheetW: number,
+  sheetH: number,
+): number {
+  const rw = ref.widthInches * ref.transform.s;
+  const rh = getEffectiveHeight(ref);
+  const g = Math.max(0, gap);
+  if (!(rw > 0) || !(rh > 0) || !(sheetW > 0) || !(sheetH > 0)) return 0;
+  const colsN = Math.floor((sheetW + g) / (rw + g));
+  const rowsN = Math.floor((sheetH + g) / (rh + g));
+  let totalCapacity = colsN * rowsN;
+  // Non-square designs may pack better rotated 90°.
+  if (Math.abs(rw - rh) > 0.01) {
+    const colsR = Math.floor((sheetW + g) / (rh + g));
+    const rowsR = Math.floor((sheetH + g) / (rw + g));
+    totalCapacity = Math.max(totalCapacity, colsR * rowsR);
+  }
+  if (totalCapacity <= 0) return 0;
+  const refCellArea = (rw + g) * (rh + g);
+  const consumedSlots = designs.reduce((acc, d) => {
+    const dw = d.widthInches * d.transform.s;
+    const dh = getEffectiveHeight(d);
+    return acc + ((dw + g) * (dh + g)) / refCellArea;
+  }, 0);
+  return Math.max(0, Math.round((totalCapacity - consumedSlots) * 1.05) + 1);
+}
+
 /**
  * Collapses designs into the rectangles the packer should reason about: one per ungrouped
  * design, and one covering the whole bounding box of each user-defined group.
@@ -180,6 +245,10 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     preserveSelection?: boolean;
     arrangeAll?: boolean;
     fullRepack?: boolean;
+    /** Delete overflowing designs listed in `fillIds` instead of growing the sheet for them. */
+    trimOverflow?: boolean;
+    /** Ids of expendable Fill Sheet copies — the only designs `trimOverflow` may delete. */
+    fillIds?: Set<string>;
     /** Internal: a ladder step continuing the run that is already in flight. */
     continuation?: boolean;
   };
@@ -194,6 +263,13 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     preserveSelection: (a?.preserveSelection ?? false) || (b?.preserveSelection ?? false),
     arrangeAll: (a?.arrangeAll ?? false) || (b?.arrangeAll ?? false),
     fullRepack: (a?.fullRepack ?? false) || (b?.fullRepack ?? false),
+    trimOverflow: (a?.trimOverflow ?? false) || (b?.trimOverflow ?? false),
+    // Unioned like the work flags: every copy both requests marked as
+    // expendable stays expendable, or a coalesced fill would leak
+    // untrimmable overflow copies onto the sheet.
+    fillIds: a?.fillIds || b?.fillIds
+      ? new Set([...(a?.fillIds ?? []), ...(b?.fillIds ?? [])])
+      : undefined,
   });
   /**
    * Release the lock and start whatever queued up behind the run that just finished.
@@ -300,6 +376,10 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
      * moving everything else is the behaviour users complain about.
      */
     fullRepack?: boolean;
+    /** Delete overflowing designs listed in `fillIds` instead of growing the sheet for them. */
+    trimOverflow?: boolean;
+    /** Ids of expendable Fill Sheet copies — the only designs `trimOverflow` may delete. */
+    fillIds?: Set<string>;
     /** Internal: a ladder step continuing the run that is already in flight. */
     continuation?: boolean;
   }) => {
@@ -567,6 +647,26 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     const maxLadderSteps = GANGSHEET_HEIGHTS.length + 2;
 
     const applyResult = (bestResult: PlacedItem[], anyRotated: boolean, hasOverflow: boolean, sizing?: PackSizing) => {
+      // Fill Sheet deliberately overshoots its copy count and lets this trim
+      // settle the difference: copies the packer could not fit are deleted
+      // here, before overflow can grow the sheet or raise the "no space"
+      // toast. Only ids in `fillIds` are expendable — designs the customer
+      // placed are never deleted, so if one of *them* still overflows after
+      // the trim, the ordinary growth/toast path below handles it. Group
+      // super-items never match: fill copies are always created groupless.
+      if (opts?.trimOverflow && opts.fillIds && opts.fillIds.size > 0 && hasOverflow) {
+        const fillIds = opts.fillIds;
+        const removeIds = new Set(
+          bestResult
+            .filter(p => p.overflows && !p.anchored && fillIds.has(p.id))
+            .map(p => p.id),
+        );
+        if (removeIds.size > 0) {
+          setDesigns(prev => prev.filter(d => !removeIds.has(d.id)));
+          bestResult = bestResult.filter(p => !removeIds.has(p.id));
+          hasOverflow = bestResult.some(p => p.overflows);
+        }
+      }
       if (hasOverflow && artboardHeightRef.current < MAX_ARTBOARD_HEIGHT && ladderStep < maxLadderSteps) {
         // Jump to the shortest rung the artwork could possibly fit on rather than the next
         // one up. `planLadderJump` only skips rungs a lower bound rules out, so it lands on
@@ -581,7 +681,12 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         // Only the first growth of an arrange records an undo point. The rest are steps of
         // one operation as far as the customer is concerned, and each one snapshotting is
         // what made a single Auto-Arrange take nine presses of Ctrl+Z to undo.
-        handleArtboardResizeRef.current(artboardWidthRef.current, nextHeight, { skipSnapshot: ladderStep > 0 });
+        //
+        // And when the *caller* already snapshotted — duplicate, copy-count, Fill Sheet
+        // all snapshot once and then arrange with `skipSnapshot` — even the first growth
+        // stays silent, or one Ctrl+Z after a fill would stop at a half-grown sheet with
+        // the copies still on it instead of restoring the pre-fill state.
+        handleArtboardResizeRef.current(artboardWidthRef.current, nextHeight, { skipSnapshot: ladderStep > 0 || !!opts?.skipSnapshot });
         // Forward the caller's `arrangeAll` flag on the expansion recursion.
         //
         // Without this, the caller's `arrangeAll: true` (set by
@@ -611,6 +716,11 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
           preserveSelection: true,
           arrangeAll: opts?.arrangeAll,
           fullRepack: opts?.fullRepack,
+          // Trim intent rides the whole ladder: a rung that re-packs on the
+          // taller sheet can overflow a copy that fit before, and that copy
+          // must stay deletable rather than force yet another rung.
+          trimOverflow: opts?.trimOverflow,
+          fillIds: opts?.fillIds,
           // Keeps the lock held across the climb: a rung is part of this arrange, not a
           // competing one, and releasing here would let a queued request interleave with
           // a half-finished expansion.
@@ -805,6 +915,88 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     }
 
   }, [selectedDesignIds, saveSnapshot, toast, t, designGap, GANGSHEET_HEIGHTS, MAX_ARTBOARD_HEIGHT, ensureDesignImagesAvailable, handleAutoArrangeRef]);
+
+  /**
+   * True from the moment a fill batch is appended until its arrange request
+   * has been handed off. Together with `arrangeInFlightRef` this serializes
+   * fills: a second batch computed against a design list the first has not
+   * finished settling would double-count the remaining capacity (two clicks
+   * ≈ 1000 designs), and its copies would not be in the in-flight run's
+   * `fillIds` — the packer would treat them as customer originals and grow
+   * the sheet for them, which a fill must never do.
+   */
+  const fillPendingRef = useRef(false);
+
+  /**
+   * Whether Fill Sheet has anything to do. Mirrors `handleFillEmptySpace`'s
+   * own guards so the button's disabled state and the click behaviour can
+   * never disagree.
+   */
+  const canFill = useMemo(() => {
+    if (designs.length === 0 || designs.length >= MAX_FILL_TOTAL_DESIGNS) return false;
+    const ref = pickFillReference(designs, selectedDesignId);
+    if (!ref) return false;
+    const gap = designGap !== undefined && designGap >= 0 ? designGap : ARRANGE_DEFAULT_GAP;
+    return computeFillCount(ref, designs, gap, artboardWidth, artboardHeight) >= 1;
+  }, [designs, selectedDesignId, designGap, artboardWidth, artboardHeight]);
+
+  /**
+   * Fill Sheet: pack the empty film with copies of the reference design.
+   *
+   * Adds `computeFillCount` clones (stacked at the sheet center — placement
+   * is entirely the packer's job) and runs a whole-sheet arrange that may
+   * delete whichever of those clones do not fit (`trimOverflow` +
+   * `fillIds`). Snapshots once before mutating, so a single undo removes
+   * every copy the fill added. Copies follow the duplicate conventions:
+   * fresh id, stripped groupId, no filename stamp, " copy" suffix trimmed.
+   */
+  const handleFillEmptySpace = useCallback(() => {
+    // One fill at a time — see `fillPendingRef`. Ignoring the click is safe:
+    // the sheet is being packed full this very moment, so there is nothing
+    // useful a queued second fill could add.
+    if (fillPendingRef.current || arrangeInFlightRef.current) return;
+    const currentDesigns = designsRef.current;
+    const ref = pickFillReference(currentDesigns, selectedDesignId);
+    if (!ref) return;
+    const gap = designGap !== undefined && designGap >= 0 ? designGap : ARRANGE_DEFAULT_GAP;
+    const fillCount = Math.min(
+      computeFillCount(ref, currentDesigns, gap, artboardWidthRef.current, artboardHeightRef.current),
+      Math.max(0, MAX_FILL_TOTAL_DESIGNS - currentDesigns.length),
+    );
+    if (fillCount < 1) return;
+    // See handleDuplicateDesign for rationale — copies strip the source's
+    // groupId to remain independent (and so the packer never sees them as
+    // part of a group super-item, which would defeat the overflow trim).
+    const { groupId: _dropGid, ...refNoGroup } = ref;
+    const baseName = ref.name.replace(/ copy( \d+)?$/, '');
+    const copies: DesignItem[] = Array.from({ length: fillCount }, () => ({
+      ...refNoGroup,
+      id: crypto.randomUUID(),
+      name: baseName,
+      transform: { ...ref.transform, nx: 0.5, ny: 0.5 },
+      printFileName: false,
+    }));
+    fillPendingRef.current = true;
+    saveSnapshot();
+    setDesigns(prev => [...prev, ...copies]);
+    requestAnimationFrame(() => {
+      // Cleared before the hand-off: from here `arrangeInFlightRef` takes
+      // over as the gate, and clearing first means a throw inside arrange
+      // cannot leave the fill button dead for the rest of the session.
+      fillPendingRef.current = false;
+      handleAutoArrangeRef.current({
+        skipSnapshot: true,
+        // Selection survives for feedback, but `arrangeAll` keeps the packer
+        // in whole-sheet mode — selected-only mode treats everything else as
+        // fixed obstacles and would stack the new copies into a column.
+        preserveSelection: true,
+        arrangeAll: true,
+        fullRepack: true,
+        trimOverflow: true,
+        fillIds: new Set(copies.map(c => c.id)),
+      });
+    });
+  }, [selectedDesignId, designGap, saveSnapshot, setDesigns, handleAutoArrangeRef, designsRef, artboardWidthRef, artboardHeightRef]);
 
   /**
    * `skipSnapshot` is for the expansion path only, where a single Auto-Arrange can grow the
@@ -1385,6 +1577,8 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     getAlignDelta,
     handleAlignCorner,
     handleAutoArrange,
+    canFill,
+    handleFillEmptySpace,
     handleArtboardResize,
     handleArtboardHeightPick,
     shrinkSheetToFit,

@@ -324,6 +324,8 @@ function useImageEditorModel(props: ImageEditorProps) {
     handleDeleteDesign: bag.handleDeleteDesign,
     handleDeleteMulti: bag.handleDeleteMulti,
     handleDuplicateAndArrange: bag.handleDuplicateAndArrange,
+    canFill: bag.canFill,
+    handleFillEmptySpace: bag.handleFillEmptySpace,
     designGap: bag.designGap,
     setDesignGap: bag.setDesignGap,
     handleAutoArrangeRef: bag.handleAutoArrangeRef,
