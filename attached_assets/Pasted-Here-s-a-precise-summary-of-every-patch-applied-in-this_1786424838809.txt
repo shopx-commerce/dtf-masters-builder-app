@@ -1,0 +1,53 @@
+Here's a precise summary of every patch applied in this session:
+
+client/src/components/image-editor/image-editor-view.tsx
+Mobile contextual sheet — added center-axis alignment buttons Between the Rotate button and the four corner-alignment buttons, inserted two new buttons with dividers:
+
+CenterHorizontalIcon → calls actionToolbarProps.handleAlignAxis("vertical")
+CenterVerticalIcon → calls actionToolbarProps.handleAlignAxis("horizontal")
+(These icons were already imported from ./center-axis-icons. The prior session had completed the other 5 audit fixes; this was the one remaining incomplete item.)
+
+client/src/components/image-editor/useImageEditorModelExport.ts
+JSZip: dynamic → static import Removed const { default: JSZip } = await import('jszip') inside the multi-sheet export function. Added import JSZip from "jszip" at the top of the file.
+
+Why: Vite hashes dynamic chunk filenames on each build. After a deploy, browser tabs that were open before the deploy try to fetch the old hash URL (JSZip.minn7hU4Gi6.js) which no longer exists, causing "Failed to fetch dynamically imported module" on the second gangsheet export.
+
+server/routes.ts
+Three separate changes, all in the raster upload pipeline:
+
+1. HEIC/HEIF support (sniffing + format detection)
+
+Added "heic" to the RasterFormat union type.
+sniffRasterFormat() now detects HEIC/HEIF via the ISOBMFF ftyp box magic bytes (offset 4–7 = ftyp, offset 8–11 matches heic|heis|heix|hevc|hevx|mif1|msf1|heif).
+assertAllowedRasterFormat() now maps sharp's reported "heif" format to "heic", and gives a targeted error message for HEIC if it's not in the allowed list.
+The assertAllowedRasterFormat call in the route now passes ["png", "jpeg", "webp", "heic"].
+2. Multer fileFilter: accept HEIC/HEIF MIME types Added to the allowed list in rasterUpload's fileFilter:
+
+image/heic, image/heif, image/heic-sequence, image/heif-sequence
+Extension fallback: .heic, .heif
+Why: iOS Safari sometimes sends files with image/heic as the MIME type even when the bytes are JPEG (converted by the OS). The old filter rejected those with an error, causing a 500.
+
+3. Fix cb(err) → cb(null, false) to stop iOS connection-pool poisoning This is the critical "Failed to Fetch" fix.
+
+Old code:
+
+const err: NodeJS.ErrnoException = new Error("Only PNG, JPEG, WebP, and HEIC files are allowed");
+(err as any).status = 400;
+cb(err);
+
+New code:
+
+(req as any)._multerRejectedMimetype = declared || file.originalname || "unknown";
+cb(null, false);
+
+And in the route handler, the !req.file check was updated:
+
+if (!req.file) {
+  const rejected = (req as any)._multerRejectedMimetype;
+  const error = rejected
+    ? `File type "${rejected}" is not supported. Please upload a PNG, JPEG, WebP, or HEIC file.`
+    : "No image file provided";
+  return res.status(400).json({ error });
+}
+
+Why: In multer v2, cb(err) in fileFilter aborts the multipart stream mid-read and sends a TCP RST instead of a proper HTTP response. iOS WebKit marks that entire TCP connection as dead and every subsequent fetch() on it also fails with "Failed to fetch" — not just the upload request. Desktop Chrome silently retries on a new connection; iOS does not. Using cb(null, false) lets multer drain the stream cleanly and close the connection normally.
