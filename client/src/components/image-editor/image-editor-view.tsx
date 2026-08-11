@@ -16,8 +16,8 @@ import { formatVariantPriceForDisplay } from "@/lib/variant-price";
 import { useWandTolerance, useToolActions } from "@/state/tool-store";
 import {
   ArrowDownLeft, ArrowDownRight, ArrowUpLeft, ArrowUpRight, Copy,
-  Droplets, Eraser, FlipHorizontal2, FlipVertical2, Group, Layers, LayoutGrid, Link, Loader2, Minus, Plus, RotateCw,
-  SlidersHorizontal, Sparkles, Trash2, Ungroup, Unlink, WandSparkles, X, XCircle,
+  Droplets, Eraser, FlipHorizontal2, FlipVertical2, Group, Layers, LayoutGrid, Link, Loader2, Minus, Plus, Redo2, RotateCw,
+  SlidersHorizontal, Sparkles, Trash2, Undo2, Ungroup, Unlink, WandSparkles, X, XCircle,
 } from "lucide-react";
 import { CenterHorizontalIcon, CenterVerticalIcon } from "./center-axis-icons";
 import { HalftoneIcon } from "./halftone-icon";
@@ -610,7 +610,7 @@ export default function ImageEditorView() {
           ref={headerUploadInputRef}
           type="file"
           className="hidden"
-          accept=".png,.jpg,.jpeg,.webp,.pdf,image/png,image/jpeg,image/webp,application/pdf"
+          accept=".png,.jpg,.jpeg,.webp,.pdf,.svg,image/png,image/jpeg,image/webp,image/svg+xml,application/pdf"
           multiple
           onChange={handleSidebarFileChange}
         />
@@ -710,7 +710,7 @@ export default function ImageEditorView() {
         ref={headerUploadInputRef}
         type="file"
         className="hidden"
-        accept=".png,.jpg,.jpeg,.webp,.pdf,image/png,image/jpeg,image/webp,application/pdf"
+        accept=".png,.jpg,.jpeg,.webp,.pdf,.svg,image/png,image/jpeg,image/webp,image/svg+xml,application/pdf"
         multiple
         onChange={handleSidebarFileChange}
       />
@@ -741,6 +741,32 @@ export default function ImageEditorView() {
           {/* Fluorescent panel portal target */}
           {profile.enableFluorescent && <div ref={setFluorPanelContainer} />}
 
+          {/* Add Designs — the only desktop upload entry now (the copy that
+              sat over the canvas with the file name is gone). Full-width on
+              its own row, with the Layers panel directly beneath. It lives
+              outside the designs.length gate so an emptied sheet still
+              offers a way to add artwork. */}
+          <button
+            onClick={() => sidebarFileRef.current?.click()}
+            className="flex w-full min-h-11 items-center justify-center gap-2 rounded-lg border border-cyan-600 bg-cyan-500 px-4 py-2.5 text-sm font-bold text-white shadow-md shadow-cyan-500/25 transition-all hover:bg-cyan-600 hover:shadow-lg hover:shadow-cyan-500/30 active:scale-[0.98]"
+            title={t("editor.addDesignTitle")}
+          >
+            {actionToolbarProps.isUploading ? (
+              <Loader2 className="h-5 w-5 flex-shrink-0 animate-spin" />
+            ) : (
+              <Plus className="h-5 w-5 flex-shrink-0" strokeWidth={2.5} />
+            )}
+            <span>{actionToolbarProps.isUploading ? t("editor.processing") : t("editor.addDesigns")}</span>
+          </button>
+          <input
+            ref={sidebarFileRef}
+            type="file"
+            className="hidden"
+            accept=".png,.jpg,.jpeg,.webp,.pdf,.svg,image/png,image/jpeg,image/webp,image/svg+xml,application/pdf"
+            multiple
+            onChange={handleSidebarFileChange}
+          />
+
           {/* Layers Panel */}
           {designs.length > 0 && (
             <div ref={designInfoRef} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
@@ -750,22 +776,6 @@ export default function ImageEditorView() {
                   <span className="truncate">{t("editor.layers")}</span>
                   <span className="flex-shrink-0 rounded-full bg-cyan-100 px-2.5 py-1 text-sm font-bold tabular-nums text-cyan-700">{designs.length}</span>
                 </div>
-                <button
-                  onClick={() => sidebarFileRef.current?.click()}
-                  className="flex min-h-10 flex-shrink-0 items-center gap-1.5 rounded-lg border border-cyan-600 bg-cyan-500 px-4 py-2 text-sm font-bold text-white shadow-md shadow-cyan-500/25 transition-all hover:bg-cyan-600 hover:shadow-lg hover:shadow-cyan-500/30 active:scale-[0.98] whitespace-nowrap"
-                  title={t("editor.addDesignTitle")}
-                >
-                  <Plus className="h-5 w-5 flex-shrink-0" strokeWidth={2.5} />
-                  <span>{t("editor.addDesigns")}</span>
-                </button>
-                <input
-                  ref={sidebarFileRef}
-                  type="file"
-                  className="hidden"
-                  accept=".png,.jpg,.jpeg,.webp,.pdf,image/png,image/jpeg,image/webp,application/pdf"
-                  multiple
-                  onChange={handleSidebarFileChange}
-                />
               </div>
               {showDesignInfo && (
                 /* The short cap exists so a one- or two-layer list does not
@@ -1181,7 +1191,7 @@ export default function ImageEditorView() {
                           ref={sidebarFileRef}
                           type="file"
                           className="hidden"
-                          accept=".png,.jpg,.jpeg,.webp,.pdf,image/png,image/jpeg,image/webp,application/pdf"
+                          accept=".png,.jpg,.jpeg,.webp,.pdf,.svg,image/png,image/jpeg,image/webp,image/svg+xml,application/pdf"
                           multiple
                           onChange={handleSidebarFileChange}
                         />
@@ -1638,6 +1648,35 @@ export default function ImageEditorView() {
               onWandDeleteTap={handleWandDelete}
               onWandDeactivate={handleWandDeactivate}
             />
+            {/* Undo/redo pinned to the canvas's top-right corner so they sit
+                in the same spot no matter how the toolbar wraps. The wrapper
+                ignores pointer events so it never steals canvas clicks; only
+                the buttons themselves are interactive. */}
+            {/* z-50 keeps the pair above the canvas rulers/scrollbars and
+                selection overlays; the right inset clears the vertical
+                scrollbar's hit zone. */}
+            <div className="pointer-events-none absolute right-5 top-3 z-50 flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={handleUndo}
+                disabled={!canUndo()}
+                className="pointer-events-auto flex h-10 w-11 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-700 shadow-md transition-colors hover:bg-gray-100 hover:text-black disabled:opacity-30 disabled:pointer-events-none"
+                title={t("editor.undo")}
+                aria-label={t("editor.undo")}
+              >
+                <Undo2 className="h-5 w-5" strokeWidth={2.5} />
+              </button>
+              <button
+                type="button"
+                onClick={handleRedo}
+                disabled={!canRedo()}
+                className="pointer-events-auto flex h-10 w-11 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-700 shadow-md transition-colors hover:bg-gray-100 hover:text-black disabled:opacity-30 disabled:pointer-events-none"
+                title={t("editor.redo")}
+                aria-label={t("editor.redo")}
+              >
+                <Redo2 className="h-5 w-5" strokeWidth={2.5} />
+              </button>
+            </div>
           </div>
         )}
       </div>

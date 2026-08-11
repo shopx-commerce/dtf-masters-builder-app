@@ -1,5 +1,4 @@
 import { useState, memo, useEffect, useRef } from "react";
-import UploadSection from "../upload-section";
 import SizeInput from "./size-input";
 import {
   ArrowDownLeft,
@@ -16,11 +15,9 @@ import {
   LayoutGrid,
   Link,
   Loader2,
-  Redo2,
   RotateCw,
   ShoppingCart,
   Trash2,
-  Undo2,
   Unlink,
   WandSparkles,
 } from "lucide-react";
@@ -212,12 +209,10 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
         : t("controls.addToCart");
   const cartButtonTitle = !canAddToCart ? t("controls.uploadFirst") : cartButtonLabel;
   const [upscaleScale, setUpscaleScale] = useState<UpscaleFactor>(2);
-  const [pixelCleanOpen, setPixelCleanOpen] = useState(false);
   const [alignRotateOpen, setAlignRotateOpen] = useState(false);
   const [designToolsOpen, setDesignToolsOpen] = useState(false);
   /** The tool last picked from the Design tools dropdown, offered again as a pill — same idea as the phone bar. */
-  const [lastDesignToolId, setLastDesignToolId] = useState<"whiteBg" | "wand" | "halftone" | null>(null);
-  const pixelCleanRef = useRef<HTMLDivElement>(null);
+  const [lastDesignToolId, setLastDesignToolId] = useState<"cleanSelected" | "cleanAll" | "whiteBg" | "wand" | "halftone" | null>(null);
   const alignRotateRef = useRef<HTMLDivElement>(null);
   const designToolsRef = useRef<HTMLDivElement>(null);
   // Wand tolerance lives in the Zustand tool store (not props) so slider
@@ -226,8 +221,30 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
   const wandTolerance = useWandTolerance();
   const { setWandTolerance } = useToolActions();
 
-  /** Mirrors the phone's Design-tools list for the three tools that moved off the sidebar. */
+  /** Mirrors the phone's Design-tools list for the three tools that moved off
+   *  the sidebar, plus the two Pixel Clean actions that moved out of their own
+   *  Row-1 dropdown. */
   const desktopDesignTools = [
+    {
+      id: "cleanSelected" as const,
+      label: t("editor.cleanAlphaSelected"),
+      title: t("editor.cleanAlphaTitle"),
+      Icon: Droplets,
+      menuTone: "text-[#2563EB]",
+      pillTone: "border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100",
+      disabled: !selectedDesignId && selectedDesignIds.size === 0,
+      run: () => { handleThresholdAlpha(); },
+    },
+    {
+      id: "cleanAll" as const,
+      label: t("editor.cleanAlphaFullPage"),
+      title: t("editor.cleanAlphaTitle"),
+      Icon: Droplets,
+      menuTone: "text-[#2563EB]",
+      pillTone: "border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100",
+      disabled: designs.length === 0,
+      run: () => { handleThresholdAlphaAll(); },
+    },
     {
       id: "whiteBg" as const,
       label: t("editor.whiteBg"),
@@ -271,12 +288,9 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
   // editor state (`halftoneMenuOpen`) because the phone sheet renders the
   // same panel from it.
   useEffect(() => {
-    if (!pixelCleanOpen && !alignRotateOpen && !designToolsOpen && !halftoneMenuOpen) return;
+    if (!alignRotateOpen && !designToolsOpen && !halftoneMenuOpen) return;
     const onPointerDown = (e: PointerEvent) => {
       const target = e.target as Node;
-      if (pixelCleanOpen && pixelCleanRef.current && !pixelCleanRef.current.contains(target)) {
-        setPixelCleanOpen(false);
-      }
       if (alignRotateOpen && alignRotateRef.current && !alignRotateRef.current.contains(target)) {
         setAlignRotateOpen(false);
       }
@@ -287,7 +301,6 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
     };
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        setPixelCleanOpen(false);
         setAlignRotateOpen(false);
         setDesignToolsOpen(false);
         if (halftoneMenuOpen) setHalftoneMenuOpen?.(false);
@@ -299,94 +312,22 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [pixelCleanOpen, alignRotateOpen, designToolsOpen, halftoneMenuOpen, setHalftoneMenuOpen]);
+  }, [alignRotateOpen, designToolsOpen, halftoneMenuOpen, setHalftoneMenuOpen]);
 
   return (
     <>
   {/* Top bar: three rows on mobile, wraps on desktop when metric to avoid overlap */}
    <div className="flex-shrink-0 flex flex-col lg:flex-row lg:flex-wrap lg:items-center gap-2 bg-white border-b border-gray-200 px-2 py-2 lg:px-3 lg:py-2">
-    {/* Row 1: Upload, file info, Auto-Arrange, Undo/Redo/Dup/Del */}
+    {/* Row 1: Increase Quality, Delete, Cart. Upload lives in the sidebar,
+        undo/redo float over the canvas, and the duplicate cluster rides
+        Row 2 beside Auto-Arrange. */}
     <div className="flex items-center gap-1.5 lg:gap-2 min-w-0 flex-wrap flex-shrink-0 lg:basis-full lg:flex-nowrap lg:items-start">
       <div className="contents lg:flex lg:flex-1 lg:min-w-0 lg:flex-wrap lg:items-center lg:gap-2">
-      <UploadSection
-        onImageUpload={handleFileUploadUnified}
-        onBatchStart={handleBatchStart}
-        imageInfo={activeImageInfo}
-        embedCompact={embedFromShopify}
-      />
-      {isUploading && (
-        <div className="flex items-center gap-1.5 text-cyan-400">
-          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          <span className="text-[11px]">{t("editor.processing")}</span>
-        </div>
-      )}
-      {activeImageInfo?.file?.name && (
-        <p className="text-[11px] text-gray-600 truncate max-w-[100px] hidden sm:block" title={activeImageInfo.file.name}>
-          {activeImageInfo.file.name}
-        </p>
-      )}
       {/* Wraps at lg because a narrow landscape tablet (1024px) leaves this row
           about 30px short of holding both button groups, and the toolbar clips
           rather than scrolls — "Duplicate & Arrange" was being cut in half. */}
       <div className="flex flex-col gap-1 lg:flex-row lg:flex-wrap lg:gap-1 flex-shrink-0 lg:shrink lg:min-w-0 ml-auto lg:ml-0">
         <div className="flex items-center gap-1">
-          <div className="relative" ref={pixelCleanRef}>
-            <button
-              type="button"
-              onClick={() => {
-                setAlignRotateOpen(false);
-                setDesignToolsOpen(false);
-                setHalftoneMenuOpen?.(false);
-                setPixelCleanOpen((v) => !v);
-              }}
-              disabled={designs.length === 0}
-              aria-expanded={pixelCleanOpen}
-              aria-haspopup="menu"
-              className={`flex items-center gap-1.5 px-2 py-1 lg:px-4 lg:py-2 rounded-md transition-all whitespace-nowrap text-[11px] lg:text-sm font-medium shadow-sm min-h-[36px] ${
-                designs.length > 0
-                  ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#2563EB] border border-[#CBD5E1] shadow-none'
-                  : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
-              }`}
-              title={t("editor.cleanAlphaTitle")}
-            >
-              <Droplets className="w-3 h-3 lg:w-4 lg:h-4" />
-              {t("editor.cleanAlpha")}
-              <ChevronDown className={`w-3 h-3 transition-transform ${pixelCleanOpen ? "rotate-180" : ""}`} />
-            </button>
-            {pixelCleanOpen && (
-              <div
-                role="menu"
-                className="absolute left-0 top-full z-50 mt-1 min-w-[11rem] overflow-hidden rounded-md border border-gray-200 bg-white py-1 shadow-lg"
-              >
-                <button
-                  type="button"
-                  role="menuitem"
-                  disabled={!selectedDesignId && selectedDesignIds.size === 0}
-                  onClick={() => {
-                    handleThresholdAlpha();
-                    setPixelCleanOpen(false);
-                  }}
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] font-medium text-[#2563EB] hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-40"
-                >
-                  <Droplets className="h-3.5 w-3.5 flex-shrink-0" />
-                  {t("editor.cleanAlphaSelected")}
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  disabled={designs.length === 0}
-                  onClick={() => {
-                    handleThresholdAlphaAll();
-                    setPixelCleanOpen(false);
-                  }}
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] font-medium text-[#2563EB] hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-40"
-                >
-                  <Droplets className="h-3.5 w-3.5 flex-shrink-0" />
-                  {t("editor.cleanAlphaFullPage")}
-                </button>
-              </div>
-            )}
-          </div>
           {canIncreaseQuality && (
           <div className="flex items-center gap-0.5">
             <button
@@ -420,84 +361,8 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
           </div>
           )}
         </div>
-        {!isMobile && (
-          <div className="flex items-center gap-1">
-            {/* `coarse:` sizing, not `lg:`, because a tablet renders this desktop
-                arm on a touch screen. 16px is the threshold below which iOS
-                Safari zooms the page in on focus, and the widget has to widen to
-                hold three digits at that size without clipping.
-
-                The height needs `!`: Tailwind emits custom variants ahead of the
-                responsive ones, so `lg:h-[24px]` would otherwise win on a tablet
-                and leave a 24px target under a 16px input. */}
-            <div className="relative w-10 coarse:w-16 h-[28px] lg:h-[24px] coarse:!h-8 rounded border border-gray-300 bg-white overflow-hidden focus-within:border-cyan-500">
-              <input
-                type="text"
-                inputMode="numeric"
-                value={duplicateCount}
-                onChange={(e) => setDuplicateCount(parseDuplicateCount(e.target.value))}
-                onKeyDown={handleDuplicateCountKeyDown}
-                disabled={!selectedDesignId}
-                className="w-full h-full text-center text-[11px] coarse:text-[16px] leading-none p-0 pr-3 coarse:pr-6 bg-white outline-none disabled:opacity-30 disabled:pointer-events-none"
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                title="Number of copies"
-              />
-              <div className="absolute right-0 top-0 h-full w-3 coarse:w-6 border-l border-gray-300 overflow-hidden rounded-r">
-                <button
-                  type="button"
-                  onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev + 1))}
-                  disabled={!selectedDesignId || duplicateCount >= 99}
-                  className="h-1/2 w-full flex items-center justify-center border-b border-gray-300 bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
-                  title="Increase copies"
-                >
-                  <ChevronUp className="w-2.5 h-2.5 coarse:w-4 coarse:h-4 text-gray-600" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev - 1))}
-                  disabled={!selectedDesignId || duplicateCount <= 1}
-                  className="h-1/2 w-full flex items-center justify-center bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
-                  title="Decrease copies"
-                >
-                  <ChevronDown className="w-2.5 h-2.5 coarse:w-4 coarse:h-4 text-gray-600" />
-                </button>
-              </div>
-            </div>
-            <button
-              onClick={() => handleDuplicateAndArrange(duplicateCount)}
-              disabled={!selectedDesignId}
-              className={`flex items-center gap-1 px-2 py-1 lg:px-4 lg:py-2 rounded-md transition-all whitespace-nowrap ${lang !== 'en' ? 'text-[11px] lg:text-sm' : 'text-[12px] lg:text-sm'} font-semibold shadow-sm min-h-[36px] ${
-                selectedDesignId
-                  ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
-                  : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
-              }`}
-              title={t("editor.duplicateArrangeTitle")}
-            >
-              <Copy className="w-3 h-3 lg:w-4 lg:h-4" />
-              {t("editor.duplicateArrange")}
-            </button>
-          </div>
-        )}
       </div>
       <div className="flex min-w-0 items-center justify-end gap-0.5 flex-wrap">
-        <button
-          onClick={handleUndo}
-          disabled={!canUndo()}
-          className="h-10 min-w-[76px] lg:h-11 lg:min-w-[92px] rounded-lg border-2 border-black bg-black px-2.5 text-white hover:bg-white hover:text-black transition-colors disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center gap-1.5 shadow-sm"
-          title={t("editor.undo")}
-        >
-          <Undo2 className="w-5 h-5 lg:w-6 lg:h-6" strokeWidth={2.5} />
-          <span className="text-[13px] lg:text-[15px] font-black tracking-wide">UNDO</span>
-        </button>
-        <button
-          onClick={handleRedo}
-          disabled={!canRedo()}
-          className="w-8 h-8 lg:w-10 lg:h-10 rounded border border-gray-300 bg-white hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center shadow-sm"
-          title={t("editor.redo")}
-        >
-          <Redo2 className="w-4 h-4 lg:w-5 lg:h-5" />
-        </button>
-        <div className="w-px h-4 bg-gray-100 mx-0.5" />
         <button
           onClick={() => {
             if (selectedDesignIds.size > 1) {
@@ -557,7 +422,8 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
         </div>
       )}
     </div>
-    {/* Row 2: Size, DPI, Margin, Rotate, Align — always on its own line */}
+    {/* Row 2: Size, DPI, Duplicate, Auto-Arrange + Margin, Rotate/Align,
+        Design tools — always on its own line */}
     <div className="flex items-center gap-1.5 lg:gap-2 flex-wrap lg:basis-full">
       {activeImageInfo && (
         <>
@@ -695,10 +561,68 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
       )}
       {!isMobile && (
         <div className="ml-auto flex items-center gap-1.5">
+          {/* Copies + Duplicate & Arrange moved down from Row 1 so duplication
+              sits in the same row as Auto-Arrange. */}
+          <div className="flex items-center gap-1">
+            {/* `coarse:` sizing, not `lg:`, because a tablet renders this desktop
+                arm on a touch screen. 16px is the threshold below which iOS
+                Safari zooms the page in on focus, and the widget has to widen to
+                hold three digits at that size without clipping.
+
+                The height needs `!`: Tailwind emits custom variants ahead of the
+                responsive ones, so `lg:h-[24px]` would otherwise win on a tablet
+                and leave a 24px target under a 16px input. */}
+            <div className="relative w-10 coarse:w-16 h-[28px] lg:h-[24px] coarse:!h-11 rounded border border-gray-300 bg-white overflow-hidden focus-within:border-cyan-500">
+              <input
+                type="text"
+                inputMode="numeric"
+                value={duplicateCount}
+                onChange={(e) => setDuplicateCount(parseDuplicateCount(e.target.value))}
+                onKeyDown={handleDuplicateCountKeyDown}
+                disabled={!selectedDesignId}
+                className="w-full h-full text-center text-[11px] coarse:text-[16px] leading-none p-0 pr-3 coarse:pr-6 bg-white outline-none disabled:opacity-30 disabled:pointer-events-none"
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                title="Number of copies"
+              />
+              <div className="absolute right-0 top-0 h-full w-3 coarse:w-6 border-l border-gray-300 overflow-hidden rounded-r">
+                <button
+                  type="button"
+                  onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev + 1))}
+                  disabled={!selectedDesignId || duplicateCount >= 99}
+                  className="h-1/2 w-full flex items-center justify-center border-b border-gray-300 bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
+                  title="Increase copies"
+                >
+                  <ChevronUp className="w-2.5 h-2.5 coarse:w-4 coarse:h-4 text-gray-600" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDuplicateCount((prev) => clampDuplicateCount(prev - 1))}
+                  disabled={!selectedDesignId || duplicateCount <= 1}
+                  className="h-1/2 w-full flex items-center justify-center bg-gray-50 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none"
+                  title="Decrease copies"
+                >
+                  <ChevronDown className="w-2.5 h-2.5 coarse:w-4 coarse:h-4 text-gray-600" />
+                </button>
+              </div>
+            </div>
+            <button
+              onClick={() => handleDuplicateAndArrange(duplicateCount)}
+              disabled={!selectedDesignId}
+              className={`flex items-center gap-1 px-2 py-1 lg:px-4 lg:py-2 rounded-md transition-all whitespace-nowrap ${lang !== 'en' ? 'text-[11px] lg:text-sm' : 'text-[12px] lg:text-sm'} font-semibold shadow-sm min-h-[36px] coarse:min-h-[44px] ${
+                selectedDesignId
+                  ? 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0891B2] border border-[#CBD5E1] shadow-none'
+                  : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+              }`}
+              title={t("editor.duplicateArrangeTitle")}
+            >
+              <Copy className="w-3 h-3 lg:w-4 lg:h-4" />
+              {t("editor.duplicateArrange")}
+            </button>
+          </div>
           <button
             onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2, fullRepack: true })}
             disabled={designs.length < 2 && selectedDesignIds.size < 2}
-            className={`flex items-center gap-1 px-2 py-1 lg:px-4 lg:py-2 rounded-md transition-all whitespace-nowrap text-[11px] lg:text-sm font-medium min-h-[36px] ${
+            className={`flex items-center gap-1 px-2 py-1 lg:px-4 lg:py-2 rounded-md transition-all whitespace-nowrap text-[11px] lg:text-sm font-medium min-h-[36px] coarse:min-h-[44px] ${
               designs.length >= 2 || selectedDesignIds.size >= 2
                 ? 'bg-pink-500 hover:bg-pink-600 text-black border border-pink-600 shadow-md shadow-pink-500/25'
                 : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
@@ -747,7 +671,6 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
             <button
               type="button"
               onClick={() => {
-                setPixelCleanOpen(false);
                 setDesignToolsOpen(false);
                 setHalftoneMenuOpen?.(false);
                 setAlignRotateOpen((v) => !v);
@@ -852,7 +775,6 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
             <button
               type="button"
               onClick={() => {
-                setPixelCleanOpen(false);
                 setAlignRotateOpen(false);
                 setHalftoneMenuOpen?.(false);
                 setDesignToolsOpen((v) => !v);
@@ -860,11 +782,11 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
               disabled={designs.length === 0}
               aria-expanded={designToolsOpen}
               aria-haspopup="menu"
-              className={`flex items-center gap-1.5 px-2 py-1 lg:px-3 lg:py-1.5 rounded-md border transition-all whitespace-nowrap text-[11px] lg:text-sm font-medium min-h-[36px] ${
+              className={`flex items-center gap-1.5 px-2 py-1 lg:px-3 lg:py-1.5 rounded-md border transition-all whitespace-nowrap text-[11px] lg:text-sm font-semibold min-h-[36px] coarse:min-h-[44px] ${
                 designs.length > 0
                   ? designToolsOpen
-                    ? "border-black bg-black text-white"
-                    : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                    ? "border-violet-700 bg-gradient-to-r from-violet-700 to-fuchsia-700 text-white shadow-md shadow-violet-500/30"
+                    : "border-violet-600 bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-md shadow-violet-500/25 hover:from-violet-600 hover:to-fuchsia-600"
                   : "border-gray-200 bg-gray-200 text-gray-500 opacity-30 pointer-events-none"
               }`}
               title={t("editor.designTools")}
