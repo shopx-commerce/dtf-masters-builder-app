@@ -44,6 +44,7 @@ type DesignToolId =
   | "whiteBg"
   | "wand"
   | "cleanAlpha"
+  | "cleanAlphaAll"
   | "alignRotate"
   | "flipH"
   | "flipV"
@@ -129,7 +130,6 @@ export default function ImageEditorView() {
   const [designToolsOpen, setDesignToolsOpen] = useState(false);
   const [toolsCollapseSignal, setToolsCollapseSignal] = useState(0);
   const [alignRotatePanelOpen, setAlignRotatePanelOpen] = useState(false);
-  const [pixelCleanPanelOpen, setPixelCleanPanelOpen] = useState(false);
   /**
    * Where the canvas's backdrop-colour swatches land on the phone: the right-hand end of the
    * view bar, which is on screen for the whole session.
@@ -372,7 +372,6 @@ export default function ImageEditorView() {
   useEffect(() => {
     if (!designToolsOpen) {
       setAlignRotatePanelOpen(false);
-      setPixelCleanPanelOpen(false);
     }
   }, [designToolsOpen]);
   // Align/Rotate acts on the selection; deselecting closes it rather than
@@ -444,7 +443,6 @@ export default function ImageEditorView() {
       pillTone: "border-gray-300 bg-white text-gray-700",
       disabled: !selectedDesignId,
       run: () => {
-        setPixelCleanPanelOpen(false);
         setAlignRotatePanelOpen((v) => !v);
         setDesignToolsOpen(true);
         setLayersOpen(false);
@@ -470,22 +468,28 @@ export default function ImageEditorView() {
       disabled: !selectedDesignId,
       run: handleWandDeleteToggle,
     },
+    /* Two flat buttons rather than one button hiding a chooser panel: "which
+       of the two do I press" beats "what does this one open" (asked for
+       explicitly — the panel step confused people). */
     {
       id: "cleanAlpha",
       label: t("editor.cleanAlpha"),
       title: t("editor.cleanAlphaTitle"),
       Icon: Droplets,
-      tone: pixelCleanPanelOpen
-        ? "border-[#2563EB] bg-[#2563EB] text-white"
-        : "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]",
+      tone: "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB] hover:bg-[#E2E8F0]",
+      pillTone: "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]",
+      disabled: !selectedDesignId && selectedDesignIds.size === 0,
+      run: handleThresholdAlpha,
+    },
+    {
+      id: "cleanAlphaAll",
+      label: t("editor.cleanAlphaAll"),
+      title: t("editor.cleanAlphaAllTitle"),
+      Icon: Droplets,
+      tone: "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB] hover:bg-[#E2E8F0]",
       pillTone: "border-[#CBD5E1] bg-[#F1F5F9] text-[#2563EB]",
       disabled: designs.length === 0,
-      run: () => {
-        setAlignRotatePanelOpen(false);
-        setPixelCleanPanelOpen((v) => !v);
-        setDesignToolsOpen(true);
-        setLayersOpen(false);
-      },
+      run: handleThresholdAlphaAll,
     },
     {
       id: "flipH",
@@ -563,13 +567,13 @@ export default function ImageEditorView() {
   ];
 
   /**
-   * Halftone / Align-Rotate / Pixel Clean open options instead of applying, so
-   * they must not collapse the sheet they just drew into.
+   * Halftone / Align-Rotate open options instead of applying, so they must
+   * not collapse the sheet they just drew into.
    */
   const runTool = (tool: DesignTool) => {
     setLastToolId(tool.id);
     tool.run();
-    if (tool.id !== "halftone" && tool.id !== "alignRotate" && tool.id !== "cleanAlpha") {
+    if (tool.id !== "halftone" && tool.id !== "alignRotate") {
       minimiseToolsAndFocus();
     }
   };
@@ -903,42 +907,14 @@ export default function ImageEditorView() {
                   `controlsSection`. */}
               <div className="hidden" aria-hidden="true">{controlsSection}</div>
 
-              {/* View bar.
-                  Undo and Redo are the same white icon pills as the desktop
-                  canvas overlay — one look for the same two controls on both
-                  layouts (asked for explicitly). The curved-arrow/rotate-handle
-                  confusion that once argued for text labels is settled
-                  differently now: the labelled "Reset" sits right beside them,
-                  anchoring the cluster as view/history controls.
-
-                  They stay in this bar rather than floating over the canvas
-                  because the band that looks empty stops being empty on a tall
-                  sheet or at any zoom-in. */}
+              {/* View bar: Reset / zoom / focus plus the backdrop swatches —
+                  purely how-you-look-at-the-sheet controls. Undo/redo went
+                  back to the top toolbar's Row-1 cluster, their pre-rework
+                  home, so they are no longer duplicated here. */}
               <div
                 className="flex flex-shrink-0 items-center gap-1 overflow-x-auto border-b border-gray-200 bg-gray-100 py-1 pl-2 pr-1 [scrollbar-width:thin]"
                 data-testid="mobile-view-bar"
               >
-                <button
-                  type="button"
-                  onClick={handleUndo}
-                  disabled={!canUndo()}
-                  className="flex h-9 w-10 flex-shrink-0 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-700 shadow-sm transition-colors hover:bg-gray-100 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-12"
-                  title={t("editor.undo")}
-                  aria-label={t("editor.undo")}
-                >
-                  <Undo2 className="h-5 w-5" strokeWidth={2.5} />
-                </button>
-                <button
-                  type="button"
-                  onClick={handleRedo}
-                  disabled={!canRedo()}
-                  className="flex h-9 w-10 flex-shrink-0 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-700 shadow-sm transition-colors hover:bg-gray-100 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-12"
-                  title={t("editor.redo")}
-                  aria-label={t("editor.redo")}
-                >
-                  <Redo2 className="h-5 w-5" strokeWidth={2.5} />
-                </button>
-                <div className="h-5 w-px flex-shrink-0 bg-gray-300" />
                 {/* Reset / zoom / focus portal in here from the canvas. */}
                 <div ref={setMobileToolbarContainer} className="flex min-w-0 flex-1 items-center" data-testid="mobile-canvas-toolbar" />
                 {/* The backdrop the canvas draws behind the artwork.
@@ -1299,7 +1275,6 @@ export default function ImageEditorView() {
                         e.stopPropagation();
                         setDesignToolsOpen(false);
                         setAlignRotatePanelOpen(false);
-                        setPixelCleanPanelOpen(false);
                       }}
                       onPointerDown={(e) => e.stopPropagation()}
                       className="flex h-11 w-11 items-center justify-center text-gray-500 hover:text-gray-800"
@@ -1355,8 +1330,7 @@ export default function ImageEditorView() {
                                 aria-expanded={
                                   tool.id === "halftone" ? halftoneMenuOpen
                                     : tool.id === "alignRotate" ? alignRotatePanelOpen
-                                      : tool.id === "cleanAlpha" ? pixelCleanPanelOpen
-                                        : undefined
+                                      : undefined
                                 }
                               >
                                 <tool.Icon className="h-3.5 w-3.5 flex-shrink-0" />
@@ -1394,40 +1368,6 @@ export default function ImageEditorView() {
                                 <button type="button" onClick={() => { handleAlignCorner("tr"); minimiseToolsAndFocus(); }} className="h-11 w-11 rounded-md border border-gray-300 bg-white" title={t("editor.alignTR")}><ArrowUpRight className="mx-auto h-4 w-4" /></button>
                                 <button type="button" onClick={() => { handleAlignCorner("bl"); minimiseToolsAndFocus(); }} className="h-11 w-11 rounded-md border border-gray-300 bg-white" title={t("editor.alignBL")}><ArrowDownLeft className="mx-auto h-4 w-4" /></button>
                                 <button type="button" onClick={() => { handleAlignCorner("br"); minimiseToolsAndFocus(); }} className="h-11 w-11 rounded-md border border-gray-300 bg-white" title={t("editor.alignBR")}><ArrowDownRight className="mx-auto h-4 w-4" /></button>
-                              </div>
-                            </div>
-                          )}
-
-                          {pixelCleanPanelOpen && (
-                            <div className="rounded-md border border-slate-200 bg-slate-50 p-1.5">
-                              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-600">{t("editor.cleanAlpha")}</p>
-                              <div className="grid grid-cols-2 gap-1.5">
-                                <button
-                                  type="button"
-                                  disabled={!selectedDesignId && selectedDesignIds.size === 0}
-                                  onClick={() => {
-                                    handleThresholdAlpha();
-                                    setPixelCleanPanelOpen(false);
-                                    minimiseToolsAndFocus();
-                                  }}
-                                  className="flex items-center justify-center gap-1 rounded-md border border-[#CBD5E1] bg-[#F1F5F9] px-2 py-2 text-[11px] font-medium text-[#2563EB] disabled:opacity-40 coarse:min-h-[44px]"
-                                >
-                                  <Droplets className="h-3.5 w-3.5" />
-                                  {t("editor.cleanAlphaSelected")}
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={designs.length === 0}
-                                  onClick={() => {
-                                    handleThresholdAlphaAll();
-                                    setPixelCleanPanelOpen(false);
-                                    minimiseToolsAndFocus();
-                                  }}
-                                  className="flex items-center justify-center gap-1 rounded-md border border-[#CBD5E1] bg-[#F1F5F9] px-2 py-2 text-[11px] font-medium text-[#2563EB] disabled:opacity-40 coarse:min-h-[44px]"
-                                >
-                                  <Droplets className="h-3.5 w-3.5" />
-                                  {t("editor.cleanAlphaFullPage")}
-                                </button>
                               </div>
                             </div>
                           )}
@@ -1651,35 +1591,6 @@ export default function ImageEditorView() {
               onWandDeleteTap={handleWandDelete}
               onWandDeactivate={handleWandDeactivate}
             />
-            {/* Undo/redo pinned to the canvas's top-right corner so they sit
-                in the same spot no matter how the toolbar wraps. The wrapper
-                ignores pointer events so it never steals canvas clicks; only
-                the buttons themselves are interactive. */}
-            {/* z-50 keeps the pair above the canvas rulers/scrollbars and
-                selection overlays; the right inset clears the vertical
-                scrollbar's hit zone. */}
-            <div className="pointer-events-none absolute right-5 top-3 z-50 flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={handleUndo}
-                disabled={!canUndo()}
-                className="pointer-events-auto flex h-10 w-11 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-700 shadow-md transition-colors hover:bg-gray-100 hover:text-black disabled:opacity-30 disabled:pointer-events-none"
-                title={t("editor.undo")}
-                aria-label={t("editor.undo")}
-              >
-                <Undo2 className="h-5 w-5" strokeWidth={2.5} />
-              </button>
-              <button
-                type="button"
-                onClick={handleRedo}
-                disabled={!canRedo()}
-                className="pointer-events-auto flex h-10 w-11 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-700 shadow-md transition-colors hover:bg-gray-100 hover:text-black disabled:opacity-30 disabled:pointer-events-none"
-                title={t("editor.redo")}
-                aria-label={t("editor.redo")}
-              >
-                <Redo2 className="h-5 w-5" strokeWidth={2.5} />
-              </button>
-            </div>
           </div>
         )}
       </div>

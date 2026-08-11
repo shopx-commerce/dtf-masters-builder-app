@@ -650,13 +650,25 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       const restored = await restoreEditorDraft(draft);
       if (restored.designs.length === 0) {
         // Nothing came back. Silently clearing the banner would look like the
-        // recover button did nothing at all.
+        // recover button did nothing at all — and when everything was withheld
+        // for quality, "could not recover" would hide the actual instruction:
+        // upload the originals again.
         await discardEditorDraft();
-        toast({
-          title: t("toast.draftRestoreFailed"),
-          description: t("toast.draftRestoreFailedDesc"),
-          variant: "destructive",
-        });
+        if (restored.reducedQualityDesignCount > 0) {
+          toast({
+            title: t("toast.draftQualityReduced"),
+            description: t("toast.draftQualityReducedDesc", {
+              count: restored.reducedQualityDesignCount,
+            }),
+            variant: "destructive",
+          });
+        } else {
+          toast({
+            title: t("toast.draftRestoreFailed"),
+            description: t("toast.draftRestoreFailedDesc"),
+            variant: "destructive",
+          });
+        }
         return;
       }
       if (restored.missingDesignCount > 0) {
@@ -666,10 +678,10 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
           variant: "warning",
         });
       }
-      // Recovered, but not at the resolution it was built at. Told separately
-      // from the missing-artwork case because the customer's options differ:
-      // artwork that vanished has to be re-uploaded to appear at all, whereas
-      // this design is on the sheet and will print — just softer than they chose.
+      // Withheld for quality: the stored copy could no longer print at the
+      // resolution it was built at, so it was deliberately left off the sheet.
+      // Told separately from the missing-artwork case so the message can say
+      // exactly what to do — upload those originals again.
       if (restored.reducedQualityDesignCount > 0) {
         toast({
           title: t("toast.draftQualityReduced"),

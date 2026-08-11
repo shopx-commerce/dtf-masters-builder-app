@@ -1120,9 +1120,11 @@ const SOURCE_PIXEL_TOLERANCE = 0.98;
  * printing from. Recovery therefore promotes the preview to print source, and
  * artwork placed large enough comes back well below print resolution — measured
  * as low as ~154 DPI, squarely inside the amber band the editor already warns
- * about. The owner chose to keep the storage as it is and surface the shortfall
- * instead, since the alternative is persisting originals that routinely blow the
- * storage quota.
+ * about. The storage stays as it is — persisting originals routinely blows the
+ * quota — but a design that fails this bar is left OFF the restored sheet
+ * entirely. That is the owner's rule: recovery must never hand back artwork
+ * below print quality, because a sheet full of soft copies has to be deleted
+ * one by one before rebuilding, which is worse than just starting fresh.
  *
  * Two conditions, both required:
  *   1. the persisted blob really does hold fewer pixels than the saving session's
@@ -1204,10 +1206,10 @@ export async function restoreEditorDraft(draft: EditorDraft): Promise<{
    */
   missingDesignCount: number;
   /**
-   * Designs that came back intact but can no longer print at the resolution they
-   * were built at. They are restored normally — the caller only has to say so, so
-   * the customer can re-upload that one design instead of unknowingly printing a
-   * sheet at a fraction of its original DPI.
+   * Designs whose stored image survived only below the print resolution they
+   * were built at. They are NOT restored — see `isPrintQualityReduced` for the
+   * policy — so the caller has to tell the customer to upload those originals
+   * again, not that they are on the sheet.
    */
   reducedQualityDesignCount: number;
 }> {
@@ -1223,6 +1225,7 @@ export async function restoreEditorDraft(draft: EditorDraft): Promise<{
     const { info: imageInfo } = restored;
     if (isPrintQualityReduced(stored, imageInfo, restored.sourcePixelWidth, restored.sourcePixelHeight)) {
       reducedQualityDesignCount += 1;
+      continue;
     }
     restoredDesigns.push({
       id: stored.id,
@@ -1258,7 +1261,9 @@ export async function restoreEditorDraft(draft: EditorDraft): Promise<{
     manualHeightFloor: restoredManualHeightFloor(draft.manualHeightFloor),
     quantity: draft.quantity,
     designGap: restoredDesignGap(draft.designGap),
-    missingDesignCount: draft.designs.length - restoredDesigns.length,
+    // Quality-withheld designs get their own count; without the subtraction
+    // they would double as "missing artwork" in the caller's toasts.
+    missingDesignCount: draft.designs.length - restoredDesigns.length - reducedQualityDesignCount,
     reducedQualityDesignCount,
   };
 }

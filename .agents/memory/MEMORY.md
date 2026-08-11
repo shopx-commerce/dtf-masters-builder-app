@@ -24,3 +24,4 @@
 - [Upload relay fallback](upload-relay-fallback.md) — retry blocked direct store fetches via the parent relay; gate on the transport sentinel and probe with a short prepare timeout.
 - [Server upload temp files](server-upload-temp-files.md) — disk-not-memory multipart storage, abort-aware temp cleanup (multer leaks on mid-body disconnects), serialized decodes with 503 shed.
 - [Resumable upload sessions](resumable-upload-sessions.md) — bind resume caches to content digests, canonicalize multipart part lists, resume on the preparing route, wake lock while bytes move.
+- [Fill Sheet trim boundary](fill-sheet-trim-boundary.md) — trim expendable fill copies before the growth ladder, carry fillIds through merges/continuations, growth inherits the caller's snapshot intent.

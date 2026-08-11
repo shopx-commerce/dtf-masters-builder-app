@@ -16,9 +16,11 @@ import {
   LayoutGrid,
   Link,
   Loader2,
+  Redo2,
   RotateCw,
   ShoppingCart,
   Trash2,
+  Undo2,
   Unlink,
   WandSparkles,
 } from "lucide-react";
@@ -232,7 +234,7 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
   const desktopDesignTools = [
     {
       id: "cleanSelected" as const,
-      label: t("editor.cleanAlphaSelected"),
+      label: t("editor.cleanAlpha"),
       title: t("editor.cleanAlphaTitle"),
       Icon: Droplets,
       menuTone: "text-[#2563EB]",
@@ -242,8 +244,8 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
     },
     {
       id: "cleanAll" as const,
-      label: t("editor.cleanAlphaFullPage"),
-      title: t("editor.cleanAlphaTitle"),
+      label: t("editor.cleanAlphaAll"),
+      title: t("editor.cleanAlphaAllTitle"),
       Icon: Droplets,
       menuTone: "text-[#2563EB]",
       pillTone: "border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100",
@@ -323,9 +325,10 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
     <>
   {/* Top bar: three rows on mobile, wraps on desktop when metric to avoid overlap */}
    <div className="flex-shrink-0 flex flex-col lg:flex-row lg:flex-wrap lg:items-center gap-2 bg-white border-b border-gray-200 px-2 py-2 lg:px-3 lg:py-2">
-    {/* Row 1: Increase Quality, Delete, Cart. Upload lives in the sidebar,
-        undo/redo float over the canvas, and the duplicate cluster rides
-        Row 2 beside Auto-Arrange. */}
+    {/* Row 1: Increase Quality, Undo/Redo, Delete, Cart. Upload lives in the
+        sidebar and the duplicate cluster rides Row 2 beside Auto-Arrange.
+        Undo/redo are back in this row with their original styling, by
+        request — the floating canvas-corner pills are gone. */}
     <div className="flex items-center gap-1.5 lg:gap-2 min-w-0 flex-wrap flex-shrink-0 lg:basis-full lg:flex-nowrap lg:items-start">
       <div className="contents lg:flex lg:flex-1 lg:min-w-0 lg:flex-wrap lg:items-center lg:gap-2">
       {/* Wraps at lg because a narrow landscape tablet (1024px) leaves this row
@@ -368,6 +371,24 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
         </div>
       </div>
       <div className="flex min-w-0 items-center justify-end gap-0.5 flex-wrap">
+        <button
+          onClick={handleUndo}
+          disabled={!canUndo()}
+          className="h-10 min-w-[76px] lg:h-11 lg:min-w-[92px] rounded-lg border-2 border-black bg-black px-2.5 text-white hover:bg-white hover:text-black transition-colors disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center gap-1.5 shadow-sm"
+          title={t("editor.undo")}
+        >
+          <Undo2 className="w-5 h-5 lg:w-6 lg:h-6" strokeWidth={2.5} />
+          <span className="text-[13px] lg:text-[15px] font-black tracking-wide">UNDO</span>
+        </button>
+        <button
+          onClick={handleRedo}
+          disabled={!canRedo()}
+          className="w-8 h-8 lg:w-10 lg:h-10 rounded border border-gray-300 bg-white hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center shadow-sm"
+          title={t("editor.redo")}
+        >
+          <Redo2 className="w-4 h-4 lg:w-5 lg:h-5" />
+        </button>
+        <div className="w-px h-4 bg-gray-100 mx-0.5" />
         <button
           onClick={() => {
             if (selectedDesignIds.size > 1) {
