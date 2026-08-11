@@ -8,6 +8,7 @@ import {
   describeBudgetRejection,
   importRasterForEditor,
   type PreparedRaster,
+  PrepareNetworkError,
 } from "@/lib/prepare-raster-upload";
 // From the module rather than the `image-editor` barrel: that barrel renders
 // the editor view, which imports this file, so a value import would be a cycle.
@@ -185,7 +186,10 @@ export default function UploadSection({ onImageUpload, onBatchStart, imageInfo, 
       console.error("[upload] raster import failed:", err);
       toast({
         title: t("toast.uploadFailed"),
-        description: err instanceof Error ? err.message : t("toast.uploadFailedDesc"),
+        description:
+          err instanceof PrepareNetworkError
+            ? t(err.kind === "file" ? "toast.uploadFileGoneDesc" : "toast.uploadNetworkDesc")
+            : err instanceof Error ? err.message : t("toast.uploadFailedDesc"),
         variant: "destructive",
       });
     }

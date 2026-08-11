@@ -220,6 +220,8 @@ export const en: Record<string, string> = {
   "toast.invalidImageDesc": "The image has invalid dimensions.",
   "toast.uploadFailed": "Upload failed",
   "toast.uploadFailedDesc": "Could not process this image. Try a different file or format.",
+  "toast.uploadNetworkDesc": "The connection dropped while preparing your image. Check your internet connection and try again.",
+  "toast.uploadFileGoneDesc": "This photo could no longer be read from your device. Please select it again.",
   "toast.pdfFailed": "Failed to parse PDF",
   "toast.pdfFailedDesc": "The file could not be read. Please try a different PDF.",
   "toast.pdfFailedShort": "Could not read this file.",

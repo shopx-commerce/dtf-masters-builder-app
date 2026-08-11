@@ -18,6 +18,7 @@ import {
   importRasterForEditor,
   prepareRasterUpload,
   type PreparedRaster,
+  PrepareNetworkError,
 } from "@/lib/prepare-raster-upload";
 import {
   LOW_RES_EFFECTIVE_DPI_THRESHOLD,
@@ -420,7 +421,10 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
             console.error("[prepare-raster-upload] failed:", err);
             toast({
               title: t("toast.uploadFailed"),
-              description: err instanceof Error ? err.message : t("toast.uploadFailedDesc"),
+              description:
+                err instanceof PrepareNetworkError
+                  ? t(err.kind === "file" ? "toast.uploadFileGoneDesc" : "toast.uploadNetworkDesc")
+                  : err instanceof Error ? err.message : t("toast.uploadFailedDesc"),
               variant: "destructive",
             });
             setIsUploading(false);
@@ -1060,7 +1064,10 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
         console.error("[sidebar-upload] raster import failed:", err);
         toast({
           title: t("toast.uploadFailed"),
-          description: err instanceof Error ? err.message : t("toast.failedLoadFile", { name: file.name }),
+          description:
+            err instanceof PrepareNetworkError
+              ? t(err.kind === "file" ? "toast.uploadFileGoneDesc" : "toast.uploadNetworkDesc")
+              : err instanceof Error ? err.message : t("toast.failedLoadFile", { name: file.name }),
           variant: "destructive",
         });
       }

@@ -178,10 +178,76 @@ export async function isSupportedRasterContainer(file: File): Promise<boolean> {
   return isPng || isJpeg || isWebp;
 }
 
+/**
+ * The prepare POST never reached the server (or hit a transient gateway
+ * error) after retries. Callers show a plain-language connectivity message
+ * for this instead of the raw browser text ("Failed to fetch", "Load
+ * failed"), which customers read as a broken product.
+ */
+export class PrepareNetworkError extends Error {
+  /** "network": connection problem, retrying may help. "file": the picked
+   *  File itself became unreadable (iOS reclaims picker files under memory
+   *  pressure or app switches) — only re-selecting it can fix that. */
+  constructor(
+    message: string,
+    readonly kind: "network" | "file" = "network",
+  ) {
+    super(message);
+  }
+}
+
+/** Chrome "Failed to fetch", Safari/iOS "Load failed", Firefox "NetworkError…" — one transport failure, three spellings. */
+function isNetworkFetchError(err: unknown): err is Error {
+  if (!(err instanceof Error)) return false;
+  const m = err.message;
+  return m === "Failed to fetch" || m === "Load failed" || /^NetworkError\b/.test(m);
+}
+
 export async function prepareRasterUpload(file: File): Promise<PreparedRaster> {
-  const form = new FormData();
-  form.append("image", file);
-  const res = await fetch("/api/prepare-raster-upload", { method: "POST", body: form });
+  // Every large file rides on this one POST — on phones that means a
+  // multi-second cellular upload that dies whenever the connection blips or
+  // iOS kills the socket because the customer switched apps. A fresh
+  // FormData per attempt re-reads the File, and the server prepare is a
+  // pure computation (no state), so retrying is safe. Only transport
+  // failures and transient gateway statuses retry; real HTTP errors
+  // (budget rejections etc.) surface immediately.
+  let res: Response | null = null;
+  let lastNetworkDetail = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, attempt === 1 ? 600 : 1800));
+    try {
+      const form = new FormData();
+      form.append("image", file);
+      res = await fetch("/api/prepare-raster-upload", { method: "POST", body: form });
+    } catch (err) {
+      if (!isNetworkFetchError(err)) throw err;
+      lastNetworkDetail = err.message;
+      res = null;
+      continue;
+    }
+    if (res.status === 502 || res.status === 503 || res.status === 504) {
+      lastNetworkDetail = `HTTP ${res.status}`;
+      res = null;
+      continue;
+    }
+    break;
+  }
+  if (!res) {
+    // Same TypeError spelling either way, but a dead File and a dead network
+    // need opposite remedies — probe one byte to tell them apart.
+    let fileReadable = true;
+    try {
+      await file.slice(0, 1).arrayBuffer();
+    } catch {
+      fileReadable = false;
+    }
+    throw new PrepareNetworkError(
+      fileReadable
+        ? `Could not reach the image preparation service (${lastNetworkDetail})`
+        : `The selected file is no longer readable (${lastNetworkDetail})`,
+      fileReadable ? "network" : "file",
+    );
+  }
   if (!res.ok) {
     let message = `Prepare failed (${res.status})`;
     try {

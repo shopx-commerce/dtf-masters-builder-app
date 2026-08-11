@@ -218,6 +218,8 @@ export const es: Record<string, string> = {
   "toast.invalidImageDesc": "La imagen tiene dimensiones inválidas.",
   "toast.uploadFailed": "Error al subir",
   "toast.uploadFailedDesc": "No se pudo procesar esta imagen. Intenta con otro archivo o formato.",
+  "toast.uploadNetworkDesc": "Se perdió la conexión mientras preparábamos tu imagen. Revisa tu conexión a internet e inténtalo de nuevo.",
+  "toast.uploadFileGoneDesc": "Esta foto ya no se pudo leer desde tu dispositivo. Selecciónala de nuevo.",
   "toast.pdfFailed": "Error al leer PDF",
   "toast.pdfFailedDesc": "No se pudo leer el archivo. Por favor intenta con otro PDF.",
   "toast.pdfFailedShort": "No se pudo leer este archivo.",
