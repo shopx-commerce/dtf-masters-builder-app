@@ -5,7 +5,6 @@ import type { InitialDesignState } from "@/components/image-editor/types";
 import { Link } from "wouter";
 import { ArrowLeft, Upload, X } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
-import LanguageToggle from "@/components/language-toggle";
 import { resolveShellTargetOrigin, resolveShellTopTargetOrigin } from "@/lib/shell-message";
 
 interface StickerMakerProps {
@@ -35,6 +34,68 @@ interface VariantConfig {
 
 function getRawParams() {
   return Object.fromEntries(new URLSearchParams(window.location.search).entries());
+}
+
+type SheetInfoDetail = {
+  widthLabel: string;
+  height: number;
+  heightLabel: string;
+  locked: boolean;
+  options: { value: number; label: string }[];
+};
+
+/**
+ * Gangsheet size readout + height picker for the page header, in the spot
+ * the language toggle used to hold (the builder is English-only now). The
+ * editor owns the state and broadcasts it via "dtf:sheet-info" — re-sent
+ * whenever this badge asks with "dtf:request-sheet-info", since either side
+ * can mount first — and picks here go back through "dtf:set-sheet-height".
+ * Same decoupling as "dtf:open-upload": the header never reaches into
+ * editor internals.
+ */
+function GangsheetSizeBadge({ label }: { label: string }) {
+  const { setLang } = useLanguage();
+  const [info, setInfo] = useState<SheetInfoDetail | null>(null);
+  useEffect(() => {
+    // The badge sits where the language toggle was, so the builder pins
+    // itself to English — a stored "es"/"fr" pick would otherwise be
+    // unescapable with the toggle gone.
+    setLang("en");
+    const onInfo = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      // A null/malformed payload is the editor announcing teardown — clear
+      // instead of keeping a stale picker that would dispatch into a void.
+      if (detail && Array.isArray(detail.options)) setInfo(detail as SheetInfoDetail);
+      else setInfo(null);
+    };
+    window.addEventListener("dtf:sheet-info", onInfo);
+    window.dispatchEvent(new CustomEvent("dtf:request-sheet-info"));
+    return () => window.removeEventListener("dtf:sheet-info", onInfo);
+  }, [setLang]);
+  if (!info) return null;
+  return (
+    <div className="flex flex-shrink-0 flex-col items-center gap-0.5">
+      <span className="whitespace-nowrap text-[9px] font-semibold uppercase tracking-wider leading-none text-gray-500">{label}</span>
+      <div className="flex items-center gap-1">
+        <span className="whitespace-nowrap text-[12px] font-semibold tabular-nums text-gray-800">{info.widthLabel} ×</span>
+        {info.locked ? (
+          <span className="rounded border border-gray-200 bg-gray-100 px-1.5 py-0.5 text-[12px] font-semibold tabular-nums text-gray-900">{info.heightLabel}</span>
+        ) : (
+          <select
+            value={String(info.height)}
+            onChange={(e) => window.dispatchEvent(new CustomEvent("dtf:set-sheet-height", { detail: { height: parseFloat(e.target.value) } }))}
+            className="h-7 coarse:h-9 w-[4.75rem] coarse:w-[5.5rem] cursor-pointer rounded border border-gray-300 bg-white px-1 text-[12px] coarse:text-[16px] font-semibold tabular-nums text-gray-900 outline-none transition-colors hover:border-gray-400 focus:border-cyan-500"
+            title={label}
+            data-testid="header-gangsheet-height"
+          >
+            {info.options.map((o) => (
+              <option key={o.value} value={String(o.value)}>{o.label}</option>
+            ))}
+          </select>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function normalizeDesignStatePayload(json: unknown): InitialDesignState | null {
@@ -378,7 +439,7 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
               </h1>
             </div>
             <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
-              <LanguageToggle />
+              <GangsheetSizeBadge label={t("controls.gangsheetSize")} />
               <button
                 type="button"
                 onClick={requestCloseShopifyOverlay}
@@ -434,7 +495,7 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
                   Support@anynestapp.com
                 </a>
               </span>
-              <LanguageToggle />
+              <GangsheetSizeBadge label={t("controls.gangsheetSize")} />
             </div>
           </div>
         </header>

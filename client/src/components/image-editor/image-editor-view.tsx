@@ -12,7 +12,6 @@ import { useToast } from "@/hooks/use-toast";
 import { useKeyboardSafeFocus } from "@/hooks/use-keyboard-safe-focus";
 import { useMobileLayout, useShortViewport } from "@/hooks/use-layout-viewport";
 import { formatDimensions, formatLength, useMetric, getUnitSuffix } from "@/lib/format-length";
-import { formatVariantPriceForDisplay } from "@/lib/variant-price";
 import { useWandTolerance, useToolActions } from "@/state/tool-store";
 import {
   ArrowDownLeft, ArrowDownRight, ArrowUpLeft, ArrowUpRight, Copy,
@@ -74,7 +73,7 @@ export default function ImageEditorView() {
     proportionalLock,
     setProportionalLock,
     activeImageInfo, activeDesignTransform,
-    activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, canvasRef, designInfoRef,
+    activeResizeSettings, effectiveDPI, layerRows, canvasRef, designInfoRef,
     sidebarFileRef, headerUploadInputRef, downloadContainer, setDownloadContainer,
     fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer,
     copySpotSelectionsRef, GANGSHEET_HEIGHTS, MAX_ARTBOARD_HEIGHT, recommendedArtboardHeight,
@@ -380,6 +379,57 @@ export default function ImageEditorView() {
   useEffect(() => {
     if (!selectedDesignId) setAlignRotatePanelOpen(false);
   }, [selectedDesignId]);
+
+  // The page header shows the gangsheet size where the language toggle used
+  // to sit. CustomEvents keep the page decoupled from editor internals,
+  // mirroring the existing "dtf:open-upload" pattern: the editor broadcasts
+  // size info (and re-sends on request, since the header can mount first),
+  // and header dropdown picks come back as "dtf:set-sheet-height".
+  useEffect(() => {
+    const send = () => {
+      window.dispatchEvent(new CustomEvent("dtf:sheet-info", {
+        detail: {
+          widthLabel: `${formatLength(artboardWidth, lang)}${lang === "en" ? '"' : ""}`,
+          height: artboardHeight,
+          heightLabel: `${formatLength(artboardHeight, lang)}${lang === "en" ? '"' : ""}`,
+          locked: isEditMode,
+          options: GANGSHEET_HEIGHTS.map((h) => ({
+            value: h,
+            // Same rule as the in-sheet select this replaces: the
+            // "(current bounds)" hint only marks advice not yet taken, so
+            // the selected entry drops it and the closed control never has
+            // to render the long form.
+            label: `${formatLength(h, lang)}${lang === "en" ? '"' : ""}${
+              recommendedArtboardHeight === h && artboardHeight !== h
+                ? ` (${t("controls.currentBounds")})`
+                : ""
+            }`,
+          })),
+        },
+      }));
+    };
+    send();
+    window.addEventListener("dtf:request-sheet-info", send);
+    return () => {
+      window.removeEventListener("dtf:request-sheet-info", send);
+      // Tell the header the info it holds is dead: the badge hides rather
+      // than offering a picker no editor is listening to (the editor
+      // remounts on key changes and disappears behind loading/error
+      // branches). On a mere dep change the effect re-runs and re-sends
+      // synchronously, so the only lasting null is a real teardown.
+      window.dispatchEvent(new CustomEvent("dtf:sheet-info", { detail: null }));
+    };
+  }, [artboardWidth, artboardHeight, recommendedArtboardHeight, isEditMode, lang, t, GANGSHEET_HEIGHTS]);
+  useEffect(() => {
+    const onSet = (e: Event) => {
+      const h = (e as CustomEvent).detail?.height;
+      if (typeof h === "number" && Number.isFinite(h) && !isEditMode) {
+        handleArtboardHeightChange(h);
+      }
+    };
+    window.addEventListener("dtf:set-sheet-height", onSet);
+    return () => window.removeEventListener("dtf:set-sheet-height", onSet);
+  }, [handleArtboardHeightChange, isEditMode]);
 
   const designTools: DesignTool[] = !mobileLayout ? [] : [
     {
@@ -843,27 +893,16 @@ export default function ImageEditorView() {
               <div className="hidden" aria-hidden="true">{controlsSection}</div>
 
               {/* View bar.
-                  Undo and Redo carry their names here rather than riding the
-                  action bar as bare glyphs. The undo glyph is a curved arrow
-                  and so is the rotate handle, and customers were reading the
-                  first as the second — a labelled button is the only fix that
-                  survives someone who has never used the editor before. The
-                  glyphs are gone rather than merely accompanied by the word,
-                  which both settles the question and is what makes the row fit
-                  in Spanish: "Deshacer" and "Rehacer" with icons overran the
-                  390px edge by 75px even after everything else was trimmed.
+                  Undo and Redo are the same white icon pills as the desktop
+                  canvas overlay — one look for the same two controls on both
+                  layouts (asked for explicitly). The curved-arrow/rotate-handle
+                  confusion that once argued for text labels is settled
+                  differently now: the labelled "Reset" sits right beside them,
+                  anchoring the cluster as view/history controls.
 
-                  They sit up here because two labels cost ~126px and the
-                  action bar below had none spare. This row did, once the five
-                  backdrop swatches moved into the design tools sheet, and it
-                  moved up with them so the labels have somewhere to be. Net
-                  effect on canvas height is a wash: one row left the bottom,
-                  one arrived at the top.
-
-                  Above the canvas rather than floating over it because the
-                  empty band this appears to occupy is only empty for a short
-                  sheet at default zoom — pick a 36in gangsheet, or zoom in,
-                  and anything floating there is sitting on the artwork. */}
+                  They stay in this bar rather than floating over the canvas
+                  because the band that looks empty stops being empty on a tall
+                  sheet or at any zoom-in. */}
               <div
                 className="flex flex-shrink-0 items-center gap-1 overflow-x-auto border-b border-gray-200 bg-gray-100 py-1 pl-2 pr-1 [scrollbar-width:thin]"
                 data-testid="mobile-view-bar"
@@ -872,19 +911,21 @@ export default function ImageEditorView() {
                   type="button"
                   onClick={handleUndo}
                   disabled={!canUndo()}
-                  className="flex h-9 flex-shrink-0 items-center gap-1 whitespace-nowrap rounded border border-gray-300 bg-white px-1.5 text-[12px] font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:pointer-events-none disabled:opacity-30 coarse:h-11"
+                  className="flex h-9 w-10 flex-shrink-0 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-700 shadow-sm transition-colors hover:bg-gray-100 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-12"
                   title={t("editor.undo")}
+                  aria-label={t("editor.undo")}
                 >
-                  {t("editor.undoShort")}
+                  <Undo2 className="h-5 w-5" strokeWidth={2.5} />
                 </button>
                 <button
                   type="button"
                   onClick={handleRedo}
                   disabled={!canRedo()}
-                  className="flex h-9 flex-shrink-0 items-center gap-1 whitespace-nowrap rounded border border-gray-300 bg-white px-1.5 text-[12px] font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:pointer-events-none disabled:opacity-30 coarse:h-11"
+                  className="flex h-9 w-10 flex-shrink-0 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-700 shadow-sm transition-colors hover:bg-gray-100 disabled:pointer-events-none disabled:opacity-30 coarse:h-11 coarse:w-12"
                   title={t("editor.redo")}
+                  aria-label={t("editor.redo")}
                 >
-                  {t("editor.redoShort")}
+                  <Redo2 className="h-5 w-5" strokeWidth={2.5} />
                 </button>
                 <div className="h-5 w-px flex-shrink-0 bg-gray-300" />
                 {/* Reset / zoom / focus portal in here from the canvas. */}
@@ -1208,62 +1249,11 @@ export default function ImageEditorView() {
                           free from its 20px of vertical padding. With that
                           padding cut to 8 here, two unselected rows would
                           otherwise run together into one block of text. */}
+                      {/* The gangsheet size control that used to trail this
+                          list lives in the page header now (see the
+                          "dtf:sheet-info" events) — the sheet is back to
+                          being only about layers. */}
                       <div data-mobile-layers className="divide-y divide-gray-200 rounded-lg border border-gray-200">{layerListItems}</div>
-
-                      {/* Gangsheet size and price. Document-level rather
-                          than contextual, and it trails the panel rather
-                          than leading it: in landscape the sheet is only
-                          ~123px tall, and 61px of that spent here meant a
-                          panel called Layers opened showing none. A native
-                          `select` rather than the desktop combobox: it
-                          raises the OS picker, and it cannot be clipped by
-                          the sheet's own scroll the way a popover can. */}
-                      <div className="flex flex-nowrap items-center justify-start gap-1.5 overflow-x-auto border-t border-gray-200 pt-2">
-                        <Layers className="h-4 w-4 flex-shrink-0 text-cyan-500" />
-                        <span className="flex-shrink-0 text-[12px] font-semibold text-gray-900">{t("controls.gangsheetSize")}</span>
-                        <span className="flex-shrink-0 text-[12px] font-semibold tabular-nums text-gray-800">{formatLength(artboardWidth, lang)}{lang === "en" ? '"' : ""}</span>
-                        <span className="flex-shrink-0 text-[12px] text-gray-700">×</span>
-                        {isEditMode ? (
-                          <span className="flex-shrink-0 rounded border border-gray-200 bg-gray-100 px-2 py-1 text-[12px] font-semibold tabular-nums text-gray-900">
-                            {formatLength(artboardHeight, lang)}{lang === "en" ? '"' : ""}
-                          </span>
-                        ) : (
-                          <select
-                            value={String(artboardHeight)}
-                            onChange={(e) => handleArtboardHeightChange(parseFloat(e.target.value))}
-                            /* Fixed width on purpose: a native select is as
-                               wide as its longest option, and the recommended
-                               entry carries a "(current bounds)" suffix that
-                               would otherwise stretch this to twice the row.
-                               The suffix is suppressed on the selected entry —
-                               see below — so the collapsed control never has to
-                               render it and this width is always enough. */
-                            className="h-8 w-[5.5rem] flex-shrink-0 cursor-pointer rounded border border-gray-300 bg-gray-100 px-1.5 text-[12px] font-semibold tabular-nums text-gray-900 outline-none transition-colors hover:border-gray-400 focus:border-cyan-500 coarse:h-11 coarse:w-[6.5rem] coarse:text-[16px]"
-                            title={t("controls.gangsheetSize")}
-                            data-testid="mobile-gangsheet-height"
-                          >
-                            {GANGSHEET_HEIGHTS.map((h) => (
-                              <option key={h} value={String(h)}>
-                                {formatLength(h, lang)}{lang === "en" ? '"' : ""}
-                                {/* A closed native select shows the selected option's own
-                                    text, and this one is too narrow for the suffix — it
-                                    rendered as `12.00" (c`, cut mid-word. The hint only
-                                    means anything as advice not yet taken, so the entry
-                                    that is already selected drops it and the long form is
-                                    left to the open list, which is free to be wider. */}
-                                {recommendedArtboardHeight === h && artboardHeight !== h
-                                  ? ` (${t("controls.currentBounds")})`
-                                  : ""}
-                              </option>
-                            ))}
-                          </select>
-                        )}
-                        {selectedVariantPrice != null && (
-                          <span className="flex-shrink-0 whitespace-nowrap rounded-full border border-emerald-600 bg-white px-2 py-0.5 text-[11px] font-bold leading-tight tabular-nums text-emerald-600">
-                            {formatVariantPriceForDisplay(selectedVariantPrice)}
-                          </span>
-                        )}
-                      </div>
 
                       {/* Fluorescent spot-colour panels portal here on this
                           arm; on desktop they go to the sidebar. */}
@@ -1505,21 +1495,23 @@ export default function ImageEditorView() {
                 is also what left this row the width for Auto-Arrange to keep
                 its name. */}
             <div className="flex flex-shrink-0 flex-nowrap items-center justify-start gap-1.5 overflow-x-auto border-t border-gray-200 bg-white px-2 py-0" data-testid="mobile-persistent-bar">
-              {/* Leftmost because it is the only route to the layers list, the
-                  gangsheet size and Add Designs; if a longer translation makes
-                  this row scroll, the control that must never be the one out
-                  of reach is this one. Icon-only, like its three neighbours —
-                  a text label costs ~50px the row does not have. */}
+              {/* Leftmost because it is the only route to the layers list and
+                  Add Designs; if a longer translation makes this row scroll,
+                  the control that must never be the one out of reach is this
+                  one. It carries the word "Layers" (asked for explicitly) —
+                  the row scrolls sideways, so the label costs reach for the
+                  rightmost controls, never fit for this one. */}
               <button
                 type="button"
                 onClick={() => { setLayersOpen((v) => !v); setDesignToolsOpen(false); }}
-                className={`relative h-8 w-8 flex-shrink-0 rounded border transition-colors coarse:h-11 coarse:w-11 ${layersOpen ? "border-cyan-600 bg-cyan-500 text-white" : "border-gray-300 bg-white text-gray-600 hover:bg-gray-100 hover:text-gray-900"}`}
+                className={`relative flex min-h-[36px] flex-shrink-0 items-center gap-1 whitespace-nowrap rounded border px-2 text-[12px] font-semibold transition-colors coarse:min-h-[44px] ${layersOpen ? "border-cyan-600 bg-cyan-500 text-white" : "border-gray-300 bg-white text-gray-600 hover:bg-gray-100 hover:text-gray-900"}`}
                 title={layersOpen ? t("editor.closeLayers") : t("editor.openLayers")}
                 aria-label={layersOpen ? t("editor.closeLayers") : t("editor.openLayers")}
                 aria-expanded={layersOpen}
                 data-testid="mobile-layers-toggle"
               >
-                <Layers className="mx-auto h-4 w-4" />
+                <Layers className="h-4 w-4 flex-shrink-0" />
+                {t("editor.layers")}
                 {designs.length > 0 && (
                   <span className={`pointer-events-none absolute -right-1 -top-1 min-w-[16px] rounded-full px-1 text-[10px] font-bold leading-4 tabular-nums ${layersOpen ? "bg-white text-cyan-700" : "bg-cyan-500 text-white"}`}>
                     {designs.length}
@@ -1544,7 +1536,7 @@ export default function ImageEditorView() {
               <button
                 type="button"
                 onClick={() => { setDesignToolsOpen((v) => !v); setLayersOpen(false); }}
-                className={`flex flex-shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-md border text-[12px] font-semibold transition-colors ${activeToolShown ? "h-8 w-8 coarse:h-11 coarse:w-11" : "min-h-[36px] px-2 py-1 coarse:min-h-[44px]"} ${designToolsOpen ? "border-cyan-600 bg-cyan-500 text-white" : "border-gray-300 bg-white text-gray-700 hover:bg-gray-100"}`}
+                className={`flex flex-shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-md border text-[12px] font-semibold transition-colors ${activeToolShown ? "h-8 w-8 coarse:h-11 coarse:w-11" : "min-h-[36px] px-2 py-1 coarse:min-h-[44px]"} ${designToolsOpen ? "border-violet-700 bg-gradient-to-r from-violet-700 to-fuchsia-700 text-white shadow-md shadow-violet-500/30" : "border-violet-600 bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-md shadow-violet-500/25 hover:from-violet-600 hover:to-fuchsia-600"}`}
                 title={t("editor.designTools")}
                 /* Carried explicitly because the visible name goes away above. */
                 aria-label={t("editor.designTools")}

@@ -4901,16 +4901,16 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                       if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
                       resetView();
                     }}
-                    /* Icon-only, unlike its desktop twin. It shares this row
-                       with two labelled history buttons now, and "Restablecer"
-                       beside "Deshacer" and "Rehacer" left no width for the
-                       zoom controls at 390px. It groups with the zoom buttons
-                       either way, which have always been icons. */
-                    className="min-w-[44px] min-h-[40px] h-10 w-11 p-0 rounded-md border border-gray-300 bg-white shadow-sm hover:bg-gray-100 text-gray-700 flex items-center justify-center"
+                    /* Labelled "Reset" (asked for explicitly). The width the
+                       two history labels once fought over is free now that
+                       Undo/Redo are icon pills, so this is the one word in
+                       the cluster — and the action most worth naming. */
+                    className="min-h-[40px] h-10 flex-shrink-0 px-2.5 rounded-md border border-gray-300 bg-white shadow-sm hover:bg-gray-100 text-gray-700 whitespace-nowrap text-[12px] font-semibold flex items-center justify-center"
                     title={t("preview.resetView")}
                     aria-label={t("preview.resetView")}
                   >
-                    <RotateCcw className="h-5 w-5 flex-shrink-0" />
+                    <RotateCcw className="h-4 w-4 mr-1 flex-shrink-0" />
+                    {t("preview.reset")}
                   </Button>
                 )}
                 <div className="flex items-center gap-1 flex-shrink-0">
@@ -5003,11 +5003,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                     variant="ghost"
                     size="sm"
                     onClick={zoomToSelected}
-                     className={`${isMobile ? 'min-w-[36px] min-h-[36px] h-8 w-8 p-0 justify-center' : 'h-7 px-2'} hover:bg-gray-200 rounded text-gray-700 whitespace-nowrap ${lang !== 'en' ? 'text-[11px]' : 'text-[12px]'} font-medium flex items-center`}
+                     className={`${isMobile ? 'min-h-[40px] h-10 px-2 flex-shrink-0 justify-center rounded-md border border-gray-300 bg-white shadow-sm hover:bg-gray-100 font-semibold' : 'h-7 px-2 rounded hover:bg-gray-200 font-medium'} text-gray-700 whitespace-nowrap ${lang !== 'en' ? 'text-[11px]' : 'text-[12px]'} flex items-center`}
                     title={t("preview.focusTitle")}
                   >
-                    <Focus className={`${isMobile ? 'h-4 w-4' : 'h-2.5 w-2.5 mr-0.5'} flex-shrink-0`} />
-                    {!isMobile && t("preview.focus")}
+                    <Focus className={`${isMobile ? 'h-4 w-4 mr-1' : 'h-2.5 w-2.5 mr-0.5'} flex-shrink-0`} />
+                    {t("preview.focus")}
                   </Button>
                 )}
               </div>
@@ -5145,11 +5145,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                     variant="ghost"
                     size="sm"
                     onClick={zoomToSelected}
-                    className={`${isMobile ? 'min-w-[36px] min-h-[36px] h-8 w-8 p-0 justify-center' : 'h-6 px-1.5'} hover:bg-gray-200 rounded text-gray-600 whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} flex items-center`}
+                    className={`${isMobile ? 'min-h-[40px] h-10 px-2 flex-shrink-0 justify-center rounded-md border border-gray-300 bg-white shadow-sm hover:bg-gray-100 font-semibold' : 'h-6 px-1.5 rounded hover:bg-gray-200'} text-gray-600 whitespace-nowrap ${lang !== 'en' ? 'text-[10px]' : 'text-[11px]'} flex items-center`}
                     title={t("preview.focusTitle")}
                   >
-                    <Focus className={`${isMobile ? 'h-4 w-4' : 'h-2.5 w-2.5 mr-0.5'} flex-shrink-0`} />
-                    {!isMobile && t("preview.focus")}
+                    <Focus className={`${isMobile ? 'h-4 w-4 mr-1' : 'h-2.5 w-2.5 mr-0.5'} flex-shrink-0`} />
+                    {t("preview.focus")}
                   </Button>
                 )}
               </div>

@@ -560,7 +560,7 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
         </>
       )}
       {!isMobile && (
-        <div className="ml-auto flex items-center gap-1.5">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
           {/* Copies + Duplicate & Arrange moved down from Row 1 so duplication
               sits in the same row as Auto-Arrange. */}
           <div className="flex items-center gap-1">
@@ -660,11 +660,9 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
               </select>
             </div>
           )}
-        </div>
-      )}
-      {/* Align/Rotate — collapsed behind one control so the toolbar stays
-          short; expands with the same rotate + align cluster it replaced. */}
-      <div className="flex items-center gap-0.5 flex-shrink-0 flex-wrap lg:flex-nowrap w-full lg:w-auto">
+          {/* Align/Rotate — collapsed behind one control; it lives inside
+              this same right-aligned cluster so it always sits beside
+              Auto-Arrange no matter how the row wraps. */}
         {!isMobile && (
           <div className="relative flex items-center gap-1" ref={alignRotateRef}>
             <div className="w-px h-4 bg-gray-100 mx-0.5 hidden lg:block" />
@@ -692,7 +690,11 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
               <ChevronDown className={`w-3 h-3 transition-transform ${alignRotateOpen ? "rotate-180" : ""}`} />
             </button>
             {alignRotateOpen && selectedDesignId && (
-              <div className="absolute left-0 top-full z-50 mt-1 flex flex-wrap items-center gap-1.5 rounded-xl border-2 border-black bg-white p-2 shadow-lg">
+              /* `right-0` + `w-max`: the trigger now sits at the toolbar's
+                 right edge, so the panel grows leftwards to stay onscreen.
+                 `w-max` matters — an absolute box otherwise shrinks to its
+                 ~150px containing block and wraps into a tower. */
+              <div className="absolute right-0 top-full z-50 mt-1 flex w-max max-w-[92vw] flex-wrap items-center gap-1.5 rounded-xl border-2 border-black bg-white p-2 shadow-lg">
                 <button
                   onClick={handleRotate90}
                   className="w-10 h-10 lg:w-[30px] lg:h-[30px] rounded-lg lg:rounded-md border-2 border-black bg-black text-white hover:bg-white hover:text-black transition-colors flex items-center justify-center shadow-sm"
@@ -798,7 +800,7 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
             {designToolsOpen && (
               <div
                 role="menu"
-                className="absolute left-0 top-full z-50 mt-1 min-w-[12rem] overflow-hidden rounded-md border border-gray-200 bg-white py-1 shadow-lg"
+                className="absolute right-0 top-full z-50 mt-1 w-max min-w-[12rem] overflow-hidden rounded-md border border-gray-200 bg-white py-1 shadow-lg"
               >
                 {desktopDesignTools.map((tool) => (
                   <button
@@ -860,7 +862,7 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
               </button>
             ) : null}
             {halftoneMenuOpen && (selectedDesignId || selectedDesignIds.size > 0) && (
-              <div className="absolute left-0 top-full z-50 mt-1 w-48 rounded-md border border-gray-200 bg-white p-2 shadow-lg">
+              <div className="absolute right-0 top-full z-50 mt-1 w-48 rounded-md border border-gray-200 bg-white p-2 shadow-lg">
                 <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">Strength</p>
                 <div className="mb-2 flex gap-1">
                   {(["light", "balanced", "strong"] as const).map((s) => (
@@ -909,7 +911,8 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
             )}
           </div>
         )}
-      </div>
+        </div>
+      )}
     </div>
   </div>
 
