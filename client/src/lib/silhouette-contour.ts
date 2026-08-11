@@ -1,6 +1,6 @@
 import { StrokeSettings, ResizeSettings, ShapeSettings } from "@/components/image-editor";
 import { PDFDocument, PDFPage, rgb, PDFName, PDFArray, PDFDict, PDFStream, PDFRef } from 'pdf-lib';
-import { cropImageToContent } from './image-crop';
+import { cropImageToContent, boundedImageCopyCanvas } from './image-crop';
 
 export interface ContourPathResult {
   pathPoints: Array<{ x: number; y: number }>; // Points in inches
@@ -511,7 +511,7 @@ function createOptimizedSilhouetteMask(image: HTMLImageElement): MaskResult {
 
 function createMaskAtResolution(image: HTMLImageElement, targetWidth: number, targetHeight: number): Uint8Array {
   const tempCanvas = document.createElement('canvas');
-  const tempCtx = tempCanvas.getContext('2d');
+  const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
   if (!tempCtx) return new Uint8Array(0);
 
   tempCanvas.width = targetWidth;
@@ -1841,7 +1841,7 @@ export async function downloadContourPDF(
   
   // Create a canvas to get the image as PNG bytes
   const tempCanvas = document.createElement('canvas');
-  const tempCtx = tempCanvas.getContext('2d');
+  const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
   if (!tempCtx) return;
   
   tempCanvas.width = image.width;
@@ -2020,11 +2020,10 @@ export async function downloadShapePDF(
   if (croppedCanvas) {
     imageCanvas = croppedCanvas;
   } else {
-    imageCanvas = document.createElement('canvas');
-    imageCanvas.width = image.width;
-    imageCanvas.height = image.height;
-    const ctx = imageCanvas.getContext('2d');
-    if (ctx) ctx.drawImage(image, 0, 0);
+    // Bounded copy — never re-create the giant allocation the crop guard just
+    // refused. This bitmap is embedded into a physical-size PDF rect, so pixel
+    // count affects sharpness only, never layout.
+    imageCanvas = boundedImageCopyCanvas(image);
   }
   
   // Get PNG bytes from cropped image
@@ -2194,7 +2193,7 @@ export async function generateContourPDFBase64(
   const page = pdfDoc.addPage([widthPts, heightPts]);
   
   const tempCanvas = document.createElement('canvas');
-  const tempCtx = tempCanvas.getContext('2d');
+  const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
   if (!tempCtx) return null;
   
   tempCanvas.width = image.width;
@@ -2325,11 +2324,10 @@ export async function generateShapePDFBase64(
   if (croppedCanvas) {
     imageCanvas = croppedCanvas;
   } else {
-    imageCanvas = document.createElement('canvas');
-    imageCanvas.width = image.width;
-    imageCanvas.height = image.height;
-    const ctx = imageCanvas.getContext('2d');
-    if (ctx) ctx.drawImage(image, 0, 0);
+    // Bounded copy — never re-create the giant allocation the crop guard just
+    // refused. This bitmap is embedded into a physical-size PDF rect, so pixel
+    // count affects sharpness only, never layout.
+    imageCanvas = boundedImageCopyCanvas(image);
   }
   
   const blob = await new Promise<Blob>((resolve) => {

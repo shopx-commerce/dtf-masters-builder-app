@@ -64,7 +64,7 @@ export function createTrueContour(
 function generateSimpleOutline(image: HTMLImageElement, strokeSettings: StrokeSettings): ContourPoint[] {
   try {
     const tempCanvas = document.createElement('canvas');
-    const tempCtx = tempCanvas.getContext('2d');
+    const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
     if (!tempCtx) {
       console.error('Failed to get canvas context for outline generation');
       return [];
@@ -1168,7 +1168,7 @@ function fillTransparentHoles(image: HTMLImageElement, threshold: number): HTMLC
   
   // Extract image data to identify holes
   const tempCanvas = document.createElement('canvas');
-  const tempCtx = tempCanvas.getContext('2d');
+  const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
   if (!tempCtx) return canvas;
   
   tempCanvas.width = image.width;
@@ -1241,7 +1241,7 @@ function addTextBackground(image: HTMLImageElement, threshold: number): HTMLCanv
   
   // Extract image data to analyze text structure
   const tempCanvas = document.createElement('canvas');
-  const tempCtx = tempCanvas.getContext('2d');
+  const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
   if (!tempCtx) return canvas;
   
   tempCanvas.width = image.width;
@@ -1384,7 +1384,7 @@ function generateCadCutOutline(
 ): ContourPoint[][] {
   // Simple CadCut-style outline generation
   const tempCanvas = document.createElement('canvas');
-  const tempCtx = tempCanvas.getContext('2d');
+  const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
   if (!tempCtx) return [];
   
   tempCanvas.width = image.width;
@@ -2051,7 +2051,7 @@ function ensureClosedPath(points: ContourPoint[]): ContourPoint[] {
 function rasterToVectorConversion(image: HTMLImageElement, threshold: number): ContourPoint[][] {
   // Convert raster to vector using Potrace-like algorithm
   const tempCanvas = document.createElement('canvas');
-  const tempCtx = tempCanvas.getContext('2d');
+  const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
   if (!tempCtx) return [];
   
   tempCanvas.width = image.width;
@@ -2300,7 +2300,7 @@ function extractVectorHoles(
   holeMargin: number
 ): ContourPoint[][] {
   const tempCanvas = document.createElement('canvas');
-  const tempCtx = tempCanvas.getContext('2d');
+  const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
   if (!tempCtx) return [];
   
   tempCanvas.width = image.width;

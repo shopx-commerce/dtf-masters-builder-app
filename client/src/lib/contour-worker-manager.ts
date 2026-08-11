@@ -9,7 +9,7 @@ function downsampleImage(image: HTMLImageElement): { canvas: HTMLCanvasElement; 
     const canvas = document.createElement('canvas');
     canvas.width = image.width;
     canvas.height = image.height;
-    const ctx = canvas.getContext('2d')!;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
     ctx.drawImage(image, 0, 0);
     return { canvas, scale: 1 };
   }
@@ -23,7 +23,7 @@ function downsampleImage(image: HTMLImageElement): { canvas: HTMLCanvasElement; 
   const canvas = document.createElement('canvas');
   canvas.width = newWidth;
   canvas.height = newHeight;
-  const ctx = canvas.getContext('2d')!;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
   
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
@@ -228,16 +228,14 @@ class ContourWorkerManager {
     }
 
     const { canvas, scale } = downsampleImage(image);
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) throw new Error('Could not get canvas context');
 
+    // Posted straight through by transfer. This used to be cloned first, which at the
+    // 4000px processing ceiling meant duplicating 64 MB on the main thread before the
+    // worker had started. The clone was never read — getImageData has already copied
+    // the pixels out of `canvas`, so transferring them away leaves the canvas intact.
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    
-    const clonedData = new ImageData(
-      new Uint8ClampedArray(imageData.data),
-      imageData.width,
-      imageData.height
-    );
 
     const safeWidthInches = Math.max(resizeSettings.widthInches, 0.01);
     const safeHeightInches = Math.max(resizeSettings.heightInches, 0.01);
@@ -256,7 +254,7 @@ class ContourWorkerManager {
     } : detectedShapeInfo;
     
     const request: ProcessRequest = {
-      imageData: clonedData,
+      imageData,
       strokeSettings,
       effectiveDPI: effectiveDPI,
       resizeSettings: { ...resizeSettings, outputDPI: effectiveDPI },
@@ -288,6 +286,11 @@ class ContourWorkerManager {
   private processInWorker(request: ProcessRequest, onProgress?: ProgressCallback): Promise<WorkerResult> {
     return new Promise((resolve, reject) => {
       if (this.isProcessing) {
+        // Only one request can wait, so a third arrival displaces the second.
+        // Overwriting the slot without settling it left that caller's promise
+        // pending for the lifetime of the page — whatever spinner it was driving
+        // never stopped. Superseding it is correct; abandoning it is not.
+        this.pendingRequest?.reject(new Error('Contour request superseded'));
         this.pendingRequest = { request, resolve, reject, onProgress };
         return;
       }
@@ -335,7 +338,7 @@ class ContourWorkerManager {
       const tempCanvas = document.createElement('canvas');
       tempCanvas.width = newWidth;
       tempCanvas.height = newHeight;
-      const tempCtx = tempCanvas.getContext('2d')!;
+      const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true })!;
       tempCtx.imageSmoothingEnabled = true;
       tempCtx.imageSmoothingQuality = 'high';
       tempCtx.drawImage(image, 0, 0, newWidth, newHeight);

@@ -19,10 +19,13 @@ interface UploadsPanelProps {
  * Collapsed-under-Layers "Uploads" section: thumbnails of previously
  * uploaded files (persisted in IndexedDB across sessions/sheets) with an
  * "Add Here" action that re-adds the original file to the canvas.
+ *
+ * Starts minimized — only the header row shows until it is clicked — so the
+ * Layers list above keeps the sidebar space.
  */
 export function UploadsPanel({ t, onAddFile, onUnavailable }: UploadsPanelProps) {
   const [entries, setEntries] = useState<UploadLibraryEntry[]>([]);
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const [addingKey, setAddingKey] = useState<string | null>(null);
 
   const refresh = useCallback(() => {

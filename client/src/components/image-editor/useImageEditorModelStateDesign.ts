@@ -34,6 +34,8 @@ import type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/li
 import { HOT_PEEL_PROFILE } from "@/lib/profiles";
 import type { ImageEditorProps } from "./types";
 import type { SpotPreviewData } from "../controls-section";
+import { getToolSnapshot } from "@/state/tool-store";
+import { useUiActions, useSpotPreviewData } from "@/state/ui-store";
 
 export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   const {
@@ -97,7 +99,18 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   artboardHeightRef.current = artboardHeight;
   const contentFillCacheRef = useRef<Map<string, number>>(new Map());
   const handleAutoArrangeRef = useRef<(
-    opts?: { skipSnapshot?: boolean; preserveSelection?: boolean; arrangeAll?: boolean }
+    opts?: {
+      skipSnapshot?: boolean;
+      preserveSelection?: boolean;
+      arrangeAll?: boolean;
+      fullRepack?: boolean;
+      /** Delete overflowing designs listed in `fillIds` instead of growing the sheet for them. */
+      trimOverflow?: boolean;
+      /** Ids of expendable Fill Sheet copies — the only designs `trimOverflow` may delete. */
+      fillIds?: Set<string>;
+      /** Internal to the arrange hook: a height-ladder step continuing the run in flight. */
+      continuation?: boolean;
+    }
   ) => void>(() => {});
   const [quantity, setQuantity] = useState(initialQuantity ?? 1);
   useEffect(() => {
@@ -181,24 +194,39 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     }
   }, [selectedDesignId]);
   const [mobilePanel, setMobilePanel] = useState<"controls" | "preview">("controls");
-  const [showDesignInfo, setShowDesignInfo] = useState(true);
-  const [selectionZoomActive, setSelectionZoomActive] = useState(false);
+  // UI-mode state (contextMenu, showDesignInfo, selectionZoomActive,
+  // wandDeleteModeActive, spotPreviewData, cropModalDesignId) lives in the
+  // Zustand `ui-store` — see `state/ui-store.ts`. Removing it from the model
+  // means toggling any of it does not re-run this hook or invalidate the
+  // `useCallback` identities of its handlers.
+  const {
+    setShowDesignInfo,
+    setSelectionZoomActive,
+    setSpotPreviewData,
+    setWandDeleteModeActive,
+    setContextMenu,
+    setCropModalDesignId,
+  } = useUiActions();
+  // Exception to the "write-only" pattern above: `useImageEditorModelCart`
+  // (untouched — see Phase 2 ATC speed-up) reads `spotPreviewData` reactively
+  // off this hook's bag for the fluorescent PDF export path, so it has to
+  // stay a live subscription here rather than an imperative snapshot.
+  const spotPreviewData = useSpotPreviewData();
   const clipboardRef = useRef<DesignItem[]>([]);
   const [proportionalLock, setProportionalLock] = useState(true);
   const designInfoRef = useRef<HTMLDivElement>(null);
   const sidebarFileRef = useRef<HTMLInputElement>(null);
   const headerUploadInputRef = useRef<HTMLInputElement>(null);
-  
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [downloadContainer, setDownloadContainer] = useState<HTMLDivElement | null>(null);
-  const [spotPreviewData, setSpotPreviewData] = useState<SpotPreviewData>({ enabled: false, colors: [] });
-  const [wandDeleteModeActive, setWandDeleteModeActive] = useState(false);
-  const [wandTolerance, setWandTolerance] = useState(30);
+  // `wandTolerance` lives in the Zustand `tool-store` — see
+  // `state/tool-store.ts`. It's a 60Hz slider drag that used to regenerate
+  // the whole context bag on every tick; the wand-delete callback below
+  // reads the current value imperatively via `getToolSnapshot()` instead.
   const [fluorPanelContainer, setFluorPanelContainer] = useState<HTMLDivElement | null>(null);
   const [mobileToolbarContainer, setMobileToolbarContainer] = useState<HTMLDivElement | null>(null);
   const copySpotSelectionsRef = useRef<((fromId: string, toIds: string[]) => void) | null>(null);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; designId: string } | null>(null);
-  const [cropModalDesignId, setCropModalDesignId] = useState<string | null>(null);
 
   // Undo/Redo history
   const { pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo } = useHistory();
@@ -832,6 +860,10 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     const start = (py * w + px) * 4;
     if (data[start + 3] < 10) return;
     const sr = data[start], sg = data[start + 1], sb = data[start + 2];
+    // Read the slider value at click time so this callback's identity
+    // doesn't depend on `wandTolerance` — the slider can drag freely
+    // without invalidating this `useCallback` or its downstream memos.
+    const { wandTolerance } = getToolSnapshot();
     const maxDiff = Math.round((wandTolerance / 100) * 255);
     const visited = new Uint8Array(w * h);
     const queue = [py * w + px];
@@ -861,7 +893,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       };
       nextImage.src = URL.createObjectURL(blob);
     }, "image/png");
-  }, [wandTolerance, saveSnapshot, selectedDesignId]);
+  }, [saveSnapshot, selectedDesignId]);
 
 
   const selectedDesign = useMemo(() => designs.find(d => d.id === selectedDesignId) || null, [designs, selectedDesignId]);
@@ -1716,17 +1748,11 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     }
   }, [selectedDesignId, selectedDesignIds, handleSelectDesign]);
 
-  useEffect(() => {
-    if (!contextMenu) return;
-    const close = () => setContextMenu(null);
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
-    window.addEventListener('click', close);
-    window.addEventListener('scroll', close, true);
-    window.addEventListener('keydown', onKey);
-    return () => { window.removeEventListener('click', close); window.removeEventListener('scroll', close, true); window.removeEventListener('keydown', onKey); };
-  }, [contextMenu]);
+  // Auto-close-on-outside-click for the context menu now lives in
+  // `image-editor-view.tsx`, which subscribes to `contextMenu` via the
+  // `ui-store` — see the note above `useUiActions` at the top of this file.
 
 
   // Base editor state; arrange/upload/export/cart hooks extend this bag in image-editor-provider.
-  return { onDesignUploaded, profile, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode, toast, t, lang, isMobile, isLgUp, imageInfo, setImageInfo, resizeSettings, setResizeSettings, isProcessing, setIsProcessing, isAddingToCart, setIsAddingToCart, isUpdateFlow, setIsUpdateFlow, addToCartProgressLabel, setAddToCartProgressLabel, exportProgressLabel, setExportProgressLabel, addToCartInFlightRef, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, shellShopKeyRef, shellConfigReady, designIdRef, getLayerAssetRef, getLayerScreenedAssetRef, releaseLayerAssetOwnership, refreshAddToCartStallTimeout, isUploading, setIsUploading, uploadProgress, setUploadProgress, artboardWidth, setArtboardWidth, artboardHeight, setArtboardHeight, artboardWidthRef, artboardHeightRef, contentFillCacheRef, handleAutoArrangeRef, quantity, setQuantity, designGap, setDesignGap, duplicateCount, setDuplicateCount, clampDuplicateCount, parseDuplicateCount, handleDuplicateCountKeyDown, designTransform, setDesignTransform, designs, setDesigns, selectedDesignId, setSelectedDesignId, selectedDesignIds, setSelectedDesignIds, mobilePanel, setMobilePanel, showDesignInfo, setShowDesignInfo, selectionZoomActive, setSelectionZoomActive, clipboardRef, proportionalLock, setProportionalLock, designInfoRef, sidebarFileRef, headerUploadInputRef, canvasRef, downloadContainer, setDownloadContainer, spotPreviewData, setSpotPreviewData, fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer, copySpotSelectionsRef, contextMenu, setContextMenu, cropModalDesignId, setCropModalDesignId, pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo, mountedRef, designsRef, nudgeSnapshotSavedRef, nudgeTimeoutRef, thumbnailCacheRef, assetDataUrlCacheRef, restoredLayerAssetRef, multiDragAccumRef, multiResizeStartRef, multiRotateStartRef, snapshotCacheRef, getSnapshot, saveSnapshot, applySnapshot, handleUndo, handleRedo, handleInteractionEnd, handleRemoveWhiteBackground, handleWandDelete, wandDeleteModeActive, setWandDeleteModeActive, wandTolerance, setWandTolerance, selectedDesign, activeImageInfo, activeDesignTransform, activeWidthInches, activeHeightInches, activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, draftRecoveryAvailable, isRecoveringDraft, recoverEditorDraft, discardEditorDraft, rehydrateDesignImage, ensureDesignImagesAvailable, handleSelectDesign, handleMultiSelect, handleGroupSelected, handleUngroupSelected, selectedHasGroup, getLayerThumbnail, handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta, handleEffectiveSizeChange, isArtboardFull, handleDuplicateDesign, handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleCopySelected, handlePaste, handleDeleteGroup, handleDeleteDesign, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleCanvasContextMenu };
+  return { onDesignUploaded, profile, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode, toast, t, lang, isMobile, isLgUp, imageInfo, setImageInfo, resizeSettings, setResizeSettings, isProcessing, setIsProcessing, isAddingToCart, setIsAddingToCart, isUpdateFlow, setIsUpdateFlow, addToCartProgressLabel, setAddToCartProgressLabel, exportProgressLabel, setExportProgressLabel, addToCartInFlightRef, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, shellShopKeyRef, shellConfigReady, designIdRef, getLayerAssetRef, getLayerScreenedAssetRef, releaseLayerAssetOwnership, refreshAddToCartStallTimeout, isUploading, setIsUploading, uploadProgress, setUploadProgress, artboardWidth, setArtboardWidth, artboardHeight, setArtboardHeight, artboardWidthRef, artboardHeightRef, contentFillCacheRef, handleAutoArrangeRef, quantity, setQuantity, designGap, setDesignGap, duplicateCount, setDuplicateCount, clampDuplicateCount, parseDuplicateCount, handleDuplicateCountKeyDown, designTransform, setDesignTransform, designs, setDesigns, selectedDesignId, setSelectedDesignId, selectedDesignIds, setSelectedDesignIds, mobilePanel, setMobilePanel, clipboardRef, proportionalLock, setProportionalLock, designInfoRef, sidebarFileRef, headerUploadInputRef, canvasRef, downloadContainer, setDownloadContainer, spotPreviewData, fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer, copySpotSelectionsRef, pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo, mountedRef, designsRef, nudgeSnapshotSavedRef, nudgeTimeoutRef, thumbnailCacheRef, assetDataUrlCacheRef, restoredLayerAssetRef, multiDragAccumRef, multiResizeStartRef, multiRotateStartRef, snapshotCacheRef, getSnapshot, saveSnapshot, applySnapshot, handleUndo, handleRedo, handleInteractionEnd, handleRemoveWhiteBackground, handleWandDelete, selectedDesign, activeImageInfo, activeDesignTransform, activeWidthInches, activeHeightInches, activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, draftRecoveryAvailable, isRecoveringDraft, recoverEditorDraft, discardEditorDraft, rehydrateDesignImage, ensureDesignImagesAvailable, handleSelectDesign, handleMultiSelect, handleGroupSelected, handleUngroupSelected, selectedHasGroup, getLayerThumbnail, handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta, handleEffectiveSizeChange, isArtboardFull, handleDuplicateDesign, handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleCopySelected, handlePaste, handleDeleteGroup, handleDeleteDesign, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleCanvasContextMenu };
 }

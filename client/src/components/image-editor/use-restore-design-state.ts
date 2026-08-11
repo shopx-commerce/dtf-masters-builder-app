@@ -35,8 +35,19 @@ function resolveArtboardSize(state: InitialDesignState): { w: number; h: number 
 async function loadImageFromPublicUrl(
   assetUrl: string,
 ): Promise<{ image: HTMLImageElement; blob: Blob }> {
-  let response = await fetch(assetUrl);
-  if (!response.ok) {
+  // A blocked cross-origin fetch THROWS — it never returns a non-ok
+  // response — so the proxy fallback below must catch, not just check
+  // `.ok`. iOS Safari is the main offender: once the same URL has been
+  // cached from a plain <img> load (no CORS headers stored), a later
+  // fetch() of it fails outright, and content blockers kill it the same
+  // way. The same-origin proxy is immune to both.
+  let response: Response | null = null;
+  try {
+    response = await fetch(assetUrl);
+  } catch {
+    response = null;
+  }
+  if (!response || !response.ok) {
     response = await fetch(`/api/fetch-binary?url=${encodeURIComponent(assetUrl)}`);
   }
   if (!response.ok) {

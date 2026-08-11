@@ -86,5 +86,51 @@ export default {
       },
     },
   },
-  plugins: [require("tailwindcss-animate"), require("@tailwindcss/typography")],
+  plugins: [
+    require("tailwindcss-animate"),
+    require("@tailwindcss/typography"),
+    /**
+     * `coarse:` — the device has a touch screen, whatever its width.
+     *
+     * Touch density used to be keyed to the `md:` width breakpoint, which gets
+     * an iPad wrong in both directions: at 834px it takes the desktop arm and
+     * ends up with 11px inputs and 14px steppers on a device with no mouse.
+     *
+     * `any-pointer`, not `pointer`: `pointer` describes the *primary* pointing
+     * device and flips to `fine` the moment a Magic Keyboard trackpad is
+     * attached to an iPad, which would shrink every control mid-session while
+     * the customer is still touching the screen. `any-pointer: coarse` stays
+     * true while a coarse input exists at all — size for the coarsest input the
+     * device can produce.
+     */
+    require("tailwindcss/plugin")(
+      ({ addVariant }: { addVariant: (name: string, definition: string) => void }) => {
+        addVariant("coarse", "@media (any-pointer: coarse)");
+        /**
+         * `touchonly:` — touch screen and nothing that can hover.
+         *
+         * Narrower than `coarse:`, for the things that are not merely sized
+         * wrong on a touch device but meaningless there: keyboard shortcut
+         * hints, hover-reveal affordances. `coarse:` alone would also hide them
+         * on a touchscreen laptop, which does have a keyboard.
+         *
+         * `hover`, not `any-hover`: it describes the primary input, so an iPad
+         * with a Magic Keyboard attached reports `hover: hover` and keeps its
+         * hints — which is right, that iPad has the keys the hints describe.
+         */
+        addVariant("touchonly", "@media (any-pointer: coarse) and (hover: none)");
+        /**
+         * `layersheet:` — inside the phone's summoned layers sheet.
+         *
+         * `LayerRow` is shared with the desktop sidebar, and an iPad renders
+         * that sidebar on a touch screen, so `coarse:` cannot be used to grow
+         * the row's targets for the phone: it would move the iPad too, and the
+         * iPad layout is required to stay byte-identical. Scoping on an
+         * attribute that only the phone's layers sheet sets keeps the change
+         * where it is wanted.
+         */
+        addVariant("layersheet", "[data-mobile-layers] &");
+      },
+    ),
+  ],
 } satisfies Config;

@@ -2,3 +2,13 @@ node_modules
 dist
 .env
 vendor/realesrgan-ncnn-vulkan/
+# Copied out of onnxruntime-web at build time by the ortAssets plugin.
+client/public/ort/
+# Upscale weights. Unlike the directory above these are not produced by a
+# build plugin, so a fresh clone has to fetch them before the local WebGPU
+# upscaler can load — see docs/local-upscale.md.
+client/public/models/*.onnx
+# Upstream Real-ESRGAN weights, fetched rather than authored. tools/upscale-export
+# converts these to the .onnx above; see docs/local-upscale.md.
+*.pth
+__pycache__/

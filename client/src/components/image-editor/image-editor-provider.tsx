@@ -1,3 +1,4 @@
+import { useCallback, useState } from "react";
 import type { ImageEditorProps } from "./types";
 import { ImageEditorContext } from "./image-editor-context";
 import { useImageEditorModelStateDesign } from "./useImageEditorModelStateDesign";
@@ -12,10 +13,85 @@ import {
   clampDesignToArtboard,
   getDesignSelectionBounds,
   getDesignSelectionUnits,
+  getRotatedBounds,
   rotateDesignSelection,
 } from "./utils";
+import type { DesignItem } from "@/lib/types";
 
 export type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
+
+/**
+ * Provisional spacing for freshly-created copies, in inches. Only has to be close: the
+ * arrange that follows repacks everything with the customer's real gap setting.
+ */
+const COPY_SEED_GAP_INCHES = 0.25;
+
+/**
+ * Lay new copies out in a grid below the existing artwork instead of stacking them all on
+ * the design they came from.
+ *
+ * Copies used to be born at the base's exact transform, so for the whole time the packer
+ * was working — seconds, on a sheet with a couple of hundred designs — the customer was
+ * looking at a single design with N invisible duplicates underneath it. Any hiccup in the
+ * arrange left that pile on screen, which is what "it just overlaps everything and doesn't
+ * even auto arrange" describes.
+ *
+ * This is deliberately arithmetic rather than a pack: it runs in the same tick as the
+ * click, it never overlaps, and it starts below the current content so it does not disturb
+ * work the customer has already placed — which also gives the packer's stable-layout pass
+ * a sensible starting point. Rows that run past the bottom of the sheet are fine; the
+ * arrange that follows either fits them or grows the sheet, exactly as before.
+ */
+function seedCopyGrid(args: {
+  base: Omit<DesignItem, "groupId">;
+  baseName: string;
+  ids: string[];
+  existing: DesignItem[];
+  artboardWidth: number;
+  artboardHeight: number;
+}): DesignItem[] {
+  const { base, baseName, ids, existing, artboardWidth, artboardHeight } = args;
+  const bounds = getRotatedBounds(base);
+  const footprintW = bounds.maxX - bounds.minX;
+  const footprintH = bounds.maxY - bounds.minY;
+
+  const makeCopy = (id: string, transform: DesignItem["transform"]): DesignItem => ({
+    ...base,
+    id,
+    name: baseName,
+    transform,
+    printFileName: false,
+  });
+
+  // A degenerate footprint would divide by zero below. Falling back to the old co-located
+  // behaviour is worse than nothing but still lets arrange sort it out.
+  if (!(footprintW > 0) || !(footprintH > 0)) {
+    return ids.map(id => makeCopy(id, { ...base.transform }));
+  }
+
+  let bandBottom = 0;
+  for (const d of existing) {
+    const b = getRotatedBounds(d);
+    const bottom = d.transform.ny * artboardHeight + b.maxY;
+    if (bottom > bandBottom) bandBottom = bottom;
+  }
+
+  const gap = COPY_SEED_GAP_INCHES;
+  const columns = Math.max(1, Math.floor((artboardWidth + gap) / (footprintW + gap)));
+  return ids.map((id, i) => {
+    const column = i % columns;
+    const rowIndex = Math.floor(i / columns);
+    // Grid cell's top-left, converted to the design's centre — which is not the centre of
+    // its bounding box once rotation or a print-name stamp is involved.
+    const left = gap + column * (footprintW + gap);
+    const top = bandBottom + gap + rowIndex * (footprintH + gap);
+    return makeCopy(id, {
+      ...base.transform,
+      nx: (left - bounds.minX) / artboardWidth,
+      ny: (top - bounds.minY) / artboardHeight,
+    });
+  });
+}
 
 export function ImageEditorProvider({ children, ...props }: ImageEditorProps & { children: React.ReactNode }) {
   const value = useImageEditorModel(props);
@@ -40,43 +116,69 @@ function useImageEditorModel(props: ImageEditorProps) {
     shellConfigReady: p0.shellConfigReady,
   });
   const p5 = useImageEditorModelCart({ ...p0, ...p1, ...p2, ...p3, ...p4, ...cartPreview });
-  const bag = { ...p0, ...p1, ...p2, ...p3, ...p4, ...p5, ...cartPreview };
+  // Edit-mode "Regenerate file" checkbox (controls-section.tsx). Local UI
+  // state only — `useImageEditorModelCart` doesn't consume it yet, since
+  // that's the already-shipped Phase 2 ATC speed-up hook, and this is a
+  // customer/admin-facing escape hatch for a suspected-bad print file, not
+  // part of that feature. Whoever wires the checkbox's value into an actual
+  // forced-regeneration path should add a parameter there.
+  const [forceRegenerateProduction, setForceRegenerateProduction] = useState(false);
+  const bag = { ...p0, ...p1, ...p2, ...p3, ...p4, ...p5, ...cartPreview, forceRegenerateProduction, setForceRegenerateProduction };
 
-  const handleSetGroupCount = (row: { designs: typeof bag.designs }, targetCount: number) => {
+  // These three handlers used to be plain function declarations recreated
+  // on every provider render — which meant every child that received them
+  // (notably `<EditorActionToolbar>`) got new prop refs on every model
+  // state change, defeating `React.memo` before it could even run its
+  // shallow compare. Wrapping them in `useCallback` with explicit deps
+  // keeps their identity stable when the specific bag fields they
+  // actually read haven't changed.
+  const {
+    saveSnapshot: bagSaveSnapshot,
+    setDesigns: bagSetDesigns,
+    setSelectedDesignIds: bagSetSelectedDesignIds,
+    setSelectedDesignId: bagSetSelectedDesignId,
+    selectedDesignId: bagSelectedDesignId,
+    selectedDesignIds: bagSelectedDesignIds,
+    handleAutoArrangeRef: bagHandleAutoArrangeRef,
+    artboardWidth: bagArtboardWidth,
+    artboardHeight: bagArtboardHeight,
+    designs: bagDesigns,
+  } = bag;
+
+  const handleSetGroupCount = useCallback((row: { designs: typeof bagDesigns }, targetCount: number) => {
     if (!Number.isInteger(targetCount) || targetCount < 1 || targetCount > 200) return;
     const delta = targetCount - row.designs.length;
     if (delta === 0) return;
-    bag.saveSnapshot();
+    bagSaveSnapshot();
     if (delta > 0) {
       const base = row.designs[0];
       const baseName = base.name.replace(/ copy( \d+)?$/, "");
       // Strip `groupId` from row-count copies. If the source belongs to
       // a user-defined group, inheriting that `groupId` would collapse
-      // every copy into the same super-item during auto-arrange — and
-      // because all copies start at the base's exact transform, the
-      // super-item bbox is one item's size, so arrange happily places
-      // the group in a tiny slot with N copies stacked on top of each
-      // other. Stripping matches `handleDuplicateDesign`'s behavior for
+      // every copy into the same super-item during auto-arrange, and the
+      // packer would then look for one slot big enough for the lot.
+      // Stripping matches `handleDuplicateDesign`'s behavior for
       // single-source copies: layer-row "+" is semantically "add N more
       // of this item to the sheet", not "expand the group", so the new
       // copies should be free to be placed independently by arrange.
       const { groupId: _dropGid, ...baseNoGroup } = base;
-      const copies = Array.from({ length: delta }, () => ({
-        ...baseNoGroup,
-        id: crypto.randomUUID(),
-        name: baseName,
-        transform: { ...base.transform },
-        printFileName: false,
-      }));
-      bag.setDesigns(prev => [...prev, ...copies]);
-      bag.setSelectedDesignIds(new Set([...row.designs.map(d => d.id), ...copies.map(d => d.id)]));
-      bag.setSelectedDesignId(copies[copies.length - 1].id);
+      const copyIds = Array.from({ length: delta }, () => crypto.randomUUID());
+      bagSetDesigns(prev => [...prev, ...seedCopyGrid({
+        base: baseNoGroup,
+        baseName,
+        ids: copyIds,
+        existing: prev,
+        artboardWidth: bagArtboardWidth,
+        artboardHeight: bagArtboardHeight,
+      })]);
+      bagSetSelectedDesignIds(new Set([...row.designs.map(d => d.id), ...copyIds]));
+      bagSetSelectedDesignId(copyIds[copyIds.length - 1]);
     } else {
       const idsToRemove = new Set(row.designs.slice(targetCount).map(d => d.id));
-      bag.setDesigns(prev => prev.filter(d => !idsToRemove.has(d.id)));
-      bag.setSelectedDesignIds(prev => new Set([...prev].filter(id => !idsToRemove.has(id))));
-      if (bag.selectedDesignId && idsToRemove.has(bag.selectedDesignId)) {
-        bag.setSelectedDesignId(row.designs.find(d => !idsToRemove.has(d.id))?.id ?? null);
+      bagSetDesigns(prev => prev.filter(d => !idsToRemove.has(d.id)));
+      bagSetSelectedDesignIds(prev => new Set([...prev].filter(id => !idsToRemove.has(id))));
+      if (bagSelectedDesignId && idsToRemove.has(bagSelectedDesignId)) {
+        bagSetSelectedDesignId(row.designs.find(d => !idsToRemove.has(d.id))?.id ?? null);
       }
     }
     // Wait for the copy list and selection state to commit before arranging.
@@ -87,27 +189,27 @@ function useImageEditorModel(props: ImageEditorProps) {
         // Copy-count changes must repack the whole sheet. The newly created
         // copies are selected for layer feedback, but selected-only arranging
         // would keep every other design fixed and stack copies in one column.
-        bag.handleAutoArrangeRef.current({
+        bagHandleAutoArrangeRef.current({
           skipSnapshot: true,
           preserveSelection: true,
           arrangeAll: true,
         });
       });
     });
-  };
+  }, [bagSaveSnapshot, bagSetDesigns, bagSetSelectedDesignIds, bagSetSelectedDesignId, bagSelectedDesignId, bagHandleAutoArrangeRef, bagArtboardWidth, bagArtboardHeight]);
 
-  const handleSetRotation = (degrees: number) => {
-    const ids = bag.selectedDesignIds.size > 0
-      ? bag.selectedDesignIds
-      : (bag.selectedDesignId ? new Set([bag.selectedDesignId]) : new Set<string>());
+  const handleSetRotation = useCallback((degrees: number) => {
+    const ids = bagSelectedDesignIds.size > 0
+      ? bagSelectedDesignIds
+      : (bagSelectedDesignId ? new Set([bagSelectedDesignId]) : new Set<string>());
     if (ids.size === 0 || !Number.isFinite(degrees)) return;
     const rotation = ((Math.round(degrees) % 360) + 360) % 360;
-    bag.saveSnapshot();
-    bag.setDesigns(prev => {
+    bagSaveSnapshot();
+    bagSetDesigns(prev => {
       if (ids.size > 1) {
-        const active = prev.find(d => d.id === bag.selectedDesignId);
+        const active = prev.find(d => d.id === bagSelectedDesignId);
         const delta = active ? rotation - active.transform.rotation : 0;
-        const rotated = rotateDesignSelection(prev, ids, delta, bag.artboardWidth, bag.artboardHeight);
+         const rotated = rotateDesignSelection(prev, ids, delta, bagArtboardWidth, bagArtboardHeight);
         if (!rotated) return prev;
         return prev.map(d => {
           const next = rotated.get(d.id);
@@ -117,23 +219,28 @@ function useImageEditorModel(props: ImageEditorProps) {
       return prev.map(d => {
         if (!ids.has(d.id)) return d;
         const next = { ...d, transform: { ...d.transform, rotation } };
-        const { nx, ny } = clampDesignToArtboard(next, bag.artboardWidth, bag.artboardHeight);
+        const { nx, ny } = clampDesignToArtboard(next, bagArtboardWidth, bagArtboardHeight);
         return { ...next, transform: { ...next.transform, nx, ny } };
       });
     });
-  };
+  }, [bagSelectedDesignIds, bagSelectedDesignId, bagSaveSnapshot, bagSetDesigns, bagArtboardWidth, bagArtboardHeight]);
 
   // Center-align the current selection along one axis.
   //
-  // Axis naming follows the Lucide / Illustrator / Figma convention that
-  // matches the icons the user sees:
+  // Axis naming follows the Illustrator / Figma convention:
   //   `axis === "vertical"`   → items share a *vertical* center axis
-  //                              → all get the same X coordinate (`nx`).
-  //                              Icon: `AlignCenterVertical` (dots on a
-  //                              vertical center line).
+  //                              → all get the same X coordinate (`nx`), so
+  //                              they move left/right. Button: "Center left
+  //                              to right" (`CenterHorizontalIcon`).
   //   `axis === "horizontal"` → items share a *horizontal* center axis
-  //                              → all get the same Y coordinate (`ny`).
-  //                              Icon: `AlignCenterHorizontal`.
+  //                              → all get the same Y coordinate (`ny`), so
+  //                              they move up/down. Button: "Center top to
+  //                              bottom" (`CenterVerticalIcon`).
+  //
+  // Previous implementation wrote the *other* axis (see git history);
+  // that is why "align vertically" collapsed everything onto one Y line
+  // (looked like a merge) and "align horizontally" barely moved anything
+  // on a tall gangsheet.
   //
   // Targeting rules — chosen for predictability in a consumer editor:
   //   - Zero designs selected → no-op (defensive; the button is disabled
@@ -146,36 +253,32 @@ function useImageEditorModel(props: ImageEditorProps) {
   //     `(min + max) / 2` is more predictable than the mean, which
   //     weights toward clusters and can drift far from the visual
   //     midpoint of a lopsided selection.
-  //   - Grouped designs move as one unit: each user-defined group
-  //     contributes a single bounding box (its members' combined
-  //     extent), so aligning a mixed selection of loose designs and
-  //     groups keeps every group's intra-group layout intact.
-  const handleAlignAxis = (axis: "horizontal" | "vertical") => {
-    const ids = bag.selectedDesignIds.size > 0
-      ? bag.selectedDesignIds
-      : (bag.selectedDesignId ? new Set([bag.selectedDesignId]) : new Set<string>());
+  const handleAlignAxis = useCallback((axis: "horizontal" | "vertical") => {
+    const ids = bagSelectedDesignIds.size > 0
+      ? bagSelectedDesignIds
+      : (bagSelectedDesignId ? new Set([bagSelectedDesignId]) : new Set<string>());
     if (ids.size === 0) return;
     const units = getDesignSelectionUnits(
-      bag.designs,
+      bagDesigns,
       ids,
-      bag.artboardWidth,
-      bag.artboardHeight,
+      bagArtboardWidth,
+      bagArtboardHeight,
     );
     if (units.length === 0) return;
-    bag.saveSnapshot();
+    bagSaveSnapshot();
 
     // Field the operation writes: vertical axis → nx; horizontal axis → ny.
     const field: "nx" | "ny" = axis === "vertical" ? "nx" : "ny";
 
     const selectionBounds = getDesignSelectionBounds(
-      bag.designs,
+      bagDesigns,
       ids,
-      bag.artboardWidth,
-      bag.artboardHeight,
+      bagArtboardWidth,
+      bagArtboardHeight,
     );
     if (!selectionBounds) return;
     const targetPx = units.length === 1
-      ? (axis === "vertical" ? bag.artboardWidth : bag.artboardHeight) / 2
+      ? (axis === "vertical" ? bagArtboardWidth : bagArtboardHeight) / 2
       : (axis === "vertical"
         ? (selectionBounds.minX + selectionBounds.maxX) / 2
         : (selectionBounds.minY + selectionBounds.maxY) / 2);
@@ -185,21 +288,21 @@ function useImageEditorModel(props: ImageEditorProps) {
       const unitCenter = field === "nx"
         ? (unit.minX + unit.maxX) / 2
         : (unit.minY + unit.maxY) / 2;
-      const axisSize = field === "nx" ? bag.artboardWidth : bag.artboardHeight;
+      const axisSize = field === "nx" ? bagArtboardWidth : bagArtboardHeight;
       const desired = (targetPx - unitCenter) / axisSize;
       const minDelta = field === "nx"
-        ? -unit.minX / bag.artboardWidth
-        : -unit.minY / bag.artboardHeight;
+        ? -unit.minX / bagArtboardWidth
+        : -unit.minY / bagArtboardHeight;
       const maxDelta = field === "nx"
-        ? (bag.artboardWidth - unit.maxX) / bag.artboardWidth
-        : (bag.artboardHeight - unit.maxY) / bag.artboardHeight;
+        ? (bagArtboardWidth - unit.maxX) / bagArtboardWidth
+        : (bagArtboardHeight - unit.maxY) / bagArtboardHeight;
       const delta = minDelta <= maxDelta
         ? Math.max(minDelta, Math.min(maxDelta, desired))
         : 0;
       for (const member of unit.members) deltas.set(member.id, delta);
     }
 
-    bag.setDesigns(prev => prev.map(d => {
+    bagSetDesigns(prev => prev.map(d => {
       const delta = deltas.get(d.id);
       if (delta === undefined) return d;
       return {
@@ -211,7 +314,7 @@ function useImageEditorModel(props: ImageEditorProps) {
         },
       };
     }));
-  };
+  }, [bagSelectedDesignIds, bagSelectedDesignId, bagDesigns, bagSaveSnapshot, bagSetDesigns, bagArtboardWidth, bagArtboardHeight]);
 
   const actionToolbarProps: EditorActionToolbarProps = {
     t: bag.t,
@@ -240,6 +343,8 @@ function useImageEditorModel(props: ImageEditorProps) {
     handleDeleteDesign: bag.handleDeleteDesign,
     handleDeleteMulti: bag.handleDeleteMulti,
     handleDuplicateAndArrange: bag.handleDuplicateAndArrange,
+    canFill: bag.canFill,
+    handleFillEmptySpace: bag.handleFillEmptySpace,
     designGap: bag.designGap,
     setDesignGap: bag.setDesignGap,
     handleAutoArrangeRef: bag.handleAutoArrangeRef,
@@ -271,6 +376,8 @@ function useImageEditorModel(props: ImageEditorProps) {
     exportProgressLabel: bag.exportProgressLabel,
     handleIncreaseQuality: bag.handleIncreaseQuality,
     isUpscaling: bag.isUpscaling,
+    upscaleProgress: bag.upscaleProgress,
+    canIncreaseQuality: bag.canIncreaseQuality,
   };
 
   return { ...bag, handleSetGroupCount, actionToolbarProps };

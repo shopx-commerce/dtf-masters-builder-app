@@ -36,6 +36,34 @@ const STRIP_HEIGHT = 8192;
 const BATCH_ROWS = 1024;
 const MAX_IDAT_BYTES = 2 * 1024 * 1024;
 
+// The blank-sheet guard message. Thrown when a sheet that contains designs
+// encodes to 100% transparent pixels — the browser (typically iOS under
+// graphics-memory pressure) silently rendered nothing instead of erroring.
+// Without this guard the blank uploads successfully and a customer can order
+// an empty print at a perfectly valid production URL.
+const BLANK_EXPORT_ERROR =
+  'The exported sheet came out blank — the browser rendered no pixels ' +
+  '(this usually means the device ran out of memory). Close other apps or ' +
+  'tabs and try again, or reduce the sheet size.';
+
+// True when every byte in the row is zero (fully transparent, since a cleared
+// canvas is zero-filled RGBA). Used only to detect whether an export produced
+// any ink at all; see BLANK_EXPORT_ERROR.
+function isRowAllZero(pixels: Uint8ClampedArray, offset: number, length: number): boolean {
+  const end = offset + length;
+  let i = offset;
+  for (; i + 8 <= end; i += 8) {
+    if (
+      pixels[i] | pixels[i + 1] | pixels[i + 2] | pixels[i + 3] |
+      pixels[i + 4] | pixels[i + 5] | pixels[i + 6] | pixels[i + 7]
+    ) return false;
+  }
+  for (; i < end; i++) {
+    if (pixels[i]) return false;
+  }
+  return true;
+}
+
 const CRC32_TABLE = (() => {
   const table = new Uint32Array(256);
   for (let i = 0; i < 256; i++) {
@@ -252,19 +280,23 @@ async function writeStripRows(
   bpp: number,
   prevRow: Uint8Array,
   scratch: FilterScratch,
-) {
+): Promise<boolean> {
+  let sawInk = false;
   for (let startRow = 0; startRow < stripH; startRow += BATCH_ROWS) {
     const endRow = Math.min(startRow + BATCH_ROWS, stripH);
     const batchCount = endRow - startRow;
     const batch = new Uint8Array(batchCount * filteredRowLen);
     for (let r = 0; r < batchCount; r++) {
       const rowIdx = startRow + r;
-      const cur = pixels.subarray(rowIdx * rowBytes, (rowIdx + 1) * rowBytes);
+      const rowStart = rowIdx * rowBytes;
+      const cur = pixels.subarray(rowStart, rowStart + rowBytes);
+      if (!isRowAllZero(pixels, rowStart, rowBytes)) sawInk = true;
       filterRowAdaptive(cur, prevRow, bpp, rowBytes, scratch, batch, r * filteredRowLen);
       prevRow.set(cur); // this row is the "up" reference for the next
     }
     await writer.write(batch);
   }
+  return sawInk;
 }
 
 async function buildPngStreaming(input: ExportInput): Promise<Uint8Array> {

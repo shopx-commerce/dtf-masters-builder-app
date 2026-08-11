@@ -19,7 +19,7 @@ export function createUnifiedContour(
   strokeSettings: StrokeSettings
 ): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return canvas;
 
   canvas.width = image.width;

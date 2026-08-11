@@ -1,6 +1,6 @@
 import type { ShapeSettings, ResizeSettings } from "@/lib/types";
 import { PDFDocument, PDFName, PDFArray, PDFDict, type PDFImage } from 'pdf-lib';
-import { cropImageToContent } from './image-crop';
+import { cropImageToContent, boundedImageCopyCanvas } from './image-crop';
 import { simplifyPathForPDF, buildSmoothPdfPath, type SpotColorInput } from './contour-outline';
 import { addSpotColorVectorsToPDF } from './spot-color-vectors';
 
@@ -18,7 +18,7 @@ async function createClippedShapeImage(
   const clipCanvas = document.createElement('canvas');
   clipCanvas.width = clipW;
   clipCanvas.height = clipH;
-  const clipCtx = clipCanvas.getContext('2d')!;
+  const clipCtx = clipCanvas.getContext('2d', { willReadFrequently: true })!;
   
   clipCtx.save();
   clipCtx.beginPath();
@@ -261,11 +261,10 @@ export async function downloadShapePDF(
   if (croppedCanvas) {
     imageCanvas = croppedCanvas;
   } else {
-    imageCanvas = document.createElement('canvas');
-    imageCanvas.width = image.width;
-    imageCanvas.height = image.height;
-    const ctx = imageCanvas.getContext('2d');
-    if (ctx) ctx.drawImage(image, 0, 0);
+    // Bounded copy — never re-create the giant allocation the crop guard just
+    // refused. This bitmap is embedded into a physical-size PDF rect, so pixel
+    // count affects sharpness only, never layout.
+    imageCanvas = boundedImageCopyCanvas(image);
   }
   
   const blob = await new Promise<Blob>((resolve) => {
@@ -601,11 +600,10 @@ export async function generateShapePDFBase64(
   if (croppedCanvas) {
     imageCanvas = croppedCanvas;
   } else {
-    imageCanvas = document.createElement('canvas');
-    imageCanvas.width = image.width;
-    imageCanvas.height = image.height;
-    const ctx = imageCanvas.getContext('2d');
-    if (ctx) ctx.drawImage(image, 0, 0);
+    // Bounded copy — never re-create the giant allocation the crop guard just
+    // refused. This bitmap is embedded into a physical-size PDF rect, so pixel
+    // count affects sharpness only, never layout.
+    imageCanvas = boundedImageCopyCanvas(image);
   }
   
   const blob = await new Promise<Blob>((resolve) => {
