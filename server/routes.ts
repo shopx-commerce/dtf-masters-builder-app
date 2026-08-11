@@ -1,8 +1,12 @@
 import type { Express, NextFunction, Request, Response as ExpressResponse } from "express";
 import { createServer, type Server } from "http";
 import multer from "multer";
+import os from "os";
+import path from "path";
+import { mkdirSync, promises as fsp } from "fs";
 import sharp from "sharp";
 import express from "express";
+import rateLimit from "express-rate-limit";
 import { nanoid } from "nanoid";
 import Replicate from "replicate";
 
@@ -287,6 +291,367 @@ const upload = multer({
   },
 });
 
+/** Raster import prepare / metadata — PNG, JPEG, WebP up to 100 MB. */
+const MAX_PREPARE_FILE_BYTES = 100 * 1024 * 1024;
+const MAX_SOURCE_MEGAPIXELS = 150;
+const PREPARE_PREVIEW_MAX_EDGE = 4096;
+const MAX_INLINE_DECODE_MEGAPIXELS = 40;
+/** How many source pixels collapse into one sample of the reduced alpha probe. */
+const MAX_SOURCE_PIXELS_PER_ALPHA_SAMPLE = 64;
+
+/**
+ * Pixel ceiling handed to every `sharp()` construction.
+ *
+ * libvips defaults to roughly 268 MP when `limitInputPixels` is omitted, which
+ * is well above the 150 MP this app actually intends to accept. Passing it
+ * everywhere keeps a crafted header from committing libvips to a decode
+ * nobody asked for.
+ */
+const SHARP_PIXEL_LIMIT = Math.ceil(MAX_SOURCE_MEGAPIXELS * 1_000_000);
+
+type RasterFormat = "png" | "jpeg" | "webp";
+
+/**
+ * Identify a raster container from its leading bytes.
+ *
+ * The multer filters below screen on a client-supplied MIME type or, worse, on
+ * the file *name* — neither says anything about the content, so `evil.png`
+ * holding SVG markup used to reach `sharp()` and get dispatched to librsvg.
+ * Sniffing here means an unsupported container is refused before libvips is
+ * handed the buffer at all.
+ */
+function sniffRasterFormat(buffer: Buffer): RasterFormat | "heic" | null {
+  if (buffer.length >= 8 && buffer.readUInt32BE(0) === 0x89504e47 && buffer.readUInt32BE(4) === 0x0d0a1a0a) {
+    return "png";
+  }
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return "jpeg";
+  }
+  if (
+    buffer.length >= 12 &&
+    buffer.toString("latin1", 0, 4) === "RIFF" &&
+    buffer.toString("latin1", 8, 12) === "WEBP"
+  ) {
+    return "webp";
+  }
+  // ISOBMFF `ftyp` box with a HEIF family brand — recognized so iPhone
+  // uploads can get an actionable error rather than the generic one.
+  if (buffer.length >= 12 && buffer.toString("latin1", 4, 8) === "ftyp") {
+    const brand = buffer.toString("latin1", 8, 12).toLowerCase();
+    if (["heic", "heix", "hevc", "hevx", "heis", "mif1", "msf1", "heif"].includes(brand)) {
+      return "heic";
+    }
+  }
+  return null;
+}
+
+class UnsupportedRasterError extends Error {}
+
+/** First bytes of an upload, whether it arrived as a buffer or a temp file. */
+async function readLeadingBytes(input: Buffer | string, count: number): Promise<Buffer> {
+  if (Buffer.isBuffer(input)) return input.subarray(0, count);
+  const handle = await fsp.open(input, "r");
+  try {
+    const buf = Buffer.alloc(count);
+    const { bytesRead } = await handle.read(buf, 0, count, 0);
+    return buf.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Confirm a buffer really is one of the accepted raster formats, first from
+ * its magic bytes and then from libvips' own verdict, before any pipeline work
+ * runs against it.
+ */
+async function assertAllowedRasterFormat(
+  input: Buffer | string,
+  allowed: readonly RasterFormat[],
+): Promise<sharp.Metadata> {
+  const sniffed = sniffRasterFormat(await readLeadingBytes(input, 12));
+  if (sniffed === "heic") {
+    // Detectable but not decodable: this sharp build reads AVIF, not
+    // HEVC-compressed HEIC.
+    throw new UnsupportedRasterError(
+      'iPhone HEIC photos are not supported. Please upload a JPEG or PNG copy instead (on iPhone: Settings → Camera → Formats → "Most Compatible").',
+    );
+  }
+  if (!sniffed || !allowed.includes(sniffed)) {
+    throw new UnsupportedRasterError(
+      `Unsupported image format. Only ${allowed.join(", ").toUpperCase()} files are accepted.`,
+    );
+  }
+  const metadata = await sharp(input, {
+    failOn: "none",
+    limitInputPixels: SHARP_PIXEL_LIMIT,
+  }).metadata();
+  const decoded = metadata.format as RasterFormat | undefined;
+  if (!decoded || !allowed.includes(decoded)) {
+    throw new UnsupportedRasterError(
+      `Unsupported image format. Only ${allowed.join(", ").toUpperCase()} files are accepted.`,
+    );
+  }
+  return metadata;
+}
+
+/**
+ * App-owned temp directory for raster upload bodies, with an age-gated
+ * reaper. The reaper is defense in depth: the abort handler below cleans up
+ * promptly, and anything that slips past it (process crash mid-write) is
+ * swept within the hour. The age gate keeps a reap from touching files that
+ * belong to requests still in flight.
+ */
+const RASTER_TMP_DIR = path.join(os.tmpdir(), "anynest-raster-uploads");
+mkdirSync(RASTER_TMP_DIR, { recursive: true });
+const RASTER_TMP_MAX_AGE_MS = 60 * 60 * 1000;
+
+async function reapStaleRasterTemp(): Promise<void> {
+  try {
+    const names = await fsp.readdir(RASTER_TMP_DIR);
+    const cutoff = Date.now() - RASTER_TMP_MAX_AGE_MS;
+    for (const name of names) {
+      const filePath = path.join(RASTER_TMP_DIR, name);
+      try {
+        const stats = await fsp.stat(filePath);
+        if (stats.mtimeMs < cutoff) await fsp.unlink(filePath);
+      } catch {}
+    }
+  } catch {}
+}
+void reapStaleRasterTemp();
+setInterval(() => void reapStaleRasterTemp(), RASTER_TMP_MAX_AGE_MS).unref();
+
+/**
+ * Temp paths created for a request, recorded the moment the storage engine
+ * names the file — multer's disk storage does NOT clean up when the client
+ * disconnects mid-body (its cleanup covers only its own limit/parse errors),
+ * and the route handler's `finally` never runs because the handler is never
+ * reached. The abort middleware below unlinks these on premature close.
+ */
+const rasterTempPaths = new WeakMap<Request, string[]>();
+
+const rasterUpload = multer({
+  // Disk, not memory: bodies here run up to 100 MB, and several customers
+  // uploading at once used to hold every one of them in RAM at the same
+  // time — a direct contributor to production OOM kills. libvips also
+  // streams a large decode from a file more frugally than from a buffer.
+  storage: multer.diskStorage({
+    destination: RASTER_TMP_DIR,
+    filename: (req, _file, cb) => {
+      const name = `${nanoid(24)}.upload`;
+      const list = rasterTempPaths.get(req as Request) ?? [];
+      list.push(path.join(RASTER_TMP_DIR, name));
+      rasterTempPaths.set(req as Request, list);
+      cb(null, name);
+    },
+  }),
+  limits: {
+    fileSize: MAX_PREPARE_FILE_BYTES,
+    fieldSize: 10 * 1024 * 1024,
+  },
+  fileFilter: (req, file, cb) => {
+    // Some browsers hand over `application/octet-stream` for a perfectly good
+    // PNG, so the extension still has to be tolerated here. It is only a cheap
+    // pre-filter: `assertAllowedRasterFormat` is the real gate.
+    const declared = String(file.mimetype || "").toLowerCase();
+    const ok =
+      declared === "image/png" ||
+      declared === "image/jpeg" ||
+      declared === "image/jpg" ||
+      declared === "image/webp" ||
+      // iOS Safari labels OS-converted photos `image/heic(-sequence)` even
+      // when the bytes are already JPEG. Let the MIME type through — the
+      // byte sniff in `assertAllowedRasterFormat` is the real gate, and it
+      // answers genuinely-HEIC bytes with a targeted 400 (this sharp build
+      // decodes AVIF, not HEVC-compressed HEIC).
+      declared === "image/heic" ||
+      declared === "image/heif" ||
+      declared === "image/heic-sequence" ||
+      declared === "image/heif-sequence" ||
+      ((declared === "application/octet-stream" || declared === "") &&
+        /\.(png|jpe?g|webp|heic|heif)$/i.test(file.originalname || ""));
+    if (ok) cb(null, true);
+    else {
+      // cb(err) aborts the multipart stream mid-read, which surfaces as a TCP
+      // reset instead of an HTTP response. Decline quietly, let multer drain
+      // the stream, and answer with a clean 400 in the handler's !req.file
+      // branch.
+      (req as any)._multerRejectedMimetype = declared || file.originalname || "unknown";
+      cb(null, false);
+    }
+  },
+});
+
+/**
+ * Delete a request's raster temp files when the connection closes before a
+ * response was completed — the client-abort window multer leaves uncovered.
+ * When the handler DID finish (`writableEnded`), its own `finally` owns
+ * cleanup and this stays out of the way. Double-unlinks are harmless: every
+ * unlink here and in the handlers swallows ENOENT.
+ */
+function cleanupRasterTempOnAbort(req: Request, res: ExpressResponse, next: NextFunction): void {
+  res.on("close", () => {
+    if (res.writableEnded) return;
+    const paths = rasterTempPaths.get(req);
+    if (!paths) return;
+    for (const filePath of paths) {
+      void fsp.unlink(filePath).catch(() => {});
+    }
+  });
+  next();
+}
+
+/**
+ * One heavy decode at a time.
+ *
+ * A single 150 MP prepare peaks at hundreds of MB inside libvips, and
+ * concurrent decodes stack that peak per request. A short FIFO absorbs
+ * bursts; past that, callers shed with 503, which the builder's prepare
+ * retry already treats as transient and re-attempts with backoff.
+ */
+const PREPARE_MAX_QUEUE = 8;
+let prepareSlotBusy = false;
+const prepareSlotWaiters: Array<(release: () => void) => void> = [];
+
+function makePrepareRelease(): () => void {
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const next = prepareSlotWaiters.shift();
+    if (next) next(makePrepareRelease());
+    else prepareSlotBusy = false;
+  };
+}
+
+/** Resolves with a release fn, or null when the queue is full (caller sheds). */
+async function acquirePrepareSlot(): Promise<(() => void) | null> {
+  if (!prepareSlotBusy) {
+    prepareSlotBusy = true;
+    return makePrepareRelease();
+  }
+  if (prepareSlotWaiters.length >= PREPARE_MAX_QUEUE) return null;
+  return new Promise((resolve) => prepareSlotWaiters.push(resolve));
+}
+
+function fitWithinMegapixels(
+  w: number,
+  h: number,
+  maxMP: number,
+  maxEdge: number,
+): number {
+  const pixels = Math.max(1, w * h);
+  const mpScale = Math.sqrt((maxMP * 1_000_000) / pixels);
+  const edgeScale = Math.min(maxEdge / Math.max(w, 1), maxEdge / Math.max(h, 1));
+  return Math.min(1, mpScale, edgeScale);
+}
+
+type SharpReadOpts = {
+  failOn: "none";
+  sequentialRead: boolean;
+  limitInputPixels: number;
+};
+
+/**
+ * Sample the alpha channel to learn whether the artwork is actually cut out
+ * and whether its alpha is binary.
+ *
+ * Reduced nearest-neighbour, so every byte read is an exact source value
+ * rather than a blend of its neighbours — that is what makes the binary-alpha
+ * answer trustworthy. Roughly a megabyte even for a 150 MP source.
+ */
+async function probeAlpha(
+  buffer: Buffer | string,
+  sharpOpts: SharpReadOpts,
+  srcW: number,
+  srcH: number,
+): Promise<{ hasTransparentPixels: boolean; binaryAlpha: boolean }> {
+  const cells = Math.ceil((srcW * srcH) / MAX_SOURCE_PIXELS_PER_ALPHA_SAMPLE);
+  const scale = Math.min(1, Math.sqrt(cells / Math.max(1, srcW * srcH)));
+  const samples = await sharp(buffer, sharpOpts)
+    .rotate()
+    .toColourspace("srgb")
+    .ensureAlpha()
+    .extractChannel(3)
+    .resize(Math.max(1, Math.round(srcW * scale)), Math.max(1, Math.round(srcH * scale)), {
+      fit: "fill",
+      kernel: "nearest",
+    })
+    .raw()
+    .toBuffer();
+
+  let hasTransparentPixels = false;
+  let hasPartialAlpha = false;
+  for (let i = 0; i < samples.length; i++) {
+    const a = samples[i];
+    if (a === 0) hasTransparentPixels = true;
+    else if (a !== 255) hasPartialAlpha = true;
+  }
+
+  // "Binary alpha" is a claim about hard-edged cut-out artwork, and it is only
+  // meaningful when transparency exists at all. A fully opaque image trivially
+  // satisfies "every alpha is 0 or 255", and calling that binary sent ordinary
+  // opaque PNGs down the hard-edge path: nearest-neighbour for the preview and
+  // pixelated resampling at print size, both visibly aliased. Require real
+  // transparency before making the claim.
+  return {
+    hasTransparentPixels,
+    binaryAlpha: hasTransparentPixels && !hasPartialAlpha,
+  };
+}
+
+/**
+ * Measure the exact content box of a large raster without materializing it.
+ *
+ * libvips' find_trim runs at full resolution and before any resize, and it
+ * reports how far it moved the top-left corner. Running it a second time on
+ * the mirrored image turns those same two numbers into the right and bottom
+ * insets, so two passes give all four edges exactly — no cell quantisation,
+ * no padding fudge, and soft shadow ramps survive down to alpha 1. Both
+ * pipelines resize their output to 1×1, so nothing full-size is ever encoded
+ * or held in memory.
+ */
+async function measureContentBounds(
+  buffer: Buffer | string,
+  sharpOpts: SharpReadOpts,
+  srcW: number,
+  srcH: number,
+): Promise<{ left: number; top: number; width: number; height: number }> {
+  const probe = (mirror: boolean) => {
+    let p = sharp(buffer, sharpOpts).rotate();
+    if (mirror) p = p.flop().flip();
+    return p
+      // `lineArt` is essential, not a tweak: without it libvips compares an
+      // averaged row/column profile, so a 1-2 px stroke on a wide canvas falls
+      // below the threshold and gets cropped off the artwork.
+      .trim({ threshold: 0, lineArt: true })
+      .resize(1, 1, { fit: "fill" })
+      .toBuffer({ resolveWithObject: true });
+  };
+
+  const full = { left: 0, top: 0, width: srcW, height: srcH };
+  let normal: Awaited<ReturnType<typeof probe>>;
+  let mirrored: Awaited<ReturnType<typeof probe>>;
+  try {
+    [normal, mirrored] = await Promise.all([probe(false), probe(true)]);
+  } catch {
+    // A uniform image gives libvips nothing to trim against.
+    return full;
+  }
+
+  const left = Math.max(0, -(normal.info.trimOffsetLeft ?? 0));
+  const top = Math.max(0, -(normal.info.trimOffsetTop ?? 0));
+  const right = Math.min(srcW, srcW + (mirrored.info.trimOffsetLeft ?? 0));
+  const bottom = Math.min(srcH, srcH + (mirrored.info.trimOffsetTop ?? 0));
+  const width = right - left;
+  const height = bottom - top;
+
+  if (!(width > 0) || !(height > 0)) return full;
+  if (width >= srcW && height >= srcH) return full;
+  return { left, top, width, height };
+}
+
 const REAL_ESRGAN_VERSION =
   "nightmareai/real-esrgan:f121d640bd286e1fdc67f9799164c1d5be36ff74576ee11c803ae5b665dd46aa";
 const UPSCALE_REQUEST_TIMEOUT_MS = 120_000;
@@ -328,30 +693,169 @@ function extractUpscaleOutputUrl(output: unknown): string | null {
   return null;
 }
 
+/**
+ * Recover the R2 object key a public URL refers to.
+ *
+ * Only ever used to build a key that is then run through the same allowlist
+ * `/api/r2-object` / `/api/design-state` enforce — the account's R2 token
+ * must never be pointed at a path the caller chose freely.
+ */
+function candidateR2KeysFromUrl(target: URL): string[] {
+  const decodeSegments = (pathname: string) =>
+    pathname
+      .replace(/^\/+/, "")
+      .split("/")
+      .map((seg) => {
+        try {
+          return decodeURIComponent(seg);
+        } catch {
+          return seg;
+        }
+      });
+
+  const segments = decodeSegments(target.pathname);
+  if (!segments.length || !segments[0]) return [];
+
+  const candidates = new Set<string>();
+  candidates.add(segments.join("/"));
+
+  // The S3-compatible endpoint puts the bucket in the path; a configured
+  // public base URL may add a prefix of its own. Offer both readings and let
+  // the key allowlist decide which one is real.
+  const bucketName = String(process.env.R2_BUCKET_NAME || "stickers").trim();
+  if (bucketName && segments[0] === bucketName && segments.length > 1) {
+    candidates.add(segments.slice(1).join("/"));
+  }
+  const publicBase = String(process.env.R2_PUBLIC_BASE_URL || "").trim();
+  if (publicBase) {
+    try {
+      const basePath = decodeSegments(new URL(publicBase).pathname).filter(Boolean);
+      if (
+        basePath.length &&
+        basePath.every((seg, i) => segments[i] === seg) &&
+        segments.length > basePath.length
+      ) {
+        candidates.add(segments.slice(basePath.length).join("/"));
+      }
+    } catch {}
+  }
+  return [...candidates].filter(Boolean);
+}
+
+/** First reading of the URL path that satisfies the caller's key allowlist. */
+function validatedR2KeyFromUrl(target: URL, isAllowedKey: (key: string) => boolean): string | null {
+  for (const key of candidateR2KeysFromUrl(target)) {
+    if (isAllowedKey(key)) return key;
+  }
+  return null;
+}
+
+/**
+ * Per-IP rate limiting.
+ *
+ * Nothing here is authenticated, so an IP bucket is the only handle available.
+ * The numbers are deliberately loose: a single customer laying out a gangsheet
+ * legitimately makes a lot of calls, and throttling a real customer is a worse
+ * outcome than an attacker getting a few hundred requests through. The tight
+ * bucket is reserved for the mail relay, where there is no legitimate
+ * high-volume use.
+ *
+ * NOTE on proxies: `req.ip` is the immediate peer unless Express is told to
+ * trust `X-Forwarded-For`. Set `TRUST_PROXY` (see server/index.ts) when this
+ * app runs behind a load balancer or CDN, otherwise every customer shares one
+ * bucket.
+ */
+function buildLimiter(windowMs: number, limit: number, message: string) {
+  return rateLimit({
+    windowMs,
+    limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (_req, res) => {
+      res.status(429).json({ error: message });
+    },
+  });
+}
+
+const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
+
+/** Broad backstop for the whole `/api` surface. */
+const apiLimiter = buildLimiter(
+  RATE_LIMIT_WINDOW_MS,
+  Number(process.env.RATE_LIMIT_API ?? 1200),
+  "Too many requests. Please slow down and try again shortly.",
+);
+
+/** Object proxying — cheap per call, but each one is an outbound fetch. */
+const proxyLimiter = buildLimiter(
+  RATE_LIMIT_WINDOW_MS,
+  Number(process.env.RATE_LIMIT_PROXY ?? 300),
+  "Too many asset requests. Please wait a moment and try again.",
+);
+
+/** sharp/libvips routes: each call can cost real CPU and memory. */
+const imageLimiter = buildLimiter(
+  RATE_LIMIT_WINDOW_MS,
+  Number(process.env.RATE_LIMIT_IMAGE ?? 240),
+  "Too many image requests. Please wait a moment and try again.",
+);
+
+/** Mail relay: an operator inbox, so a handful an hour is plenty. */
+const mailLimiter = buildLimiter(
+  60 * 60 * 1000,
+  Number(process.env.RATE_LIMIT_MAIL ?? 20),
+  "Too many design submissions from this address. Please try again later.",
+);
+
+const PROXY_RATE_LIMITED_PATHS = [
+  "/api/fetch-binary",
+  "/api/fetch-json",
+  "/api/r2-object",
+  "/api/design-state",
+];
+
+const IMAGE_RATE_LIMITED_PATHS = [
+  "/api/process-image",
+  "/api/upscale-image",
+  "/api/image-info",
+  "/api/prepare-raster-upload",
+];
+
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Health is the deploy platform's liveness probe; never throttle it.
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
 
-  async function fetchViaR2ApiIfPossible(target: URL): Promise<Response | null> {
+  if (process.env.RATE_LIMIT_DISABLED !== "1") {
+    app.use("/api", apiLimiter);
+    app.use(PROXY_RATE_LIMITED_PATHS, proxyLimiter);
+    app.use(IMAGE_RATE_LIMITED_PATHS, imageLimiter);
+    app.use("/api/send-design", mailLimiter);
+  }
+
+  /**
+   * Read an allowlisted external URL, using the account's R2 credentials only
+   * when the URL path resolves to a key the object allowlist accepts.
+   *
+   * The previous version decided from the *host* alone that a URL "looked
+   * like R2" and then used the account token with the caller's path as the
+   * object key, so any `*.r2.dev`-shaped URL turned into an authenticated
+   * read of an arbitrary key in the production bucket. Credentials are now
+   * reserved for validated keys; anything else falls through to an ordinary
+   * anonymous fetch that carries no privilege at all.
+   */
+  async function fetchAllowlistedUrl(
+    target: URL,
+    isAllowedKey: (key: string) => boolean,
+  ): Promise<Response> {
     assertSafeExternalUrl(target.toString());
-    const accountId = String(process.env.R2_ACCOUNT_ID || "").trim();
-    const apiToken = String(process.env.R2_API_TOKEN || "").trim();
-    const bucketName = String(process.env.R2_BUCKET_NAME || "stickers").trim();
-    if (!accountId || !apiToken || !bucketName) return null;
-    const host = target.host.toLowerCase();
-    const looksLikeR2Public = host.endsWith(".r2.dev") || host.includes(".r2.cloudflarestorage.com");
-    if (!looksLikeR2Public) return null;
-    const key = target.pathname.replace(/^\/+/, "");
-    if (!key) return null;
-    const encodedKey = key.split("/").map((seg) => encodeURIComponent(seg)).join("/");
-    const apiUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/r2/buckets/${encodeURIComponent(bucketName)}/objects/${encodedKey}`;
-    return fetch(apiUrl, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${apiToken}`,
-      },
-    });
+    const key = validatedR2KeyFromUrl(target, isAllowedKey);
+    if (key) {
+      const viaR2Api = await fetchR2ObjectByKey(key);
+      if (viaR2Api) return viaR2Api;
+    }
+    return fetchSafeExternalUrl(target.toString());
   }
 
   async function fetchR2ObjectByKey(key: string): Promise<Response | null> {
@@ -376,8 +880,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(400).json({ error: "Valid http/https url is required" });
     }
     try {
-      assertSafeExternalUrl(target.toString());
-      const upstream = (await fetchViaR2ApiIfPossible(target)) || (await fetchSafeExternalUrl(target.toString()));
+      const upstream = await fetchAllowlistedUrl(target, isAllowedDesignStateKey);
       if (!upstream.ok) {
         return res.status(502).json({ error: `Upstream returned ${upstream.status}` });
       }
@@ -397,8 +900,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(400).json({ error: "Valid http/https url is required" });
     }
     try {
-      assertSafeExternalUrl(target.toString());
-      const upstream = (await fetchViaR2ApiIfPossible(target)) || (await fetchSafeExternalUrl(target.toString()));
+      const upstream = await fetchAllowlistedUrl(target, isAllowedDesignObjectKey);
       if (!upstream.ok) {
         return res.status(502).json({ error: `Upstream returned ${upstream.status}` });
       }
@@ -685,7 +1187,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let imageBuffer = req.file.buffer;
 
-      const resizedImage = await sharp(imageBuffer)
+      const resizedImage = await sharp(imageBuffer, { limitInputPixels: SHARP_PIXEL_LIMIT })
         .resize(outputWidth, outputHeight, {
           fit: 'contain',
           background: { r: 0, g: 0, b: 0, alpha: 0 },
@@ -696,7 +1198,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (enableStrokeBool && parsedStrokeWidth > 0) {
         const strokeWidthPx = Math.round(parsedStrokeWidth * (parsedDPI / 72));
         
-        const strokeBuffer = await sharp(resizedImage)
+        const strokeBuffer = await sharp(resizedImage, { limitInputPixels: SHARP_PIXEL_LIMIT })
           .extend({
             top: strokeWidthPx,
             bottom: strokeWidthPx,
@@ -758,7 +1260,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (provider === "replicate" && !token) {
         return res.status(503).json({ error: "AI upscale is not configured on this server" });
       }
-      const sourceMetadata = await sharp(req.file.buffer).metadata();
+      const sourceMetadata = await sharp(req.file.buffer, { limitInputPixels: SHARP_PIXEL_LIMIT }).metadata();
       const sourceWidth = sourceMetadata.width ?? 0;
       const sourceHeight = sourceMetadata.height ?? 0;
       if (!sourceWidth || !sourceHeight) {
@@ -774,7 +1276,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(200).send(cachedResult);
       }
 
-      const sourceStats = await sharp(req.file.buffer).stats();
+      const sourceStats = await sharp(req.file.buffer, { limitInputPixels: SHARP_PIXEL_LIMIT }).stats();
       const sourceAlpha = sourceStats.channels[3];
       const sourceHasTransparency = Boolean(sourceAlpha && sourceAlpha.min < 255);
       let outputBuffer: Buffer;
@@ -830,7 +1332,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         outputBuffer = Buffer.from(await outputResponse.arrayBuffer());
       }
-      const outputMetadata = await sharp(outputBuffer).metadata();
+      const outputMetadata = await sharp(outputBuffer, { limitInputPixels: SHARP_PIXEL_LIMIT }).metadata();
       const outputWidth = outputMetadata.width ?? 0;
       const outputHeight = outputMetadata.height ?? 0;
       if (!outputWidth || !outputHeight) {
@@ -842,22 +1344,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Real-ESRGAN can flatten transparent PNGs. Rebuild the alpha mask
         // separately and use dest-in; joinChannel can silently lose alpha on
         // PNG output with this sharp version.
-        const alphaMask = await sharp(req.file.buffer)
+        const alphaMask = await sharp(req.file.buffer, { limitInputPixels: SHARP_PIXEL_LIMIT })
           .ensureAlpha()
           .extractChannel(3)
           .resize(outputWidth, outputHeight, { fit: "fill" })
           .png()
           .toBuffer();
-        pngBuffer = await sharp(outputBuffer)
+        pngBuffer = await sharp(outputBuffer, { limitInputPixels: SHARP_PIXEL_LIMIT })
           .ensureAlpha()
           .composite([{ input: alphaMask, blend: "dest-in" }])
           .png()
           .toBuffer();
       } else {
-        pngBuffer = await sharp(outputBuffer).png().toBuffer();
+        pngBuffer = await sharp(outputBuffer, { limitInputPixels: SHARP_PIXEL_LIMIT }).png().toBuffer();
       }
 
-      const finalStats = await sharp(pngBuffer).stats();
+      const finalStats = await sharp(pngBuffer, { limitInputPixels: SHARP_PIXEL_LIMIT }).stats();
       const finalAlpha = finalStats.channels[3];
       if (sourceHasTransparency && (!finalAlpha || finalAlpha.min >= 255)) {
         return res.status(502).json({ error: "Upscale output lost PNG transparency" });
@@ -879,13 +1381,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/image-info", upload.single('image'), async (req, res) => {
+  app.post("/api/image-info", cleanupRasterTempOnAbort, rasterUpload.single('image'), async (req, res) => {
     try {
       if (!req.file) {
-        return res.status(400).json({ error: "No image file provided" });
+        const rejected = (req as any)._multerRejectedMimetype;
+        return res.status(400).json({
+          error: rejected
+            ? `File type "${rejected}" is not supported. Please upload a PNG, JPEG, or WebP file.`
+            : "No image file provided",
+        });
       }
 
-      const metadata = await sharp(req.file.buffer).metadata();
+      const metadata = await assertAllowedRasterFormat(req.file.path, ["png", "jpeg", "webp"]);
 
       res.json({
         width: metadata.width,
@@ -899,11 +1406,173 @@ export async function registerRoutes(app: Express): Promise<Server> {
         size: req.file.size,
       });
     } catch (error) {
+      if (error instanceof UnsupportedRasterError) {
+        return res.status(400).json({ error: error.message });
+      }
       console.error("Metadata extraction error:", error);
-      res.status(500).json({ 
-        error: "Failed to extract image metadata", 
-        details: error instanceof Error ? error.message : "Unknown error" 
+      res.status(500).json({
+        error: "Failed to extract image metadata",
+        details: error instanceof Error ? error.message : "Unknown error"
       });
+    } finally {
+      if (req.file?.path) {
+        void fsp.unlink(req.file.path).catch(() => {});
+      }
+    }
+  });
+
+  /**
+   * Oversized raster prepare.
+   *
+   * Returns *only* an editor-sized preview PNG. The browser keeps the user's
+   * original file as the print source, so nothing here caps print quality and
+   * we never ship high-resolution pixels back over the wire. Everything the
+   * client needs to line the preview up with the original travels in headers:
+   * the content-crop rect (in source pixels), the oriented source size, and
+   * whether the source alpha is binary (so halftone-ready art keeps hard
+   * edges instead of being resampled soft).
+   */
+  app.post("/api/prepare-raster-upload", cleanupRasterTempOnAbort, rasterUpload.single("image"), async (req, res) => {
+    const uploadedPath = req.file?.path;
+    let releasePrepareSlot: (() => void) | null = null;
+    try {
+      if (!req.file || !uploadedPath) {
+        const rejected = (req as any)._multerRejectedMimetype;
+        return res.status(400).json({
+          error: rejected
+            ? `File type "${rejected}" is not supported. Please upload a PNG, JPEG, or WebP file.`
+            : "No image file provided",
+        });
+      }
+
+      const sharpOpts = {
+        failOn: "none" as const,
+        sequentialRead: true,
+        limitInputPixels: SHARP_PIXEL_LIMIT,
+      };
+
+      const meta = await assertAllowedRasterFormat(uploadedPath, ["png", "jpeg", "webp"]);
+      // `metadata()` reports pre-rotation dimensions; EXIF orientations 5-8
+      // swap the axes once `.rotate()` auto-orients the pipeline.
+      const swapAxes = (meta.orientation ?? 0) >= 5;
+      const srcW = (swapAxes ? meta.height : meta.width) ?? 0;
+      const srcH = (swapAxes ? meta.width : meta.height) ?? 0;
+      if (!(srcW > 0) || !(srcH > 0)) {
+        return res.status(400).json({ error: "Could not read image dimensions" });
+      }
+
+      const sourceMegapixels = (srcW * srcH) / 1_000_000;
+      if (sourceMegapixels > MAX_SOURCE_MEGAPIXELS) {
+        return res.status(400).json({
+          error: `Image is ${Math.round(sourceMegapixels)} MP; maximum is ${MAX_SOURCE_MEGAPIXELS} MP`,
+        });
+      }
+
+      // Everything above touched only the file header; the full-image decode
+      // passes start here, so this is where the memory gate goes.
+      releasePrepareSlot = await acquirePrepareSlot();
+      if (!releasePrepareSlot) {
+        res.set("Retry-After", "10");
+        return res.status(503).json({
+          error: "The server is busy preparing other images. Please try again in a moment.",
+        });
+      }
+
+      // Crop to content only for genuinely cut-out artwork. A PNG that carries
+      // an alpha channel but no transparent pixels is treated like a photo:
+      // trimming it would eat a deliberate solid border, which is exactly what
+      // the inline path's opaque-raster branch avoids.
+      const alpha = meta.hasAlpha
+        ? await probeAlpha(uploadedPath, sharpOpts, srcW, srcH)
+        : { hasTransparentPixels: false, binaryAlpha: false };
+      const bounds = alpha.hasTransparentPixels
+        ? await measureContentBounds(uploadedPath, sharpOpts, srcW, srcH)
+        : { left: 0, top: 0, width: srcW, height: srcH };
+
+      const previewScale = fitWithinMegapixels(
+        bounds.width,
+        bounds.height,
+        MAX_INLINE_DECODE_MEGAPIXELS,
+        PREPARE_PREVIEW_MAX_EDGE,
+      );
+      const previewW = Math.max(1, Math.round(bounds.width * previewScale));
+      const previewH = Math.max(1, Math.round(bounds.height * previewScale));
+
+      let pipeline = sharp(uploadedPath, sharpOpts).rotate();
+      if (bounds.width !== srcW || bounds.height !== srcH) {
+        pipeline = pipeline.extract({
+          left: bounds.left,
+          top: bounds.top,
+          width: bounds.width,
+          height: bounds.height,
+        });
+      }
+      const previewBuf = await pipeline
+        .resize(previewW, previewH, {
+          fit: "fill",
+          // Binary alpha means halftone-ready art: nearest keeps the edges hard
+          // instead of introducing a soft fringe the editor would then read as
+          // anti-aliased.
+          kernel: alpha.binaryAlpha ? "nearest" : "lanczos3",
+        })
+        .png()
+        .toBuffer();
+
+      const exposed = [
+        "X-Anynest-Source-Width",
+        "X-Anynest-Source-Height",
+        "X-Anynest-Crop-X",
+        "X-Anynest-Crop-Y",
+        "X-Anynest-Crop-Width",
+        "X-Anynest-Crop-Height",
+        "X-Anynest-Preview-Width",
+        "X-Anynest-Preview-Height",
+        "X-Anynest-Density",
+        "X-Anynest-Source-MP",
+        "X-Anynest-Binary-Alpha",
+        "X-Anynest-Has-Transparency",
+      ];
+      res.set({
+        "Content-Type": "image/png",
+        "X-Anynest-Source-Width": String(srcW),
+        "X-Anynest-Source-Height": String(srcH),
+        "X-Anynest-Crop-X": String(bounds.left),
+        "X-Anynest-Crop-Y": String(bounds.top),
+        "X-Anynest-Crop-Width": String(bounds.width),
+        "X-Anynest-Crop-Height": String(bounds.height),
+        "X-Anynest-Preview-Width": String(previewW),
+        "X-Anynest-Preview-Height": String(previewH),
+        "X-Anynest-Density": String(meta.density && meta.density > 0 ? meta.density : 72),
+        "X-Anynest-Source-MP": String(Math.round(sourceMegapixels * 10) / 10),
+        "X-Anynest-Binary-Alpha": alpha.binaryAlpha ? "1" : "0",
+        // Measured on the *uncropped* source. The client cannot re-derive this
+        // from the preview: cropping to content can remove every transparent
+        // pixel, making cut-out artwork look like an opaque photo.
+        "X-Anynest-Has-Transparency": alpha.hasTransparentPixels ? "1" : "0",
+        "Access-Control-Expose-Headers": exposed.join(", "),
+        "Cache-Control": "no-store",
+      });
+      return res.status(200).send(previewBuf);
+    } catch (error) {
+      if (error instanceof UnsupportedRasterError) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error("[prepare-raster-upload] failed:", error);
+      const message = error instanceof Error ? error.message : "Unknown error";
+      if (/exceeds pixel limit/i.test(message)) {
+        return res.status(400).json({
+          error: `Image exceeds the ${MAX_SOURCE_MEGAPIXELS} MP limit`,
+        });
+      }
+      return res.status(500).json({
+        error: "Failed to prepare image for import",
+        details: message,
+      });
+    } finally {
+      releasePrepareSlot?.();
+      if (uploadedPath) {
+        void fsp.unlink(uploadedPath).catch(() => {});
+      }
     }
   });
 

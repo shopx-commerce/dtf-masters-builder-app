@@ -1,8 +1,86 @@
+import { existsSync } from "node:fs";
 import express, { type Request, Response, NextFunction } from "express";
+import helmet from "helmet";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 
+// Replit injects secrets straight into the environment. Local runs have no
+// such mechanism, so an optional .env file is the only way to supply keys
+// like REPLICATE_API_TOKEN without exporting them by hand every session.
+if (existsSync(".env")) {
+  process.loadEnvFile(".env");
+}
+
 const app = express();
+
+// Per-IP rate limiting in routes.ts keys off `req.ip`, which is the immediate
+// peer unless Express is told how many proxies sit in front. Behind a load
+// balancer or CDN that would put every customer in one bucket, so set
+// TRUST_PROXY to the hop count (or `true`) in those deployments. Left off by
+// default: trusting X-Forwarded-For when nothing sets it lets a caller forge
+// its own rate-limit key.
+const trustProxy = String(process.env.TRUST_PROXY ?? "").trim();
+if (trustProxy) {
+  const hops = Number(trustProxy);
+  app.set("trust proxy", Number.isFinite(hops) && hops > 0 ? hops : trustProxy);
+}
+
+/**
+ * Framing allowlist for the builder iframe.
+ *
+ * The builder is embedded in a Shopify storefront, so framing cannot simply be
+ * denied — but leaving it open to every origin is what makes the
+ * `postMessage` trust between shell and frame worth attacking. Derived from the
+ * shop domains this app is already configured with, and overridable wholesale
+ * with FRAME_ANCESTORS (space-separated CSP source list).
+ */
+function frameAncestorsDirective(): string | null {
+  const override = String(process.env.FRAME_ANCESTORS ?? "").trim();
+  if (override) return `frame-ancestors ${override}`;
+
+  const sources = new Set<string>(["'self'"]);
+  for (const envName of ["SHOP_CUSTOM_DOMAIN", "SHOPIFY_STORE_DOMAIN"]) {
+    const raw = String(process.env[envName] ?? "").trim();
+    if (!raw) continue;
+    const host = raw.replace(/^https?:\/\//, "").replace(/\/.*$/, "").trim();
+    if (host) sources.add(`https://${host}`);
+  }
+  // Nothing configured means we cannot know the storefront origin; guessing
+  // would break the embed, so framing is left as-is and reported instead.
+  if (sources.size === 1) return null;
+  sources.add("https://*.myshopify.com");
+  sources.add("https://admin.shopify.com");
+  return `frame-ancestors ${[...sources].join(" ")}`;
+}
+
+app.use(
+  helmet({
+    // A full CSP is not landed yet: this SPA needs inline/eval in Vite dev,
+    // `wasm-unsafe-eval` for the ONNX Runtime upscaler, plus blob: workers and
+    // blob:/data: images. Shipping an approximate policy would break the
+    // builder, so only the framing directive is emitted here (it constrains
+    // nothing the app loads).
+    contentSecurityPolicy: false,
+    // helmet's default is SAMEORIGIN, which would break the storefront embed
+    // outright. frame-ancestors below is the modern replacement.
+    frameguard: false,
+    // Cross-origin isolation headers change how the storefront shell and the
+    // builder frame can reach each other; not safe to flip blind.
+    crossOriginEmbedderPolicy: false,
+    crossOriginOpenerPolicy: false,
+    crossOriginResourcePolicy: false,
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+  }),
+);
+
+const frameAncestors = frameAncestorsDirective();
+if (frameAncestors) {
+  app.use((_req, res, next) => {
+    res.setHeader("Content-Security-Policy", frameAncestors);
+    next();
+  });
+}
+
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: false, limit: '5mb' }));
 
@@ -44,7 +122,12 @@ app.use((req, res, next) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
 
-    console.error("Server error:", err);
+    // Message and stack only, never the error object. Inspecting a whole error
+    // can print properties it merely happens to carry: Replicate's `ApiError`
+    // hangs the originating `request` off the error, and whether Node's
+    // inspector renders that request's `Authorization` header depends on the
+    // undici version underneath. That is an API token in the server log.
+    console.error("Server error:", message, err?.stack ?? "");
     res.status(status).json({ message });
   });
 

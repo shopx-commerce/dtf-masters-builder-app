@@ -142,7 +142,7 @@ export function getImageBounds(image: HTMLImageElement): { x: number; y: number;
     return { x: 0, y: 0, width: image.width, height: image.height };
   }
   const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return { x: 0, y: 0, width: image.width, height: image.height };
 
   canvas.width = image.width;
@@ -176,6 +176,13 @@ export function getImageBounds(image: HTMLImageElement): { x: number; y: number;
   return { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
 }
 
+/**
+ * Longest edge of the scratch canvas `isOpaqueRasterUpload` samples. 200px gives up to
+ * 40k alpha samples, more than the ~10k the previous full-resolution scan looked at, for
+ * roughly 1/100th of the pixels read back off the GPU.
+ */
+const OPACITY_SAMPLE_MAX_EDGE = 200;
+
 export function isOpaqueRasterUpload(image: HTMLImageElement): boolean {
   try {
     const w = image.naturalWidth || image.width;
@@ -183,39 +190,99 @@ export function isOpaqueRasterUpload(image: HTMLImageElement): boolean {
     if (w <= 0 || h <= 0) return false;
     if (w * h > 25_000_000) return false;
 
+    // Draw into a small canvas and read that back instead of the whole image. The old code
+    // read every pixel and then stepped through only ~10k of them, so ~99% of the readback
+    // was discarded — and the readback is the expensive part, not the arithmetic.
+    const scale = Math.min(1, OPACITY_SAMPLE_MAX_EDGE / Math.max(w, h));
+    const sw = Math.max(1, Math.round(w * scale));
+    const sh = Math.max(1, Math.round(h * scale));
+
     const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
+    // Read-back canvas: without the hint Chrome keeps it GPU-backed and the
+    // getImageData below blocks until the GPU flushes everything queued ahead
+    // of it, which during a multi-file upload is seconds rather than millis.
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return false;
 
-    canvas.width = w;
-    canvas.height = h;
-    ctx.drawImage(image, 0, 0);
-    const data = ctx.getImageData(0, 0, w, h).data;
+    canvas.width = sw;
+    canvas.height = sh;
+    // Point sampling, not bilinear. Smoothing would AVERAGE alpha, so a hard-edged cutout's
+    // transparent pixels would blend with opaque neighbours and a fully opaque image could
+    // come back slightly transparent (or a lightly-cut one fully opaque). With nearest
+    // neighbour every sampled alpha is a real alpha from the source, which makes the sample
+    // an unbiased estimate of the true transparent-area fraction — exactly what this ratio
+    // test needs, and the same quantity the old full-resolution stepped scan estimated.
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(image, 0, 0, sw, sh);
+    const data = ctx.getImageData(0, 0, sw, sh).data;
 
     let transparentCount = 0;
-    let opaqueCount = 0;
-    const sampleStep = Math.max(1, Math.floor((w * h) / 10000));
-    for (let i = 3; i < data.length; i += sampleStep * 4) {
-      const alpha = data[i];
-      if (alpha > 240) opaqueCount++;
-      else if (alpha < 50) transparentCount++;
+    for (let i = 3; i < data.length; i += 4) {
+      if (data[i] < 50) transparentCount++;
     }
-    const totalSampled = Math.ceil((w * h) / sampleStep);
-    const transparentRatio = transparentCount / totalSampled;
+    const transparentRatio = transparentCount / (sw * sh);
     return transparentRatio <= 0.05;
   } catch {
     return false;
   }
 }
 
+// Full-frame canvas work above this many pixels (or this edge) OOMs mobile
+// Safari and can freeze Chrome, so crops decline and callers must use a
+// bounded copy of the source instead.
+export const MAX_CROP_PIXELS = 16_000_000;
+export const MAX_CROP_EDGE_PX = 4096;
+
+/**
+ * A copy of `image` as a canvas, downscaled only when the source exceeds the
+ * crop limits above. For callers whose null-crop fallback is "use the whole
+ * image": their layout comes from physical inch sizes, so an oversized raster
+ * loses only excess sharpness here, never geometry — and the fallback stays
+ * within the allocation budget the crop guard exists to protect.
+ */
+export function boundedImageCopyCanvas(image: HTMLImageElement): HTMLCanvasElement {
+  const srcW = image.naturalWidth || image.width;
+  const srcH = image.naturalHeight || image.height;
+  const canvas = document.createElement('canvas');
+  if (!(srcW > 0) || !(srcH > 0)) {
+    canvas.width = 1;
+    canvas.height = 1;
+    return canvas;
+  }
+  const scale = Math.min(
+    1,
+    MAX_CROP_EDGE_PX / Math.max(srcW, srcH),
+    Math.sqrt(MAX_CROP_PIXELS / (srcW * srcH)),
+  );
+  canvas.width = Math.max(1, Math.round(srcW * scale));
+  canvas.height = Math.max(1, Math.round(srcH * scale));
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    if (scale < 1) {
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+    }
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  }
+  return canvas;
+}
+
 export function cropImageToContent(image: HTMLImageElement): HTMLCanvasElement | null {
   try {
+    const srcW = image.naturalWidth || image.width;
+    const srcH = image.naturalHeight || image.height;
+    // Full-frame getImageData of a large raster OOMs Chrome (and Safari). Callers
+    // fall back to the uncropped source when this returns null.
+    if (!(srcW > 0) || !(srcH > 0) || srcW * srcH > MAX_CROP_PIXELS || Math.max(srcW, srcH) > MAX_CROP_EDGE_PX) {
+      return null;
+    }
+
     const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return null;
 
-    canvas.width = image.width;
-    canvas.height = image.height;
+    canvas.width = srcW;
+    canvas.height = srcH;
     ctx.drawImage(image, 0, 0);
 
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -275,7 +342,9 @@ export function cropImageToContent(image: HTMLImageElement): HTMLCanvasElement |
     const out = document.createElement('canvas');
     out.width = bw;
     out.height = bh;
-    const outCtx = out.getContext('2d');
+    // Callers encode this canvas (`canvasToBlob` in the upload path), so it is a
+    // read-back target even though nothing in this file reads it.
+    const outCtx = out.getContext('2d', { willReadFrequently: true });
     if (!outCtx) return null;
     outCtx.drawImage(canvas, minX, minY, bw, bh, 0, 0, bw, bh);
     return out;
@@ -296,17 +365,41 @@ function getCropWorker(): Worker | null {
   return _cropWorker;
 }
 
+/**
+ * Kill the shared crop worker so the next call spawns a fresh one.
+ *
+ * Called before falling back to the main thread. A crop only times out on a device that is
+ * already saturated, so leaving the worker to finish a result nobody will read would have the
+ * fallback competing with the very job it is replacing — on the one thread that paints the UI.
+ */
+function discardCropWorker(): void {
+  const worker = _cropWorker;
+  _cropWorker = null;
+  if (worker) {
+    try { worker.terminate(); } catch { /* already dead */ }
+  }
+}
+
 let _cropRequestCounter = 0;
 
 export function cropImageToContentAsync(image: HTMLImageElement): Promise<HTMLCanvasElement | null> {
   return new Promise((resolve) => {
     try {
+      const srcW = image.naturalWidth || image.width;
+      const srcH = image.naturalHeight || image.height;
+      // Same ceiling as the sync crop — transferring a 30"+ decode into a worker
+      // still requires a full getImageData on the main thread first.
+      if (!(srcW > 0) || !(srcH > 0) || srcW * srcH > MAX_CROP_PIXELS || Math.max(srcW, srcH) > MAX_CROP_EDGE_PX) {
+        resolve(null);
+        return;
+      }
+
       const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
       if (!ctx) { resolve(cropImageToContent(image)); return; }
 
-      canvas.width = image.width;
-      canvas.height = image.height;
+      canvas.width = srcW;
+      canvas.height = srcH;
       ctx.drawImage(image, 0, 0);
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
@@ -314,9 +407,14 @@ export function cropImageToContentAsync(image: HTMLImageElement): Promise<HTMLCa
       if (!worker) { resolve(cropImageToContent(image)); return; }
 
       const requestId = ++_cropRequestCounter;
-      const buffer = imageData.data.buffer.slice(0);
+      // Transferred rather than copied. `slice(0)` here duplicated the whole upload
+      // — 67 MB for a 4096px preview — on every single import. Nothing needs it: the
+      // crop below reads `canvas`, which getImageData already copied out of, and the
+      // timeout path re-decodes from `image`.
+      const buffer = imageData.data.buffer;
       const timeout = setTimeout(() => {
         worker.removeEventListener('message', handler);
+        discardCropWorker();
         resolve(cropImageToContent(image));
       }, 15000);
 
@@ -338,7 +436,7 @@ export function cropImageToContentAsync(image: HTMLImageElement): Promise<HTMLCa
           const out = document.createElement('canvas');
           out.width = bw;
           out.height = bh;
-          const outCtx = out.getContext('2d');
+          const outCtx = out.getContext('2d', { willReadFrequently: true });
           if (!outCtx) { resolve(null); return; }
           outCtx.drawImage(canvas, minX, minY, bw, bh, 0, 0, bw, bh);
           resolve(out);

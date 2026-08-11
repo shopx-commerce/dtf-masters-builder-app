@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ResizeSettings, ImageInfo } from "./image-editor";
-import { Download, Layers, FileCheck, Palette, Eye, EyeOff, ChevronDown, ChevronUp, Info, ShoppingCart, Eraser, WandSparkles, Sparkles, Undo2 } from "lucide-react";
+import { Download, Layers, FileCheck, Palette, Eye, EyeOff, ChevronDown, ChevronUp, Info, ShoppingCart, Sparkles, Undo2 } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
 import { formatLength } from "@/lib/format-length";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -75,11 +75,15 @@ interface ControlsSectionProps {
   addToCartLabel?: string;
   addingStatusLabel?: string;
   lockGangsheetSize?: boolean;
-  onRemoveWhiteBackground?: () => void;
-  wandDeleteActive?: boolean;
-  onWandDeleteToggle?: () => void;
-  wandTolerance?: number;
-  onWandToleranceChange?: (value: number) => void;
+  /** Edit mode only: current state of the "Regenerate file" checkbox. */
+  regenerateProduction?: boolean;
+  /** Edit mode only: when provided, renders the "Regenerate file" checkbox next to the update button. */
+  onRegenerateProductionChange?: (value: boolean) => void;
+  // NOTE: the White BG / Magic Wand card that used to render here moved to
+  // the desktop toolbar's "Design tools" dropdown (see
+  // `image-editor/editor-action-toolbar.tsx`), taking its tool props with
+  // it. Wand tolerance lives in the Zustand `tool-store` and the toolbar's
+  // slider subscribes directly — see `state/tool-store.ts`.
 }
 
 const DEFAULT_HEIGHTS: number[] = [];
@@ -102,7 +106,7 @@ function autoAssignChannel(rgb: { r: number; g: number; b: number }): 'spotFluor
   return null;
 }
 
-export default function ControlsSection({
+function ControlsSection({
   onDownload,
   isProcessing,
   exportProgressLabel,
@@ -134,11 +138,8 @@ export default function ControlsSection({
   addToCartLabel,
   addingStatusLabel,
   lockGangsheetSize = false,
-  onRemoveWhiteBackground,
-  wandDeleteActive = false,
-  onWandDeleteToggle,
-  wandTolerance = 30,
-  onWandToleranceChange,
+  regenerateProduction = false,
+  onRegenerateProductionChange,
 }: ControlsSectionProps) {
   const { t, lang } = useLanguage();
   const isMobile = useIsMobile();
@@ -597,51 +598,6 @@ export default function ControlsSection({
         </div>
       </div>
 
-      {imageInfo && (
-        <div className="rounded-lg border border-gray-200 bg-white p-2">
-          <div className="flex items-center gap-1.5">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onRemoveWhiteBackground}
-              className="h-10 flex-1 gap-1.5 rounded-lg border-amber-200 bg-amber-50 text-xs text-amber-700 hover:bg-amber-100"
-              title="Remove contiguous white or off-white background"
-            >
-              <Eraser className="h-4 w-4" />
-              White BG
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onWandDeleteToggle}
-              className={`h-10 flex-1 gap-1.5 rounded-lg text-xs ${wandDeleteActive
-                ? "border-fuchsia-600 bg-fuchsia-600 text-white hover:bg-fuchsia-700"
-                : "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-600 hover:bg-fuchsia-100"}`}
-              title={wandDeleteActive ? "Magic Wand active — click a color to erase it" : "Erase a connected color from the selected design"}
-            >
-              <WandSparkles className="h-4 w-4 shrink-0" aria-hidden="true" />
-              {wandDeleteActive ? "Wand ON" : "Magic Wand"}
-            </Button>
-          </div>
-          {wandDeleteActive && (
-             <label className="mt-2 flex items-center gap-2 text-[12px] text-fuchsia-800">
-              <span className="font-medium">Tol</span>
-              <input
-                type="range"
-                min="1"
-                max="100"
-                value={wandTolerance}
-                onChange={(e) => onWandToleranceChange?.(Number(e.target.value))}
-                className="min-w-0 flex-1 accent-fuchsia-600"
-              />
-              <span className="w-6 text-right tabular-nums">{wandTolerance}</span>
-            </label>
-          )}
-        </div>
-      )}
-
       {enableFluorescent && imageInfo && fluorPanelContainer && createPortal(
         <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
           <button
@@ -856,7 +812,12 @@ export default function ControlsSection({
 
       {downloadContainer && createPortal(
         <div
-          className={`flex items-center gap-3 bg-white border-t border-gray-200 px-4 py-2 ${
+          /* `flex-wrap`: with the edit-mode "Regenerate file" checkbox in the
+             row, a narrow phone in French can't fit checkbox + button side by
+             side; wrapping drops the button to its own full-width line instead
+             of overflowing. With no checkbox the single flex-1 button never
+             wraps, so other layouts are unaffected. */
+          className={`flex flex-wrap items-center gap-3 bg-white border-t border-gray-200 px-4 py-2 ${
             isMobile ? "fixed bottom-0 left-0 right-0 z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]" : ""
           }`}
           style={isMobile ? { paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" } : undefined}
@@ -867,6 +828,20 @@ export default function ControlsSection({
             <span className="text-gray-600">·</span>
             <span className={`tabular-nums ${lang !== 'en' ? 'text-[10px]' : ''}`}>{formatLength(artboardWidth, lang)}{lang === 'en' ? '"' : ''} × {formatLength(artboardHeight, lang)}{lang === 'en' ? '"' : ''}</span>
           </div>
+          {onRegenerateProductionChange && (
+            <label
+              className="flex flex-shrink-0 cursor-pointer select-none items-center gap-1.5 text-xs text-gray-700"
+              title={t("controls.regenerateFileHint")}
+            >
+              <input
+                type="checkbox"
+                checked={!!regenerateProduction}
+                onChange={(e) => onRegenerateProductionChange(e.target.checked)}
+                className="h-4 w-4 accent-emerald-600"
+              />
+              <span className="whitespace-nowrap">{t("controls.regenerateFile")}</span>
+            </label>
+          )}
           {hasVariantId && onAddToCart ? (
             <Button
               onClick={onAddToCart}
@@ -880,7 +855,11 @@ export default function ControlsSection({
                     ? (exportProgressLabel || t("editor.processing"))
                       : (addToCartLabel || t("controls.addToCart"))
               }
-              className="flex-1 h-10 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white rounded-lg shadow-lg shadow-emerald-500/25 font-medium disabled:opacity-50"
+              /* 44px on the phone: this bar is `position: fixed` inside a 64px
+                 reserve, so the extra 4px costs no canvas. Keyed to `isMobile`
+                 rather than `coarse:` because an iPad renders this bar inline
+                 and its layout has to stay put. */
+              className={`flex-1 ${isMobile ? "h-11" : "h-10"} bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white rounded-lg shadow-lg shadow-emerald-500/25 font-medium disabled:opacity-50`}
             >
               {isAddingToCart ? (
                 <>
@@ -904,7 +883,7 @@ export default function ControlsSection({
               onClick={handleDownloadClick}
               disabled={isProcessing || !canDownload}
               title={dlTitle}
-              className="flex-1 h-10 bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 text-white rounded-lg shadow-lg shadow-cyan-500/25 font-medium disabled:opacity-50"
+              className={`flex-1 ${isMobile ? "h-11" : "h-10"} bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 text-white rounded-lg shadow-lg shadow-cyan-500/25 font-medium disabled:opacity-50`}
             >
               {isProcessing ? (
                 <>
@@ -925,3 +904,10 @@ export default function ControlsSection({
     </div>
   );
 }
+
+// Wrap in `React.memo` so unrelated view state changes (halftone menu
+// open/close, mobile-panel toggle, spot-channel hover, etc.) skip
+// re-rendering this ~900-line panel when all of its props are
+// shallow-equal. Callback props at the call site are `useCallback`-
+// wrapped so memo's shallow-compare has a real chance to short-circuit.
+export default memo(ControlsSection);

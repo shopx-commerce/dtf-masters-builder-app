@@ -1,3 +1,5 @@
+import type { VectorInkBox } from "./vector-trim";
+
 export interface ImageInfo {
   file: File;
   image: HTMLImageElement;
@@ -5,7 +7,26 @@ export interface ImageInfo {
   originalHeight: number;
   dpi: number;
   isPDF?: boolean;
+  /** Retained PDF bytes. Re-rendered at the placement size during export so
+   *  large designs print from the page geometry instead of the import preview. */
   originalPdfData?: ArrayBuffer;
+  /** Sanitised SVG source, retained for the same reason as `originalPdfData`.
+   *  Already through DOMPurify, so re-rasterising it introduces no new risk. */
+  svgSource?: string;
+  /** Artwork's box within the vector page, as page fractions, when the import
+   *  was trimmed off its page. The export re-renders from the page, so it has to
+   *  reapply this to land on the same artwork the editor is showing. */
+  vectorInkBox?: VectorInkBox;
+  /** Full-resolution print source preserved for HD export. For inline uploads
+   *  this is the post-crop, pre-downsample PNG; for server-prepared uploads it
+   *  is the user's untouched original file. `image` above is capped at
+   *  MAX_STORED_IMAGE_DIMENSION for preview memory, so the export path decodes
+   *  this blob just-in-time at the placement size to keep 300 DPI at print
+   *  sizes larger than the preview cap. */
+  exportBlob?: Blob;
+  /** Content box within `exportBlob`, in source pixels, when the blob is an
+   *  uncropped original. Absent when `exportBlob` is already cropped. */
+  exportCrop?: { x: number; y: number; width: number; height: number };
 }
 
 export interface ResizeSettings {

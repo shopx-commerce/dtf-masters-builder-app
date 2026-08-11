@@ -1,4 +1,7 @@
 import { hasCleanAlpha } from "@/lib/image-crop";
+import { inkInset, type NestMask } from "@/lib/nest-core";
+import { DEFAULT_SHEET_MARGIN, fitHeightForBand, type InkBand } from "@/lib/sheet-fit";
+import { getDesignNestMask } from "@/lib/nest-mask";
 import type { ImageTransform } from "@/lib/types";
 import ExportWorkerModule from "@/lib/export-worker?worker";
 import ArrangeWorkerModule from "@/lib/arrange-worker?worker";
@@ -17,9 +20,57 @@ function inchesFromPixelsPair(pw: number, ph: number, dpi: number): { widthInche
   };
 }
 
-function normalizeRasterDpiForInches(dpi: number, image: HTMLImageElement): number {
+function normalizeRasterDpiForInches(dpi: number): number {
   const normalized = Number.isFinite(dpi) && dpi > 0 ? dpi : RASTER_DPI_FALLBACK;
   return Math.min(normalized, EXPORT_DPI);
+}
+
+/**
+ * The design's print-source pixels as an `ImageBitmap`, at about
+ * `targetW` × `targetH`.
+ *
+ * Used to recover the full-resolution artwork behind a preview that has been
+ * downsampled for editor memory (`MAX_STORED_IMAGE_DIMENSION`) — e.g. to
+ * rebuild a halftone from its un-screened source, or to run a pixel edit
+ * against print resolution instead of the capped preview.
+ *
+ * `crop` is `exportCrop`: when set, `blob` is an uncropped original and only
+ * that content box should be decoded. Returns `null` when the platform lacks
+ * `createImageBitmap` or the decode fails — callers should fall back to the
+ * preview in that case.
+ */
+export async function decodePrintSourceAtSize(
+  blob: Blob,
+  crop: { x: number; y: number; width: number; height: number } | undefined,
+  targetW: number,
+  targetH: number,
+  pixelated = false,
+): Promise<ImageBitmap | null> {
+  if (typeof createImageBitmap !== "function") return null;
+  const wantW = Math.max(1, Math.round(targetW));
+  const wantH = Math.max(1, Math.round(targetH));
+  const resizeQuality: ImageBitmapOptions["resizeQuality"] = pixelated ? "pixelated" : "high";
+  try {
+    if (crop) {
+      const options =
+        wantW < crop.width || wantH < crop.height
+          ? { resizeWidth: wantW, resizeHeight: wantH, resizeQuality }
+          : undefined;
+      return await createImageBitmap(blob, crop.x, crop.y, crop.width, crop.height, options);
+    }
+    const probe = await createImageBitmap(blob);
+    if (wantW >= probe.width && wantH >= probe.height) return probe;
+    const scaled = await createImageBitmap(probe, 0, 0, probe.width, probe.height, {
+      resizeWidth: wantW,
+      resizeHeight: wantH,
+      resizeQuality,
+    });
+    probe.close();
+    return scaled;
+  } catch (err) {
+    console.warn("[export] print-source decode failed", { err });
+    return null;
+  }
 }
 
 function imageHasCleanAlpha(img: HTMLImageElement): boolean {
@@ -42,6 +93,10 @@ export {
   injectPngDpi,
   clampDesignToArtboard,
   getRotatedBounds,
+  getInkBounds,
+  getContentInkBandY,
+  fitGangsheetHeight,
+  getDesignNestSilhouette,
   getEffectiveHeight,
   getStampExtra,
   getDesignSelectionUnits,
@@ -72,6 +127,23 @@ export function getArrangeWorker(): Worker | null {
     catch { return null; }
   }
   return _arrangeWorker;
+}
+
+/**
+ * Kill the shared arrange worker so the next arrange spawns a fresh one.
+ *
+ * Packing only overruns its deadline on a device that is already struggling, and the caller
+ * answers a timeout by packing the same sheet again on the main thread. Left alive, the
+ * abandoned worker would keep a core busy on a layout nobody will read for as long as the
+ * fallback takes — turning one slow arrange into a frozen tab on exactly the hardware that
+ * could least afford it.
+ */
+export function discardArrangeWorker(): void {
+  const worker = _arrangeWorker;
+  _arrangeWorker = null;
+  if (worker) {
+    try { worker.terminate(); } catch { /* worker already dead */ }
+  }
 }
 
 // Reads DPI metadata from PNG/JPEG headers, if present.
@@ -284,12 +356,138 @@ function getRotatedBounds(
   return { minX, maxX, minY, maxY };
 }
 
+/** What `getInkBounds` and `getDesignNestSilhouette` need to look up a design's silhouette. */
+type DesignWithArtwork = {
+  widthInches: number;
+  heightInches: number;
+  transform: ImageTransform;
+  printFileName?: boolean;
+  name?: string;
+  imageInfo?: { image?: HTMLImageElement | null } | null;
+};
+
+/**
+ * A design's ink silhouette, or undefined when the artwork is not available to sample.
+ * Shared by the packer (which nests with it) and the bounds helpers below (which validate
+ * against it) so the two can never disagree about where a design's artwork is.
+ */
+function getDesignNestSilhouette(d: DesignWithArtwork): NestMask | undefined {
+  const img = d.imageInfo?.image;
+  if (!img) return undefined;
+  const built = getDesignNestMask({
+    image: img,
+    artW: d.widthInches * d.transform.s,
+    artH: d.heightInches * d.transform.s,
+    stampExtra: getStampExtra(d),
+    stampText: d.printFileName ? d.name : undefined,
+    flipX: d.transform.flipX,
+    flipY: d.transform.flipY,
+    sourceKey: img.src,
+  });
+  return built?.mask;
+}
+
+/**
+ * Bounds of a design's *artwork*, as opposed to `getRotatedBounds`, which returns the whole
+ * image box including transparent padding.
+ *
+ * These are the bounds that decide whether a design is on the sheet and how far it may be
+ * dragged. Using the image box for that would make nesting impossible: nested designs
+ * deliberately let their empty corners hang over a neighbour or off the edge, and a box-based
+ * clamp would haul every one of them back and undo the layout. Falls back to the image box
+ * when the artwork cannot be sampled, which is the conservative direction.
+ */
+function getInkBounds(
+  d: DesignWithArtwork,
+): { minX: number; maxX: number; minY: number; maxY: number } {
+  const mask = getDesignNestSilhouette(d);
+  if (!mask) return getRotatedBounds(d);
+  const t = d.transform;
+  const w = d.widthInches * t.s;
+  const h = d.heightInches * t.s;
+  const stamp = getStampExtra(d);
+  const inset = inkInset(mask, w, h + stamp, 0);
+  const rad = (t.rotation * Math.PI) / 180;
+  const cosA = Math.cos(rad);
+  const sinA = Math.sin(rad);
+  const left = -w / 2 + inset.left;
+  const right = w / 2 - inset.right;
+  const top = -h / 2 + inset.top;
+  const bottom = h / 2 + stamp - inset.bottom;
+  const corners = [
+    { x: left, y: top },
+    { x: right, y: top },
+    { x: right, y: bottom },
+    { x: left, y: bottom },
+  ];
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const c of corners) {
+    const rx = c.x * cosA - c.y * sinA;
+    const ry = c.x * sinA + c.y * cosA;
+    if (rx < minX) minX = rx;
+    if (rx > maxX) maxX = rx;
+    if (ry < minY) minY = ry;
+    if (ry > maxY) maxY = ry;
+  }
+  return { minX, maxX, minY, maxY };
+}
+
+/**
+ * Vertical band the sheet's artwork occupies, in artboard inches measured from the top edge.
+ *
+ * Ink, not the image box: a nested sheet's lowest design may have transparent padding hanging
+ * below its last printed pixel, and billing film for that padding would charge the customer
+ * for blank material.
+ */
+function getContentInkBandY(
+  designs: DesignWithArtwork[],
+  artboardHeight: number,
+): InkBand | null {
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const d of designs) {
+    const bounds = getInkBounds(d);
+    const cy = d.transform.ny * artboardHeight;
+    if (cy + bounds.minY < minY) minY = cy + bounds.minY;
+    if (cy + bounds.maxY > maxY) maxY = cy + bounds.maxY;
+  }
+  if (!Number.isFinite(minY) || !Number.isFinite(maxY)) return null;
+  return { minY, maxY };
+}
+
+/**
+ * The smallest purchasable height that fits the artwork currently on the sheet, plus the
+ * measurements that got us there.
+ *
+ * Single source of truth for two features that must never disagree: the "current bounds" hint
+ * in the size dropdown, and auto-shrink. If they sized the sheet separately, the hint could
+ * advertise a size that shrinking then declined to apply.
+ */
+function fitGangsheetHeight(
+  designs: DesignWithArtwork[],
+  artboardHeight: number,
+  designGap: number | undefined,
+  heights: number[],
+): { height: number; band: InkBand; margin: number } | null {
+  if (designs.length === 0) return null;
+  const band = getContentInkBandY(designs, artboardHeight);
+  if (!band) return null;
+  // The setting is one number standing in for two different physical quantities. As the gap
+  // *between* designs, 0 is a legitimate choice. As the margin at the *sheet edge* it is not —
+  // flush ink is a DTF production risk — so the sheet-edge reading is floored, and named
+  // separately from `designGap` to keep the two legible as the different things they are.
+  const sheetEdgeMargin = Math.max(designGap ?? DEFAULT_SHEET_MARGIN, DEFAULT_SHEET_MARGIN);
+  const height = fitHeightForBand(band.maxY - band.minY, sheetEdgeMargin, heights);
+  if (height === null) return null;
+  return { height, band, margin: sheetEdgeMargin };
+}
+
 function clampDesignToArtboard(
-  d: { widthInches: number; heightInches: number; transform: ImageTransform; printFileName?: boolean },
+  d: DesignWithArtwork,
   abW: number, abH: number,
 ): { nx: number; ny: number } {
   const t = d.transform;
-  const { minX, maxX, minY, maxY } = getRotatedBounds(d);
+  const { minX, maxX, minY, maxY } = getInkBounds(d);
   const minNx = -minX / abW;
   const maxNx = 1 - maxX / abW;
   const minNy = -minY / abH;

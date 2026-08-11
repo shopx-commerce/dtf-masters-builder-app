@@ -527,7 +527,7 @@ export function groupColorsByShade(colors: ExtractedColor[]): ColorGroup[] {
 }
 
 export function extractColorsFromCanvas(canvas: HTMLCanvasElement, maxColors: number = 18): ExtractedColor[] {
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return [];
   
   const sampleSize = Math.min(canvas.width, canvas.height, 300);
@@ -537,7 +537,7 @@ export function extractColorsFromCanvas(canvas: HTMLCanvasElement, maxColors: nu
   const tempCanvas = document.createElement('canvas');
   tempCanvas.width = Math.max(1, Math.floor(canvas.width * scaleX));
   tempCanvas.height = Math.max(1, Math.floor(canvas.height * scaleY));
-  const tempCtx = tempCanvas.getContext('2d');
+  const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
   if (!tempCtx) return [];
   
   tempCtx.drawImage(canvas, 0, 0, tempCanvas.width, tempCanvas.height);
@@ -562,7 +562,7 @@ export function extractColorsFromImage(image: HTMLImageElement, maxColors: numbe
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = w;
     tempCanvas.height = h;
-    const tempCtx = tempCanvas.getContext('2d');
+    const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
     if (!tempCtx) return [];
     
     tempCtx.drawImage(image, 0, 0, w, h);
@@ -578,12 +578,28 @@ export function extractColorsFromImage(image: HTMLImageElement, maxColors: numbe
 import ColorExtractionWorker from './color-extraction-worker?worker';
 
 let _colorWorker: Worker | null = null;
+let _colorRequestCounter = 0;
 function getColorWorker(): Worker | null {
   if (!_colorWorker) {
     try { _colorWorker = new ColorExtractionWorker(); }
     catch { return null; }
   }
   return _colorWorker;
+}
+
+/**
+ * Kill the shared extraction worker so the next call spawns a fresh one.
+ *
+ * Called before falling back to the main thread: extraction only times out on a device that is
+ * already saturated, and letting the worker keep grinding on a result nobody will read leaves
+ * it competing with the fallback that replaced it.
+ */
+function discardColorWorker(): void {
+  const worker = _colorWorker;
+  _colorWorker = null;
+  if (worker) {
+    try { worker.terminate(); } catch { /* already dead */ }
+  }
 }
 
 export function extractColorsFromImageAsync(image: HTMLImageElement, maxColors: number = 999): Promise<ExtractedColor[]> {
@@ -599,7 +615,7 @@ export function extractColorsFromImageAsync(image: HTMLImageElement, maxColors: 
       }
       const tc = document.createElement('canvas');
       tc.width = w; tc.height = h;
-      const ctx = tc.getContext('2d');
+      const ctx = tc.getContext('2d', { willReadFrequently: true });
       if (!ctx) { resolve(extractColorsFromImage(image, maxColors)); return; }
       ctx.drawImage(image, 0, 0, w, h);
       let imageData: ImageData;
@@ -614,9 +630,12 @@ export function extractColorsFromImageAsync(image: HTMLImageElement, maxColors: 
       const worker = getColorWorker();
       if (!worker) { resolve(extractDominantColors(imageData, maxColors)); return; }
 
-      const buffer = imageData.data.buffer.slice(0);
+      // Transferred, so `imageData` is detached from here on. The timeout path below
+      // re-reads the canvas instead of reusing it.
+      const buffer = imageData.data.buffer;
+      const requestId = ++_colorRequestCounter;
       const handler = (e: MessageEvent) => {
-        if (e.data.type === 'result') {
+        if (e.data.type === 'result' && e.data.requestId === requestId) {
           clearTimeout(timeout);
           worker.removeEventListener('message', handler);
           resolve(e.data.colors);
@@ -624,14 +643,15 @@ export function extractColorsFromImageAsync(image: HTMLImageElement, maxColors: 
       };
       const timeout = setTimeout(() => {
         worker.removeEventListener('message', handler);
+        discardColorWorker();
         try {
           resolve(extractDominantColors(ctx.getImageData(0, 0, w, h), maxColors));
         } catch {
-          resolve(extractDominantColors(imageData, maxColors));
+          resolve([]);
         }
       }, 10000);
       worker.addEventListener('message', handler);
-      worker.postMessage({ type: 'extract', pixelBuffer: buffer, width: w, height: h, maxColors, minPercentage: 0.1 }, [buffer]);
+      worker.postMessage({ type: 'extract', requestId, pixelBuffer: buffer, width: w, height: h, maxColors, minPercentage: 0.1 }, [buffer]);
     } catch (e) {
       console.warn('[ColorExtractor] extractColorsFromImageAsync failed:', e);
       resolve([]);

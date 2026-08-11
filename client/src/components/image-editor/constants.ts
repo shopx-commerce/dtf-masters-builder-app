@@ -33,10 +33,10 @@ export const DEFAULT_DESIGN_TRANSFORM: ImageTransform = {
 /** Default print resolution when an uploaded raster has no reliable DPI metadata. */
 export const RASTER_DPI_FALLBACK = 300;
 export const EXPORT_DPI = 300;
-/** Warn when effective layer DPI falls below export DPI minus this margin. */
-export const LOW_RES_EFFECTIVE_DPI_THRESHOLD = EXPORT_DPI - 22;
+/** Warn when effective layer DPI falls below this flat floor. */
+export const LOW_RES_EFFECTIVE_DPI_THRESHOLD = 37;
 /** Max pixel width/height when storing uploaded raster assets client-side. */
-export const MAX_STORED_IMAGE_DIMENSION = 4000;
+export const MAX_STORED_IMAGE_DIMENSION = 2000;
 /** Layer thumbnail size in the layers panel (px). */
 export const LAYER_THUMBNAIL_SIZE = 48;
 export const ADD_TO_CART_LABEL_MAX_LEN = 34;

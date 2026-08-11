@@ -313,11 +313,11 @@ function processColors(
 self.onmessage = function (e: MessageEvent) {
   try {
     if (e.data.type === 'extract') {
-      const { pixelBuffer, width, height, maxColors, minPercentage } = e.data;
+      const { pixelBuffer, width, height, maxColors, minPercentage, requestId } = e.data;
       const colors = processColors(pixelBuffer, width, height, maxColors, minPercentage);
-      self.postMessage({ type: 'result', colors });
+      self.postMessage({ type: 'result', requestId, colors });
     }
   } catch (err) {
-    self.postMessage({ type: 'error', error: String(err) });
+    self.postMessage({ type: 'error', requestId: e.data?.requestId, error: String(err) });
   }
 };

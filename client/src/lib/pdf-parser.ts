@@ -1,5 +1,6 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import { IOS_SAFE_CANVAS_DIM, MAX_UPLOAD_MEGAPIXELS } from './image-budget';
+import { VECTOR_TARGET_DPI, vectorPrintDpi } from './vector-raster-limits';
 
 // The `new URL(..., import.meta.url)` reference below is enough for Vite
 // to emit the worker as a separately-addressable asset. The old static
@@ -33,22 +34,20 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
  *    stroke rendering, both of which look *nothing* like the source
  *    PDF.
  *
- * We resolve the version dynamically from `pdfjsLib.version` so the CDN
- * URLs are pinned to the exact package version that shipped, avoiding
- * the "worked in dev, broke in production" trap when someone bumps the
- * dependency without updating a hard-coded version string.
- *
- * jsdelivr is chosen over unpkg because it has better global uptime and
- * more aggressive edge caching for `npm:` assets. Shopify's default CSP
- * allows both `cdn.jsdelivr.net` and `unpkg.com`, so either works in
- * embed mode; production deployments with stricter CSPs should proxy
- * these paths under their own origin.
+ * Both asset sets are served from our own origin rather than a public CDN.
+ * Correct rendering should not depend on an external host: under a strict
+ * Shopify CSP, or on a flaky network, a CDN fetch fails silently and the
+ * customer just sees empty boxes where their Japanese text was, or a
+ * substituted font that looks nothing like their file. `client/public/pdfjs/`
+ * carries a vendored copy of `pdfjs-dist`'s `cmaps/` and `standard_fonts/`,
+ * keyed to the installed package version, so Vite serves them from our own
+ * origin in dev and copies them into the build output automatically.
  *
  * The cost of these two URLs being wrong is real (text renders as
  * garbage / substituted-font); the cost of them being right on a PDF
  * that doesn't need them is zero (pdf.js only fetches on demand).
  */
-const PDF_ASSETS_BASE = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}`;
+const PDF_ASSETS_BASE = `${import.meta.env.BASE_URL}pdfjs`;
 const CMAP_URL = `${PDF_ASSETS_BASE}/cmaps/`;
 const STANDARD_FONT_DATA_URL = `${PDF_ASSETS_BASE}/standard_fonts/`;
 
@@ -57,7 +56,25 @@ export interface ParsedPDFData {
   width: number;
   height: number;
   originalPdfData: ArrayBuffer;
+  /** Rendered preview as a PNG blob, so callers can treat a PDF upload exactly
+   *  like a PNG one — including storing a decodable file for draft recovery,
+   *  which an `<img>` cannot do with the original PDF bytes. */
+  pngBlob: Blob;
+  /** Page 1's own physical size, taken from its PDF geometry rather than
+   *  inferred from the preview raster. The preview is clamped for editor
+   *  memory, so deriving inches from its pixel count would make a large page
+   *  import at the wrong size once the clamp kicked in. */
+  widthInches: number;
+  heightInches: number;
+  /**
+   * Print DPI for the imported design — 300, like a raster upload, because the
+   * export path re-renders the page at the placement size. Only drops below
+   * 300 when the platform's canvas ceiling cannot hold a 300 DPI render of a
+   * page this large.
+   */
   dpi: number;
+  /** DPI of the clamped on-screen preview. Diagnostics only. */
+  previewDpi: number;
   /** Total pages in the document. Only page 1 is rasterized for editing;
    *  the caller can surface a "multi-page PDF, using page 1" toast when
    *  `pageCount > 1`. */
@@ -102,8 +119,15 @@ export async function parsePDF(file: File): Promise<ParsedPDFData> {
   try {
     const arrayBuffer = await file.arrayBuffer();
 
+    // pdf.js *transfers* whatever we pass as `data` to its worker, which
+    // detaches the caller's ArrayBuffer. Passing `arrayBuffer` directly left
+    // `originalPdfData` below zero-length and unreadable, so the retained
+    // source was useless and drafts persisted an empty buffer. Give the worker
+    // a throwaway copy and keep the original intact.
+    const workerData = new Uint8Array(arrayBuffer.slice(0));
+
     pdf = await pdfjsLib.getDocument({
-      data: arrayBuffer,
+      data: workerData,
       // See PDF_ASSETS_BASE above for why these matter.
       cMapUrl: CMAP_URL,
       cMapPacked: true,
@@ -137,7 +161,15 @@ export async function parsePDF(file: File): Promise<ParsedPDFData> {
       // spooks users on every plain-vector logo.
     }
 
-    const targetDPI = 300;
+    // Page geometry at scale 1 is in PDF points, 72 to the inch. This is the
+    // page's true physical size and the only trustworthy source for it — the
+    // preview raster below gets clamped, so measuring the page from its pixels
+    // would shrink a large document once the clamp engaged.
+    const pointsViewport = page.getViewport({ scale: 1 });
+    const widthInches = Math.max(0.01, pointsViewport.width / 72);
+    const heightInches = Math.max(0.01, pointsViewport.height / 72);
+
+    const targetDPI = VECTOR_TARGET_DPI;
     // Point/pixel ratio for pdf.js is `viewport.scale`. `1` means 72 DPI,
     // `targetDPI / 72` means "render at 300 DPI".
     let renderScale = targetDPI / 72;
@@ -162,7 +194,7 @@ export async function parsePDF(file: File): Promise<ParsedPDFData> {
     if (safetyScale < 1) renderScale *= safetyScale;
 
     const viewport = page.getViewport({ scale: renderScale });
-    const effectiveDpi = Math.max(1, Math.round(72 * renderScale));
+    const previewDpi = Math.max(1, Math.round(72 * renderScale));
 
     const canvas = document.createElement('canvas');
     // `viewport.width/height` can carry fractional pixels for
@@ -171,7 +203,7 @@ export async function parsePDF(file: File): Promise<ParsedPDFData> {
     // sub-pixel-aligned buffer that pdf.js then paints outside of.
     canvas.width = Math.max(1, Math.ceil(viewport.width));
     canvas.height = Math.max(1, Math.ceil(viewport.height));
-    const ctx = canvas.getContext('2d', { alpha: true });
+    const ctx = canvas.getContext('2d', { alpha: true, willReadFrequently: true });
     if (!ctx) throw new Error('Could not create canvas context for PDF rendering');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -219,10 +251,83 @@ export async function parsePDF(file: File): Promise<ParsedPDFData> {
       width: renderedWidth,
       height: renderedHeight,
       originalPdfData: arrayBuffer,
-      dpi: effectiveDpi,
+      pngBlob: blob,
+      widthInches,
+      heightInches,
+      // Print DPI, not the preview's: the export path re-renders this page at
+      // the placement size, so a clamped preview costs nothing at print time.
+      dpi: vectorPrintDpi(widthInches, heightInches),
+      previewDpi,
       pageCount,
       hasText,
     };
+  } finally {
+    pdf?.destroy();
+  }
+}
+
+/**
+ * Re-render page 1 of a retained PDF at (at least) the requested pixel size.
+ *
+ * The import-time raster is a preview clamped to a screen-safe ceiling, so
+ * reusing it at print size means upscaling pixels for artwork that is still
+ * fully vector. The export path calls this instead, so a design placed at 20
+ * inches is drawn from the PDF's own geometry at 300 DPI rather than stretched
+ * from a 4096 px preview.
+ *
+ * Scale is chosen to cover the target box on both axes, never to upsample: the
+ * caller resizes the result down to the exact placement box. `clampToMaxEdge`
+ * lets the caller impose the platform's canvas ceiling.
+ */
+export async function rasterisePdfPageToPngBlob(
+  pdfData: ArrayBuffer,
+  targetWidth: number,
+  targetHeight: number,
+  clampToMaxEdge: number,
+): Promise<Blob> {
+  let pdf: pdfjsLib.PDFDocumentProxy | null = null;
+  try {
+    // Same transfer caveat as parsePDF: pdf.js detaches whatever it is given,
+    // and this buffer has to survive for the next design and the next export.
+    pdf = await pdfjsLib.getDocument({
+      data: new Uint8Array(pdfData.slice(0)),
+      cMapUrl: CMAP_URL,
+      cMapPacked: true,
+      standardFontDataUrl: STANDARD_FONT_DATA_URL,
+      useSystemFonts: false,
+    }).promise;
+    const page = await pdf.getPage(1);
+
+    const base = page.getViewport({ scale: 1 });
+    let scale = Math.max(
+      targetWidth / Math.max(base.width, 1),
+      targetHeight / Math.max(base.height, 1),
+    );
+    const longestEdge = Math.max(base.width, base.height) * scale;
+    if (longestEdge > clampToMaxEdge) scale *= clampToMaxEdge / longestEdge;
+
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.ceil(viewport.width));
+    canvas.height = Math.max(1, Math.ceil(viewport.height));
+    const ctx = canvas.getContext('2d', { alpha: true, willReadFrequently: true });
+    if (!ctx) throw new Error('Could not create canvas context for PDF rendering');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    await page.render({
+      canvasContext: ctx,
+      viewport,
+      background: 'rgba(0,0,0,0)',
+      intent: 'print',
+    } as Parameters<typeof page.render>[0]).promise;
+
+    const blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob(resolve, 'image/png');
+    });
+    canvas.width = 0;
+    canvas.height = 0;
+    if (!blob) throw new Error('Failed to encode PDF page as PNG');
+    return blob;
   } finally {
     pdf?.destroy();
   }

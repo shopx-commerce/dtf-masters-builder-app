@@ -6,6 +6,7 @@ export interface HistorySnapshot {
   imageInfoMap?: Map<string, unknown>;
   artboardWidth?: number;
   artboardHeight?: number;
+  manualHeightFloor?: number | null;
 }
 
 const MAX_HISTORY = 50;

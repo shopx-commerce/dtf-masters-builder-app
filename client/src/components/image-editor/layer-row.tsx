@@ -1,5 +1,5 @@
 import { memo, useCallback, type Dispatch, type SetStateAction } from "react";
-import { ChevronDown, ChevronUp, Copy, Trash2 } from "lucide-react";
+import { Copy, Minus, Plus, Trash2 } from "lucide-react";
 import { formatDimensions } from "@/lib/format-length";
 import { useLanguage } from "@/lib/i18n";
 import type { DesignItem } from "@/lib/types";
@@ -210,7 +210,11 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
           <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
             <input
               autoFocus
-              className="text-[11px] text-gray-900 bg-white border border-cyan-400 rounded px-1 py-0 w-full outline-none"
+              /* 16px on any touch screen so iOS does not auto-zoom the page on
+                 focus — see the note on the copies field below. `leading-none`
+                 keeps the taller glyphs from growing the row while the name is
+                 being edited. */
+              className="text-[11px] leading-normal coarse:text-[16px] coarse:leading-none text-gray-900 bg-white border border-cyan-400 rounded px-1 py-0 w-full outline-none"
               value={editingNameValue}
               onChange={(e) => setNameValue(e.target.value)}
               onKeyDown={(e) => {
@@ -267,17 +271,32 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
             inputMode="numeric"
             min={1}
             max={200}
-            readOnly={!isEditingCount}
-            autoFocus={isEditingCount}
-            className={`h-6 w-14 rounded border-2 bg-white text-center text-[11px] font-semibold tabular-nums text-gray-800 outline-none shadow-sm transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+            /*
+              Never `readOnly`, not even before the edit begins: iOS decides
+              whether to raise the keyboard at the instant focus is granted, so
+              a field that is read-only at that instant can never be typed into
+              on an iPhone — clearing the flag in the next React render is too
+              late. Same reasoning as `size-input.tsx`.
+
+              16px on any touch screen, for the same reason `size-input.tsx` uses
+              it: iOS zooms the page when focus lands on a control under 16px, and
+              the viewport meta that would suppress that does not reach us inside
+              the storefront iframe. Gated on `coarse:` rather than on the width
+              breakpoint so an iPad — wide enough for `md:`, but with a software
+              keyboard and no mouse — is covered too. A mouse keeps 11px / 24px.
+              44px tall on touch so the field matches the stepper beside it.
+            */
+            className={`h-6 w-14 rounded border-2 bg-white text-center text-[11px] font-semibold tabular-nums text-gray-800 outline-none shadow-sm transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none coarse:h-11 coarse:text-[16px] ${
               isEditingCount
                 ? "border-cyan-500"
                 : "cursor-pointer border-gray-300 hover:border-cyan-400 hover:bg-cyan-50"
             }`}
             value={isEditingCount ? editingCountValue : String(count)}
-            onChange={(e) =>
-              setCountValue(e.target.value.replace(/\D/g, "").slice(0, 3))
-            }
+            onChange={(e) => {
+              const next = e.target.value.replace(/\D/g, "").slice(0, 3);
+              if (isEditingCount) setCountValue(next);
+              else beginCountEdit(rowKey, next);
+            }}
             onFocus={() => {
               if (!isEditingCount) {
                 beginCountEdit(rowKey, String(count));
@@ -294,7 +313,16 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
             }}
             title="Click to set exact copy count"
           />
-          <div className="flex flex-col gap-[3px]">
+          {/*
+            Hit area and glyph are separate boxes, exactly as in
+            `size-input.tsx` — see the long note there. Copy count multiplies
+            material consumption, so a mis-tap here costs film by the sheet.
+            On a coarse pointer each `button` is a bare 44×44 hit box with the
+            original 16×14 bezel centred inside it; the two cannot overlap
+            because they are siblings in a flex column, and `coarse:gap-2` puts
+            8px of dead space between them.
+          */}
+          <div className="flex flex-col gap-[3px] coarse:gap-2">
             <button
               type="button"
               tabIndex={-1}
@@ -302,10 +330,15 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
               onClick={() => handlers.handleSetGroupCount(row, count + 1)}
               disabled={count >= 200}
               aria-label="Increase copies"
-              className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors hover:bg-cyan-100 hover:text-cyan-600 active:bg-cyan-200 disabled:opacity-30"
+              className="group flex h-3.5 w-4 items-center justify-center disabled:opacity-30 coarse:h-11 coarse:w-11"
               title="Increase copies"
             >
-              <ChevronUp className="h-3 w-3" strokeWidth={3} />
+              {/* −/+ on every pointer rather than chevrons on a mouse, matching the
+                  size steppers: the mark describes what happens to the count instead
+                  of where the button sits. */}
+              <span className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors group-hover:bg-cyan-100 group-hover:text-cyan-600 group-active:bg-cyan-200">
+                <Plus className="h-3 w-3" strokeWidth={3} />
+              </span>
             </button>
             <button
               type="button"
@@ -314,10 +347,12 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
               onClick={() => handlers.handleSetGroupCount(row, count - 1)}
               disabled={count <= 1}
               aria-label="Decrease copies"
-              className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors hover:bg-cyan-100 hover:text-cyan-600 active:bg-cyan-200 disabled:opacity-30"
+              className="group flex h-3.5 w-4 items-center justify-center disabled:opacity-30 coarse:h-11 coarse:w-11"
               title="Decrease copies"
             >
-              <ChevronDown className="h-3 w-3" strokeWidth={3} />
+              <span className="flex h-3.5 w-4 min-w-4 items-center justify-center rounded border border-gray-300 bg-gray-100 text-gray-500 transition-colors group-hover:bg-cyan-100 group-hover:text-cyan-600 group-active:bg-cyan-200">
+                <Minus className="h-3 w-3" strokeWidth={3} />
+              </span>
             </button>
           </div>
         </div>

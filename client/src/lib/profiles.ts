@@ -13,8 +13,8 @@ export interface ProfileConfig {
 
 export const HOT_PEEL_PROFILE: ProfileConfig = {
   id: 'hot-peel',
-  name: 'Hot Peel DTF',
-  title: 'HOT PEEL DTF',
+  name: 'Anynestapp',
+  title: 'ANYNESTAPP',
   route: '/hot-peel',
   artboardWidth: 24.5,
   gangsheetHeights: [],

@@ -76,6 +76,28 @@ function getWorker(): Worker | null {
   }
 }
 
+/**
+ * Kill the shared halftone worker and fail everything still waiting on it.
+ *
+ * A screen only times out on a device that is already saturated, and the caller answers a
+ * timeout by halftoning the same pixels on the main thread. Leaving the worker to finish a
+ * result nobody will read would put both copies of the job on the same overloaded CPU, so the
+ * worker goes first. Unlike `onerror` this does not set `_workerBroken`: a timeout says the
+ * device was busy, not that the worker path is unusable, so the next call gets a fresh one.
+ */
+function discardHalftoneWorker(reason: string): void {
+  const worker = _worker;
+  _worker = null;
+  if (worker) {
+    try { worker.terminate(); } catch { /* worker already dead */ }
+  }
+  for (const p of _pending.values()) {
+    window.clearTimeout(p.timer);
+    p.reject(new Error(reason));
+  }
+  _pending.clear();
+}
+
 function runOnMainThread(params: RunHalftoneParams): ArrayBuffer {
   const pixels = new Uint8ClampedArray(params.buffer);
   applyHalftoneScreen({
@@ -114,7 +136,9 @@ export function runHalftone(params: RunHalftoneParams): Promise<ArrayBuffer> {
       // Fall back to main thread with a fresh copy of the pixels. We cannot
       // reuse `params.buffer` here because it was already transferred to the
       // worker; the caller must supply the source pixels via `params` and
-      // accept the timeout cost of recomputing.
+      // accept the timeout cost of recomputing. Terminate first so the abandoned
+      // job stops competing with the fallback that replaces it.
+      discardHalftoneWorker("halftone worker timed out");
       reject(new Error("halftone worker timed out"));
     }, timeoutMs);
     _pending.set(requestId, { resolve, reject, timer });

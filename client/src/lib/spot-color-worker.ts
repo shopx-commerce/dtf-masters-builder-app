@@ -26,20 +26,30 @@ interface SpotColorRegionWorker {
   tintCMYK: [number, number, number, number];
 }
 
+/**
+ * One separation's worth of work.
+ *
+ * Each spot type (white, gloss, and the four fluorescents) is an independent mask and
+ * trace over the same pixels, so they are dispatched as separate jobs across a worker
+ * pool instead of looping inside a single worker. The caller assembles the replies.
+ */
 interface WorkerMessage {
   type: 'trace';
   imageBuffer: ArrayBuffer;
   imageWidth: number;
   imageHeight: number;
+  /** The colours the customer assigned to this separation. */
+  markedColors: SpotColorInputWorker[];
+  /** Every spot colour in the design — the mask needs them all to pick a nearest match. */
   spotColors: SpotColorInputWorker[];
-  widthInches: number;
-  heightInches: number;
+  regionName: string;
   dpi: number;
 }
 
 interface WorkerResponse {
   type: 'result';
-  regions: SpotColorRegionWorker[];
+  /** Null when the separation traced to nothing, which is not an error. */
+  region: SpotColorRegionWorker | null;
 }
 
 function createClosestColorMask(
@@ -255,67 +265,18 @@ function traceMaskToInchPaths(mask: Uint8Array, width: number, height: number, p
   }).filter(p => p.length >= 3);
 }
 
-function processSpotColors(
-  pixelData: Uint8ClampedArray,
-  width: number,
-  height: number,
-  spotColors: SpotColorInputWorker[],
-  dpi: number
-): SpotColorRegionWorker[] {
-  const whiteColors = spotColors.filter(c => c.spotWhite);
-  const glossColors = spotColors.filter(c => c.spotGloss);
-  const whiteName = spotColors.find(c => c.spotWhite)?.spotWhiteName || 'RDG_WHITE';
-  const glossName = spotColors.find(c => c.spotGloss)?.spotGlossName || 'RDG_GLOSS';
-
-  const regions: SpotColorRegionWorker[] = [];
-
-  if (whiteColors.length > 0) {
-    const mask = createClosestColorMask(pixelData, width, height, whiteColors, spotColors, 80, 128);
-    const paths = traceMaskToInchPaths(mask, width, height, dpi);
-    if (paths.length > 0) {
-      regions.push({ name: whiteName, paths, tintCMYK: [0, 1, 0, 0] });
-    }
-  }
-
-  if (glossColors.length > 0) {
-    const mask = createClosestColorMask(pixelData, width, height, glossColors, spotColors, 80, 128);
-    const paths = traceMaskToInchPaths(mask, width, height, dpi);
-    if (paths.length > 0) {
-      regions.push({ name: glossName, paths, tintCMYK: [0, 1, 0, 0] });
-    }
-  }
-
-  const fluorTypes = [
-    { field: 'spotFluorY' as const, nameField: 'spotFluorYName' as const, defaultName: 'FY' },
-    { field: 'spotFluorM' as const, nameField: 'spotFluorMName' as const, defaultName: 'FM' },
-    { field: 'spotFluorG' as const, nameField: 'spotFluorGName' as const, defaultName: 'FG' },
-    { field: 'spotFluorOrange' as const, nameField: 'spotFluorOrangeName' as const, defaultName: 'FO' },
-  ];
-
-  for (const ft of fluorTypes) {
-    const matchingColors = spotColors.filter(c => c[ft.field]);
-    if (matchingColors.length > 0) {
-      const fluorName = matchingColors[0][ft.nameField] || ft.defaultName;
-      const mask = createClosestColorMask(pixelData, width, height, matchingColors, spotColors, 80, 128);
-      const paths = traceMaskToInchPaths(mask, width, height, dpi);
-      if (paths.length > 0) {
-        regions.push({ name: fluorName, paths, tintCMYK: [0, 1, 0, 0] });
-      }
-    }
-  }
-
-  return regions;
-}
-
 self.onmessage = function(e: MessageEvent<WorkerMessage>) {
   try {
-    if (e.data.type === 'trace') {
-      const { imageBuffer, imageWidth, imageHeight, spotColors, dpi } = e.data;
-      const pixelData = new Uint8ClampedArray(imageBuffer);
-      const regions = processSpotColors(pixelData, imageWidth, imageHeight, spotColors, dpi);
-      const response: WorkerResponse = { type: 'result', regions };
-      self.postMessage(response);
-    }
+    if (e.data.type !== 'trace') return;
+    const { imageBuffer, imageWidth, imageHeight, markedColors, spotColors, regionName, dpi } = e.data;
+    const pixelData = new Uint8ClampedArray(imageBuffer);
+    const mask = createClosestColorMask(pixelData, imageWidth, imageHeight, markedColors, spotColors, 80, 128);
+    const paths = traceMaskToInchPaths(mask, imageWidth, imageHeight, dpi);
+    const response: WorkerResponse = {
+      type: 'result',
+      region: paths.length > 0 ? { name: regionName, paths, tintCMYK: [0, 1, 0, 0] } : null,
+    };
+    self.postMessage(response);
   } catch (err) {
     self.postMessage({ type: 'error', error: String(err) });
   }

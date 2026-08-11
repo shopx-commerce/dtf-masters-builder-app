@@ -46,7 +46,7 @@ export function drawImageWithStroke(
     
     // Create temporary canvas for image processing
     const tempCanvas = document.createElement('canvas');
-    const tempCtx = tempCanvas.getContext('2d');
+    const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
     if (!tempCtx) return;
     
     // Set size with padding for stroke
