@@ -127,10 +127,13 @@ async function drawPrintSourceToCanvas(
   } else if (info.exportBlob) {
     const crop = info.exportCrop;
     // Decode at natural size and let the canvas do the fit — the edit wants
-    // every pixel the print source has, up to the caps above.
+    // every pixel the print source has, up to the caps above. `from-image`
+    // keeps the crop rect in the same oriented space it was measured in; see
+    // the note on `ORIENT_FROM_IMAGE` in `image-editor/utils.ts`.
+    const orient: ImageBitmapOptions = { imageOrientation: "from-image" };
     const bmp = crop
-      ? await createImageBitmap(info.exportBlob, crop.x, crop.y, crop.width, crop.height)
-      : await createImageBitmap(info.exportBlob);
+      ? await createImageBitmap(info.exportBlob, crop.x, crop.y, crop.width, crop.height, orient)
+      : await createImageBitmap(info.exportBlob, orient);
     source = bmp;
     close = () => bmp.close();
   }

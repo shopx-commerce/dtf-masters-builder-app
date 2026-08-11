@@ -3,6 +3,7 @@ import { PDFDocument, PDFName, PDFArray, PDFDict } from 'pdf-lib';
 import { removeLoopsWithClipper, ensureClockwise, detectSelfIntersections, gaussianSmoothContour, subsamplePolygon } from "@/lib/clipper-path";
 import { getContourWorkerManager } from "@/lib/contour-worker-manager";
 import { addSpotColorVectorsToPDF } from "@/lib/spot-color-vectors";
+import { triggerDownload } from "@/lib/download-file";
 
 export function simplifyPathForPDF(points: Array<{x: number; y: number}>, epsilon: number = 1.0): Array<{x: number; y: number}> {
   if (points.length <= 2) return points;
@@ -2068,15 +2069,7 @@ export async function downloadContourPDF(
   
   const pdfBytes = await pdfDoc.save();
   const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
-  const url = URL.createObjectURL(pdfBlob);
-  
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  triggerDownload(pdfBlob, filename, 'cutcontour');
   } catch (error) {
     console.error('[downloadContourPDF] Error:', error);
     throw error;

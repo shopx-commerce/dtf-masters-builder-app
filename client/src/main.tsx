@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
 import { installUploadStressTest } from "./lib/upload-stress-test";
+import { installTrimSelfTest } from "./lib/content-bounds-selftest";
 
 window.addEventListener("unhandledrejection", (e) => {
   console.error("Unhandled promise rejection:", e.reason);
@@ -16,6 +17,7 @@ window.addEventListener("error", (e) => {
 // (`import.meta.env.DEV` is inlined to `false` and the install function's
 // guard prevents `window.__stressUpload` from ever being defined).
 installUploadStressTest();
+installTrimSelfTest();
 
 // Dev-only: `?stress=N` auto-runs the stress harness after load so
 // screenshot-based verification can see a populated sheet.

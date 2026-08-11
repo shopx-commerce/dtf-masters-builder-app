@@ -24,6 +24,8 @@
  * scale.
  */
 
+import { measureContentBox, sourceSize, type MeasurableSource } from './content-bounds';
+
 /**
  * The artwork's box as a fraction of the full page, so it can be reapplied to a
  * render of any size. `x`/`y` are the top-left offset; all four are 0..1.
@@ -36,72 +38,36 @@ export interface VectorInkBox {
 }
 
 /**
- * Matches the alpha floor the raster crop uses (`getImageBounds`), so an SVG and
- * a PNG of the same artwork trim to the same edge.
- */
-const INK_ALPHA_THRESHOLD = 10;
-
-/**
- * Below this the page is treated as already tight. Antialiasing on artwork that
- * bleeds to the page edge can leave a hairline of near-transparent pixels, and
- * re-rendering the whole page to crop a fraction of a percent off it costs more
- * than it saves.
- */
-const MIN_TRIM_FRACTION = 0.005;
-
-/** Guards the full-page readback on absurd import rasters. */
-const MAX_MEASURE_PIXELS = 40_000_000;
-
-/**
  * Finds the artwork's box within a rasterised page, or null when there is
  * nothing worth trimming — a page that is already tight, a blank page, or a
  * raster we cannot read. Callers keep the untrimmed import in all three cases.
+ *
+ * Measurement is delegated to `measureContentBox`, which walks the page in
+ * fixed-size tiles. A Letter page rendered at import resolution is tens of
+ * megapixels, and reading it back in one piece cost ~160 MB of RGBA and could
+ * exceed iOS Safari's canvas ceiling outright; tiling keeps the peak at one tile
+ * and returns the same pixel-exact box. `measureContentBox` shares the alpha
+ * floor and the already-tight threshold, so an SVG and a PNG of the same artwork
+ * still trim to the same edge.
+ *
+ * The minimum-content floor is waived: a small logo alone on a Letter page is a
+ * few percent of its frame, and trimming exactly that case is why this exists.
  */
-export function measureVectorInkBox(
-  image: HTMLImageElement | HTMLCanvasElement,
-): VectorInkBox | null {
-  const w = 'naturalWidth' in image ? (image.naturalWidth || image.width) : image.width;
-  const h = 'naturalHeight' in image ? (image.naturalHeight || image.height) : image.height;
-  if (!(w > 0) || !(h > 0) || w * h > MAX_MEASURE_PIXELS) return null;
+export async function measureVectorInkBox(
+  image: MeasurableSource,
+): Promise<VectorInkBox | null> {
+  const { width: w, height: h } = sourceSize(image);
+  if (!(w > 0) || !(h > 0)) return null;
 
-  let data: Uint8ClampedArray;
-  try {
-    const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) return null;
-    ctx.drawImage(image, 0, 0);
-    data = ctx.getImageData(0, 0, w, h).data;
-    canvas.width = 0;
-    canvas.height = 0;
-  } catch {
-    return null;
-  }
+  const box = await measureContentBox(image, { minContentFraction: 0 });
+  if (!box) return null;
 
-  let minX = w, minY = h, maxX = -1, maxY = -1;
-  for (let y = 0; y < h; y++) {
-    let p = y * w * 4 + 3;
-    for (let x = 0; x < w; x++, p += 4) {
-      if (data[p] <= INK_ALPHA_THRESHOLD) continue;
-      if (x < minX) minX = x;
-      if (x > maxX) maxX = x;
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
-    }
-  }
-  // A blank page has no artwork to centre on, so leave it at page size rather
-  // than collapse it to a point.
-  if (maxX < 0) return null;
-
-  const box: VectorInkBox = {
-    x: minX / w,
-    y: minY / h,
-    w: (maxX - minX + 1) / w,
-    h: (maxY - minY + 1) / h,
+  return {
+    x: box.x / w,
+    y: box.y / h,
+    w: box.width / w,
+    h: box.height / h,
   };
-  if (box.w > 1 - MIN_TRIM_FRACTION && box.h > 1 - MIN_TRIM_FRACTION) return null;
-  return box;
 }
 
 /**
@@ -202,7 +168,7 @@ export async function trimVectorImport(input: {
   widthInches: number;
   heightInches: number;
 }): Promise<TrimmedVectorImport | null> {
-  const box = measureVectorInkBox(input.image);
+  const box = await measureVectorInkBox(input.image);
   if (!box) return null;
 
   const sourceW = input.image.naturalWidth || input.image.width;

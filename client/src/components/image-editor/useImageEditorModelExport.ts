@@ -2,6 +2,7 @@ import { useCallback, useRef } from "react";
 import { EXPORT_DPI, EXPORT_TIMEOUT_MS } from "./constants";
 import {
   assertExportCanvasNotBlank,
+  assertPrintSourcesReadable,
   canUseMemoryEfficientPngExport,
   decodePrintSourceAtSize,
   exportPngWithWorker,
@@ -9,6 +10,7 @@ import {
   injectPngDpi,
   resolveExportDpi,
 } from "./utils";
+import { triggerDownload } from "@/lib/download-file";
 import type { ImageEditorBagAfterUploadCrop } from "./image-editor-hook-bag.types";
 import { thresholdImageInfo } from "./useImageEditorModelHalftone";
 import { isRecoverableImageInfo } from "@/lib/editor-draft-storage";
@@ -86,6 +88,14 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
         d.halftoned ? undefined : (vectorSourceByDesignId.get(d.id) ?? d.imageInfo.exportBlob);
       const printSourceCropFor = (d: typeof exportDesigns[number]) =>
         d.halftoned || vectorSourceByDesignId.has(d.id) ? undefined : d.imageInfo.exportCrop;
+
+      // Check every print source is still readable before rendering anything.
+      // A gangsheet takes minutes; finding out afterwards that one design's
+      // original has moved wastes all of it, and the render would otherwise
+      // substitute the capped preview and hand back a soft file that looks fine.
+      await assertPrintSourcesReadable(
+        exportDesigns.map(d => ({ source: printSourceFor(d), label: d.name })),
+      );
 
       if (format === 'pdf') {
         const { PDFDocument, degrees } = await import('pdf-lib');
@@ -200,14 +210,7 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
 
         const pdfBytes = await pdfDoc.save();
         const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
-        const url = URL.createObjectURL(pdfBlob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `${firstName}.pdf`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        triggerDownload(pdfBlob, `${firstName}.pdf`);
       } else {
         const filename = `${firstName}.png`;
 
@@ -348,15 +351,7 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
           pngBlob = await injectPngDpi(rawBlob, exportDpi);
         }
 
-        const url = URL.createObjectURL(pngBlob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = filename;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        const revokeMs = Math.max(5000, Math.round(pngBlob.size / 100000));
-        setTimeout(() => URL.revokeObjectURL(url), revokeMs);
+        triggerDownload(pngBlob, filename);
       }
 
       // Tell the customer when the sheet they just downloaded is softer than it

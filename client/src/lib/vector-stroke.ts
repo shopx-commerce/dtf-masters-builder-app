@@ -1,5 +1,6 @@
 import { StrokeSettings } from "@/components/image-editor";
 import jsPDF from 'jspdf';
+import { triggerDownload } from "@/lib/download-file";
 
 export interface VectorStrokeOptions {
   strokeSettings: StrokeSettings;
@@ -323,14 +324,7 @@ export function downloadVectorStroke(
       // PNG fallback
       canvas.toBlob((blob) => {
         if (!blob) return;
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `${baseFilename}.png`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
+        triggerDownload(blob, `${baseFilename}.png`, 'cutcontour');
       }, 'image/png');
   }
 }
@@ -444,16 +438,8 @@ function downloadAsEPS(
   epsContent += `
 %%EOF`;
   
-  // Download EPS file
   const blob = new Blob([epsContent], { type: 'application/postscript' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  triggerDownload(blob, filename, 'cutcontour');
 }
 
 function downloadAsSVG(
@@ -479,16 +465,8 @@ function downloadAsSVG(
   svgContent += `  </g>
 </svg>`;
   
-  // Download SVG file
   const blob = new Blob([svgContent], { type: 'image/svg+xml' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  triggerDownload(blob, filename, 'cutcontour');
 }
 
 // Performance optimization for high-detail images

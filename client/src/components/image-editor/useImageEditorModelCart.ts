@@ -5,6 +5,7 @@ import {
   canUseMemoryEfficientPngExport,
   decodePrintSourceAtSize,
   assertExportCanvasNotBlank,
+  assertPrintSourcesReadable,
   exportPngWithWorker,
   getExportMemoryWarning,
   injectPngDpi,
@@ -371,6 +372,13 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
         const printSourceCropFor = (d: typeof exportDesignsSource[number]) =>
           d.halftoned || vectorSourceByDesignId.has(d.id) ? undefined : d.imageInfo.exportCrop;
 
+        // Nobody inspects a production file before it is printed, so an
+        // unreadable print source has to stop the order here rather than quietly
+        // downgrade to the capped preview. Checked before any rendering starts.
+        await assertPrintSourcesReadable(
+          exportDesignsSource.map(d => ({ source: printSourceFor(d), label: d.name })),
+        );
+
         if (useWorker) {
           const result = await exportPngWithWorker({
             designs: exportDesignsSource.map(d => ({
@@ -495,6 +503,11 @@ export function useImageEditorModelCart(bag: ImageEditorBagAfterExport) {
           d.halftoned ? undefined : (vectorSourceByDesignId.get(d.id) ?? d.imageInfo.exportBlob);
         const printSourceCropFor = (d: typeof exportDesignsSource[number]) =>
           d.halftoned || vectorSourceByDesignId.has(d.id) ? undefined : d.imageInfo.exportCrop;
+
+        await assertPrintSourcesReadable(
+          exportDesignsSource.map(d => ({ source: printSourceFor(d), label: d.name })),
+        );
+
         // Per-copy PDF embed cache. Duplicates with the same source and
         // matching rasterization parameters share a single embedded PNG.
         // pdfDoc.embedPng parses the whole PNG, so this is a big win when

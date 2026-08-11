@@ -2,6 +2,7 @@ import { StrokeSettings, ShapeSettings } from "@/components/image-editor";
 import { applyCadCutClipping } from "@/lib/cadcut-bounds";
 import { cropImageToContent } from "@/lib/image-crop";
 import { createCadCutContour } from "@/lib/cadcut-contour";
+import { triggerDownload } from "@/lib/download-file";
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -117,15 +118,7 @@ export async function downloadCanvas(
         }
         
         try {
-          const url = URL.createObjectURL(blob);
-          const link = document.createElement('a');
-          link.href = url;
-          link.download = filename;
-          link.style.display = 'none';
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          URL.revokeObjectURL(url);
+          triggerDownload(blob, filename);
           resolve();
         } catch (error) {
           reject(error);
