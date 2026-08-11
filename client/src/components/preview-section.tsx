@@ -1,4 +1,4 @@
-﻿import { useEffect, useLayoutEffect, useRef, forwardRef, useImperativeHandle, useState, useCallback, useMemo, memo } from "react";
+import { useEffect, useLayoutEffect, useRef, forwardRef, useImperativeHandle, useState, useCallback, useMemo, memo } from "react";
 import { createPortal } from "react-dom";
 import { ZoomIn, ZoomOut, RotateCcw, ScanSearch, Focus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
@@ -4906,18 +4906,18 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                        beside "Deshacer" and "Rehacer" left no width for the
                        zoom controls at 390px. It groups with the zoom buttons
                        either way, which have always been icons. */
-                    className="min-w-[40px] min-h-[40px] h-8 w-10 p-0 hover:bg-gray-200 rounded text-gray-700 flex items-center justify-center"
+                    className="min-w-[44px] min-h-[40px] h-10 w-11 p-0 rounded-md border border-gray-300 bg-white shadow-sm hover:bg-gray-100 text-gray-700 flex items-center justify-center"
                     title={t("preview.resetView")}
                     aria-label={t("preview.resetView")}
                   >
-                    <RotateCcw className="h-4 w-4 flex-shrink-0" />
+                    <RotateCcw className="h-5 w-5 flex-shrink-0" />
                   </Button>
                 )}
-                <div className="flex items-center gap-0 flex-shrink-0 items-center">
+                <div className="flex items-center gap-1 flex-shrink-0">
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 h-8 w-8 sm:h-7 sm:w-7 p-0 hover:bg-gray-200 rounded flex items-center justify-center"
+                    className="min-w-[44px] min-h-[40px] sm:min-w-0 sm:min-h-0 h-10 w-11 sm:h-8 sm:w-9 coarse:!h-10 coarse:!w-11 coarse:!min-w-[44px] p-0 rounded-md border border-gray-300 bg-white shadow-sm hover:bg-gray-100 flex items-center justify-center"
                     onClick={() => {
                       if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
                       const newZ = Math.max(zoom / ZOOM_BUTTON_FACTOR, minZoomRef.current);
@@ -4931,19 +4931,29 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                     }}
                     title={t("preview.zoomOut")}
                   >
-                    <ZoomOut className="h-4 w-4 text-gray-600" />
+                    <ZoomOut className="h-5 w-5 sm:h-4 sm:w-4 coarse:!h-5 coarse:!w-5 text-gray-700" />
                   </Button>
                   {/* Hidden on a 320px phone, where the bar cannot hold Undo, Redo,
                       four 44px controls, the backdrop picker and a readout — and of
                       those, a number you can only read is the one whose absence costs
-                      least. Wider phones keep it. */}
-                  <span className="text-[12px] text-gray-700 min-w-[32px] text-center font-semibold tabular-nums max-[359px]:hidden">
+                      least. Wider phones keep it. It doubles as the reset button:
+                      tapping the percentage snaps the view back to fit. */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
+                      resetView();
+                    }}
+                    className="h-10 sm:h-8 coarse:!h-10 min-w-[46px] rounded-md border border-gray-300 bg-white px-1.5 text-[12px] font-semibold tabular-nums text-gray-700 shadow-sm hover:bg-gray-100 max-[359px]:hidden"
+                    title={t("preview.resetView")}
+                    aria-label={t("preview.resetView")}
+                  >
                     {Math.round(zoom * 100)}%
-                  </span>
+                  </button>
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 h-8 w-8 sm:h-7 sm:w-7 p-0 hover:bg-gray-200 rounded flex items-center justify-center"
+                    className="min-w-[44px] min-h-[40px] sm:min-w-0 sm:min-h-0 h-10 w-11 sm:h-8 sm:w-9 coarse:!h-10 coarse:!w-11 coarse:!min-w-[44px] p-0 rounded-md border border-gray-300 bg-white shadow-sm hover:bg-gray-100 flex items-center justify-center"
                     onClick={() => {
                       if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
                       const newZ = Math.min(zoom * ZOOM_BUTTON_FACTOR, zoomMax);
@@ -4957,7 +4967,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                     }}
                     title={t("preview.zoomIn")}
                   >
-                    <ZoomIn className="h-4 w-4 text-gray-600" />
+                    <ZoomIn className="h-5 w-5 sm:h-4 sm:w-4 coarse:!h-5 coarse:!w-5 text-gray-700" />
                   </Button>
                 </div>
                 <div className="w-px h-3.5 bg-gray-300" />
@@ -4981,10 +4991,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                       if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
                       resetView();
                     }}
-                     className={`h-7 px-2 hover:bg-gray-200 rounded text-gray-700 whitespace-nowrap ${lang !== 'en' ? 'text-[11px]' : 'text-[12px]'} font-medium`}
+                     className={`h-8 coarse:!h-10 px-2.5 rounded-md border border-gray-300 bg-white shadow-sm hover:bg-gray-100 text-gray-700 whitespace-nowrap ${lang !== 'en' ? 'text-[11px]' : 'text-[12px]'} font-semibold`}
                     title={t("preview.resetView")}
                   >
-                    <RotateCcw className="h-2.5 w-2.5 mr-0.5 flex-shrink-0" />
+                    <RotateCcw className="h-3.5 w-3.5 mr-1 flex-shrink-0" />
                     {t("preview.reset")}
                   </Button>
                 )}
@@ -5055,15 +5065,15 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                     variant="ghost"
                     size="sm"
                     onClick={resetView}
-                    className="min-w-[40px] min-h-[40px] h-8 px-2 hover:bg-gray-200 rounded text-gray-600 whitespace-nowrap text-[11px] flex items-center justify-center"
+                    className="min-w-[44px] min-h-[40px] h-10 px-2.5 rounded-md border border-gray-300 bg-white shadow-sm hover:bg-gray-100 text-gray-700 whitespace-nowrap text-[12px] font-semibold flex items-center justify-center"
                     title={t("preview.resetView")}
                   >
-                    <RotateCcw className="h-3.5 w-3.5 mr-1 flex-shrink-0" />
+                    <RotateCcw className="h-4 w-4 mr-1 flex-shrink-0" />
                     {t("preview.reset")}
                   </Button>
                 )}
-                <div className="flex items-center gap-0 flex-shrink-0 items-center">
-                  <Button variant="ghost" size="sm" className="min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 h-8 w-8 sm:h-7 sm:w-7 p-0 hover:bg-gray-200 rounded flex items-center justify-center" onClick={() => {
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <Button variant="ghost" size="sm" className="min-w-[44px] min-h-[40px] sm:min-w-0 sm:min-h-0 h-10 w-11 sm:h-8 sm:w-9 coarse:!h-10 coarse:!w-11 coarse:!min-w-[44px] p-0 rounded-md border border-gray-300 bg-white shadow-sm hover:bg-gray-100 flex items-center justify-center" onClick={() => {
                     if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
                     const newZ = Math.max(zoom / ZOOM_BUTTON_FACTOR, minZoomRef.current);
                     const clamped = clampPanValue(panX, panY, newZ);
@@ -5074,10 +5084,24 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                       el.style.cursor = (newZ * previewDims.width > el.clientWidth * 1.05 && !moveMode) ? 'grab' : 'default';
                     }
                   }} title={t("preview.zoomOut")}>
-                    <ZoomOut className="h-4 w-4 text-gray-600" />
+                    <ZoomOut className="h-5 w-5 sm:h-4 sm:w-4 coarse:!h-5 coarse:!w-5 text-gray-700" />
                   </Button>
-                  <span className="text-[11px] text-gray-600 min-w-[32px] text-center font-medium tabular-nums px-0.5">{Math.round(zoom * 100)}%</span>
-                  <Button variant="ghost" size="sm" className="min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 h-8 w-8 sm:h-7 sm:w-7 p-0 hover:bg-gray-200 rounded flex items-center justify-center" onClick={() => {
+                  {/* The percentage readout doubles as the reset button: tapping
+                      it snaps the view back to fit, which is much easier to hit
+                      than a separate tiny Reset. */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
+                      resetView();
+                    }}
+                    className="h-10 sm:h-8 coarse:!h-10 min-w-[46px] rounded-md border border-gray-300 bg-white px-1.5 text-[12px] font-semibold tabular-nums text-gray-700 shadow-sm hover:bg-gray-100"
+                    title={t("preview.resetView")}
+                    aria-label={t("preview.resetView")}
+                  >
+                    {Math.round(zoom * 100)}%
+                  </button>
+                  <Button variant="ghost" size="sm" className="min-w-[44px] min-h-[40px] sm:min-w-0 sm:min-h-0 h-10 w-11 sm:h-8 sm:w-9 coarse:!h-10 coarse:!w-11 coarse:!min-w-[44px] p-0 rounded-md border border-gray-300 bg-white shadow-sm hover:bg-gray-100 flex items-center justify-center" onClick={() => {
                     if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
                     const newZ = Math.min(zoom * ZOOM_BUTTON_FACTOR, zoomMax);
                     const clamped = clampPanValue(panX, panY, newZ);
@@ -5088,7 +5112,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                       el.style.cursor = (newZ * previewDims.width > el.clientWidth * 1.05 && !moveMode) ? 'grab' : 'default';
                     }
                   }} title={t("preview.zoomIn")}>
-                    <ZoomIn className="h-4 w-4 text-gray-600" />
+                    <ZoomIn className="h-5 w-5 sm:h-4 sm:w-4 coarse:!h-5 coarse:!w-5 text-gray-700" />
                   </Button>
                 </div>
                 <div className="w-px h-3.5 bg-gray-300" />

@@ -694,7 +694,7 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
         </>
       )}
       {!isMobile && (
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-1.5">
           <button
             onClick={() => handleAutoArrange({ preserveSelection: selectedDesignIds.size >= 2, fullRepack: true })}
             disabled={designs.length < 2 && selectedDesignIds.size < 2}
@@ -708,34 +708,34 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
             <LayoutGrid className="w-3 h-3 lg:w-4 lg:h-4 flex-shrink-0" />
             {t("editor.autoArrange")}
           </button>
-        </div>
-      )}
-      {!isMobile && designs.length >= 2 && (
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          <div className="w-px h-5 bg-gray-100 hidden lg:block" />
-          <div className="flex items-center gap-1">
-            <span className="text-[11px] font-medium text-gray-700">{t("editor.margin")}</span>
-            <select
-              value={designGap === undefined ? "auto" : String(designGap)}
-              onChange={(e) => {
-                const v = e.target.value;
-                const newGap = v === "auto" ? undefined : parseFloat(v);
-                setDesignGap(newGap);
-                if (designs.length >= 2) {
-                  setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true, fullRepack: true }), 0);
-                }
-              }}
-              className="h-7 coarse:h-11 px-1.5 coarse:px-2 bg-gray-100 border border-gray-300 rounded text-[11px] coarse:text-[16px] font-medium text-gray-800 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
-              title={useMetric(lang) ? t("editor.marginGapCm") : t("editor.marginGap")}
-            >
-              <option value="auto">{t("editor.marginAuto")}</option>
-              <option value="0.0625">{useMetric(lang) ? formatLength(0.0625, lang) : "1/16″"}</option>
-              <option value="0.125">{useMetric(lang) ? formatLength(0.125, lang) : "1/8″"}</option>
-              <option value="0.25">{useMetric(lang) ? formatLength(0.25, lang) : "1/4″"}</option>
-              <option value="0.5">{useMetric(lang) ? formatLength(0.5, lang) : "1/2″"}</option>
-              <option value="1">{useMetric(lang) ? formatLength(1, lang) : "1″"}</option>
-            </select>
-          </div>
+          {/* Margin rides with Auto-Arrange as one cluster: the label sits in
+              a tiny caption over the dropdown instead of beside it, so the
+              pair reads as a single compact control. */}
+          {designs.length >= 2 && (
+            <div className="flex flex-col items-center gap-0.5 flex-shrink-0">
+              <span className="text-[9px] coarse:text-[10px] font-semibold uppercase tracking-wider leading-none text-gray-500">{t("editor.margin")}</span>
+              <select
+                value={designGap === undefined ? "auto" : String(designGap)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  const newGap = v === "auto" ? undefined : parseFloat(v);
+                  setDesignGap(newGap);
+                  if (designs.length >= 2) {
+                    setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true, fullRepack: true }), 0);
+                  }
+                }}
+                className="h-7 coarse:h-11 px-1.5 coarse:px-2 bg-gray-100 border border-gray-300 rounded text-[11px] coarse:text-[16px] font-medium text-gray-800 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
+                title={useMetric(lang) ? t("editor.marginGapCm") : t("editor.marginGap")}
+              >
+                <option value="auto">{t("editor.marginAuto")}</option>
+                <option value="0.0625">{useMetric(lang) ? formatLength(0.0625, lang) : "1/16″"}</option>
+                <option value="0.125">{useMetric(lang) ? formatLength(0.125, lang) : "1/8″"}</option>
+                <option value="0.25">{useMetric(lang) ? formatLength(0.25, lang) : "1/4″"}</option>
+                <option value="0.5">{useMetric(lang) ? formatLength(0.5, lang) : "1/2″"}</option>
+                <option value="1">{useMetric(lang) ? formatLength(1, lang) : "1″"}</option>
+              </select>
+            </div>
+          )}
         </div>
       )}
       {/* Align/Rotate — collapsed behind one control so the toolbar stays
