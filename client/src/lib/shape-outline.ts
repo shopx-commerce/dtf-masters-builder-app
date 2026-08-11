@@ -3,6 +3,7 @@ import { PDFDocument, PDFName, PDFArray, PDFDict, type PDFImage } from 'pdf-lib'
 import { cropImageToContent, boundedImageCopyCanvas } from './image-crop';
 import { simplifyPathForPDF, buildSmoothPdfPath, type SpotColorInput } from './contour-outline';
 import { addSpotColorVectorsToPDF } from './spot-color-vectors';
+import { triggerDownload } from './download-file';
 
 async function createClippedShapeImage(
   image: HTMLImageElement,
@@ -559,15 +560,7 @@ export async function downloadShapePDF(
   
   const pdfBytes = await pdfDoc.save();
   const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
-  const url = URL.createObjectURL(pdfBlob);
-  
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  triggerDownload(pdfBlob, filename, 'cutcontour');
 }
 
 export async function generateShapePDFBase64(

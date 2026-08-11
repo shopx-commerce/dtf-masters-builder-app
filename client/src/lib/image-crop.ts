@@ -188,7 +188,10 @@ export function isOpaqueRasterUpload(image: HTMLImageElement): boolean {
     const w = image.naturalWidth || image.width;
     const h = image.naturalHeight || image.height;
     if (w <= 0 || h <= 0) return false;
-    if (w * h > 25_000_000) return false;
+    // No size ceiling: the scratch canvas below is 200 px whatever the source
+    // is, so there is nothing here for a large upload to exhaust. A ceiling
+    // would report a big opaque photo as *transparent*, which is the answer
+    // that sends it down the trim path.
 
     // Draw into a small canvas and read that back instead of the whole image. The old code
     // read every pixel and then stepped through only ~10k of them, so ~99% of the readback
@@ -342,7 +345,8 @@ export function cropImageToContent(image: HTMLImageElement): HTMLCanvasElement |
     const out = document.createElement('canvas');
     out.width = bw;
     out.height = bh;
-    // Callers encode this canvas (`canvasToBlob` in the upload path), so it is a
+    // Callers encode or trace this canvas (`toDataURL` in `image-utils`, the
+    // contour scans in `shape-outline` and `silhouette-contour`), so it is a
     // read-back target even though nothing in this file reads it.
     const outCtx = out.getContext('2d', { willReadFrequently: true });
     if (!outCtx) return null;
@@ -352,101 +356,4 @@ export function cropImageToContent(image: HTMLImageElement): HTMLCanvasElement |
     console.error('Error cropping image:', error);
     return null;
   }
-}
-
-import ImageCropWorker from './image-crop-worker?worker';
-
-let _cropWorker: Worker | null = null;
-function getCropWorker(): Worker | null {
-  if (!_cropWorker) {
-    try { _cropWorker = new ImageCropWorker(); }
-    catch { return null; }
-  }
-  return _cropWorker;
-}
-
-/**
- * Kill the shared crop worker so the next call spawns a fresh one.
- *
- * Called before falling back to the main thread. A crop only times out on a device that is
- * already saturated, so leaving the worker to finish a result nobody will read would have the
- * fallback competing with the very job it is replacing — on the one thread that paints the UI.
- */
-function discardCropWorker(): void {
-  const worker = _cropWorker;
-  _cropWorker = null;
-  if (worker) {
-    try { worker.terminate(); } catch { /* already dead */ }
-  }
-}
-
-let _cropRequestCounter = 0;
-
-export function cropImageToContentAsync(image: HTMLImageElement): Promise<HTMLCanvasElement | null> {
-  return new Promise((resolve) => {
-    try {
-      const srcW = image.naturalWidth || image.width;
-      const srcH = image.naturalHeight || image.height;
-      // Same ceiling as the sync crop — transferring a 30"+ decode into a worker
-      // still requires a full getImageData on the main thread first.
-      if (!(srcW > 0) || !(srcH > 0) || srcW * srcH > MAX_CROP_PIXELS || Math.max(srcW, srcH) > MAX_CROP_EDGE_PX) {
-        resolve(null);
-        return;
-      }
-
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      if (!ctx) { resolve(cropImageToContent(image)); return; }
-
-      canvas.width = srcW;
-      canvas.height = srcH;
-      ctx.drawImage(image, 0, 0);
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-
-      const worker = getCropWorker();
-      if (!worker) { resolve(cropImageToContent(image)); return; }
-
-      const requestId = ++_cropRequestCounter;
-      // Transferred rather than copied. `slice(0)` here duplicated the whole upload
-      // — 67 MB for a 4096px preview — on every single import. Nothing needs it: the
-      // crop below reads `canvas`, which getImageData already copied out of, and the
-      // timeout path re-decodes from `image`.
-      const buffer = imageData.data.buffer;
-      const timeout = setTimeout(() => {
-        worker.removeEventListener('message', handler);
-        discardCropWorker();
-        resolve(cropImageToContent(image));
-      }, 15000);
-
-      const handler = (e: MessageEvent) => {
-        if (e.data.type === 'result' && e.data.requestId === requestId) {
-          clearTimeout(timeout);
-          worker.removeEventListener('message', handler);
-          const { processedBuffer, width, height, minX, minY, maxX, maxY, bgRemoved } = e.data;
-          if (minX > maxX || minY > maxY) { resolve(null); return; }
-
-          if (bgRemoved) {
-            const processed = new Uint8ClampedArray(processedBuffer);
-            const newImageData = new ImageData(processed, width, height);
-            ctx.putImageData(newImageData, 0, 0);
-          }
-
-          const bw = maxX - minX + 1;
-          const bh = maxY - minY + 1;
-          const out = document.createElement('canvas');
-          out.width = bw;
-          out.height = bh;
-          const outCtx = out.getContext('2d', { willReadFrequently: true });
-          if (!outCtx) { resolve(null); return; }
-          outCtx.drawImage(canvas, minX, minY, bw, bh, 0, 0, bw, bh);
-          resolve(out);
-        }
-      };
-      worker.addEventListener('message', handler);
-      worker.postMessage({ type: 'crop', pixelBuffer: buffer, width: canvas.width, height: canvas.height, requestId }, [buffer]);
-    } catch (error) {
-      console.error('Error in async crop:', error);
-      resolve(cropImageToContent(image));
-    }
-  });
 }

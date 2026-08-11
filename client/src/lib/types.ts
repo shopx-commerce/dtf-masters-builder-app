@@ -17,9 +17,10 @@ export interface ImageInfo {
    *  was trimmed off its page. The export re-renders from the page, so it has to
    *  reapply this to land on the same artwork the editor is showing. */
   vectorInkBox?: VectorInkBox;
-  /** Full-resolution print source preserved for HD export. For inline uploads
-   *  this is the post-crop, pre-downsample PNG; for server-prepared uploads it
-   *  is the user's untouched original file. `image` above is capped at
+  /** Full-resolution print source preserved for HD export. For uploads this is
+   *  the user's untouched original bytes, with any trim recorded in
+   *  `exportCrop` rather than baked in; edits and vector imports replace it
+   *  with their own pixels. `image` above is capped at
    *  MAX_STORED_IMAGE_DIMENSION for preview memory, so the export path decodes
    *  this blob just-in-time at the placement size to keep 300 DPI at print
    *  sizes larger than the preview cap. */

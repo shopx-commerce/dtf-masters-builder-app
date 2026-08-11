@@ -1,5 +1,11 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { cropImageToContent, cropImageToContentAsync, isOpaqueRasterUpload } from "@/lib/image-crop";
+import { isOpaqueRasterUpload } from "@/lib/image-crop";
+import {
+  drawContentPreview,
+  measureContentBox,
+  sourceSize,
+  type ContentBox,
+} from "@/lib/content-bounds";
 // `pdf-parser` and `svg-parser` are imported for their types only, and loaded
 // with `await import` at the point a vector file is actually parsed. They carry
 // the pdf.js engine and DOMPurify at module scope, which is roughly a third of
@@ -12,10 +18,17 @@ import { isSVGFile, isEPSFile, SvgTooComplexError } from "@/lib/vector-file";
 import { SvgRasterTimeoutError } from "@/lib/svg-raster";
 import { trimVectorImport } from "@/lib/vector-trim";
 import { runWithConcurrency, resolveUploadConcurrency } from "@/lib/upload-queue";
-import { checkFileSizeBudget, checkPixelBudget, VectorFileTooLargeError } from "@/lib/image-budget";
+import {
+  checkFileSizeBudget,
+  checkPixelBudget,
+  IOS_SAFE_CANVAS_DIM,
+  SAFARI_MAX_CANVAS_AREA,
+  VectorFileTooLargeError,
+} from "@/lib/image-budget";
 import {
   describeBudgetRejection,
   importRasterForEditor,
+  ownUploadedBytes,
   prepareRasterUpload,
   type PreparedRaster,
   PrepareNetworkError,
@@ -58,6 +71,20 @@ import { useUiActions, getUiSnapshot } from "@/state/ui-store";
  */
 function pngUploadName(name: string): string {
   return /\.png$/i.test(name) ? name : `${name.replace(/\.[^.]+$/, "")}.png`;
+}
+
+function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+}
+
+function decodeBlobToImage(blob: Blob): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Image load failed")); };
+    img.src = url;
+  });
 }
 
 /**
@@ -294,94 +321,99 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
   const handleFallbackImage = useCallback(async (
     file: File,
     image: HTMLImageElement,
-    opts?: { dpi?: number; skipCrop?: boolean }
+    opts?: { dpi?: number; skipCrop?: boolean; prepared?: PreparedRaster }
   ) => {
-    const dpi = await resolveUploadDpi(file, image, opts?.dpi);
+    const prepared = opts?.prepared;
+    const dpi = await resolveUploadDpi(file, image, opts?.dpi, prepared?.hasTransparency);
+    const { width: fbW, height: fbH } = sourceSize(image);
+    const cleanAlpha = (prepared?.binaryAlpha ?? false) || imageHasCleanAlpha(image);
 
-    let croppedCanvas: HTMLCanvasElement | null = null;
-    const fbW = image.naturalWidth || image.width;
-    const fbH = image.naturalHeight || image.height;
-    // Full-size canvas copy / getImageData crashes the tab on large 30"+
-    // rasters — skip inline canvas work entirely and use the original bytes.
-    const tooBigForInlineCanvas =
-      fbW * fbH > 16_000_000 || Math.max(fbW, fbH) > 4096;
-
-    if (opts?.skipCrop && !tooBigForInlineCanvas) {
-      const fullCanvas = document.createElement("canvas");
-      fullCanvas.width = image.width;
-      fullCanvas.height = image.height;
-      const ctx = fullCanvas.getContext("2d", { willReadFrequently: true });
-      if (ctx) {
-        ctx.drawImage(image, 0, 0);
-        croppedCanvas = fullCanvas;
-      }
+    // Recovery still trims. `measureContentBox` is bounded to one tile, so this
+    // path no longer has to choose between the artwork's real frame and not
+    // crashing on a large upload.
+    //
+    // `image` only decodes `file` on the inline path. When the server prepared
+    // the import, `image` is its preview and the box lining that preview up with
+    // the original already came back in `prepared` — measuring the preview
+    // instead would re-trim already-tight artwork and, worse, express the box in
+    // preview pixels while `exportBlob` below is the full-size original.
+    let box: ContentBox | null = prepared?.sourceCrop ?? null;
+    if (!prepared && !opts?.skipCrop) {
+      try {
+        box = await measureContentBox(image);
+      } catch { /* keep the full frame */ }
     }
-    if (!croppedCanvas && !tooBigForInlineCanvas) {
-      try { croppedCanvas = cropImageToContent(image); } catch { /* use original */ }
+    // Physical size follows the source pixels the box covers, not the preview's:
+    // a prepared preview is capped well below its original.
+    const sourcePxW = box?.width ?? fbW;
+    const sourcePxH = box?.height ?? fbH;
+
+    // A prepared preview is already cropped to `box`, so cutting it out again
+    // would crop twice.
+    const previewCanvas = drawContentPreview(image, prepared ? null : box, MAX_STORED_IMAGE_DIMENSION, {
+      pixelated: cleanAlpha,
+    });
+    const previewBlob = previewCanvas ? await canvasToPngBlob(previewCanvas) : null;
+    if (previewCanvas) {
+      previewCanvas.width = 0;
+      previewCanvas.height = 0;
     }
 
-    const processImage = (finalImage: HTMLImageElement, previewFile: File) => {
-      if (document.activeElement instanceof HTMLElement) {
-        document.activeElement.blur();
-      }
-      setIsUploading(false);
-
-      const { widthInches, heightInches } = inchesFromPixelsPair(
-        finalImage.naturalWidth || finalImage.width,
-        finalImage.naturalHeight || finalImage.height,
-        dpi,
-      );
-
-      const newImageInfo: ImageInfo = {
-        file: previewFile,
-        image: finalImage,
-        originalWidth: finalImage.width,
-        originalHeight: finalImage.height,
-        dpi,
-      };
-
-      applyImageDirectly(newImageInfo, widthInches, heightInches, imageHasCleanAlpha(finalImage));
-      if (isMobile) setMobilePanel("preview");
-
-      const effectiveDPI = Math.min(finalImage.width / widthInches, finalImage.height / heightInches);
-      if (effectiveDPI < LOW_RES_EFFECTIVE_DPI_THRESHOLD) {
-        toast({
-          title: t("toast.lowRes"),
-          description: t("toast.lowResDesc"),
-          variant: "warning",
+    // The preview is encoded rather than turned into a data URL because the
+    // bytes are needed twice: once to decode the preview, and once as the
+    // design's `file`. See the note in `handleImageUpload` on why `file` has to
+    // frame the artwork the same way `image` does.
+    let previewImage = image;
+    let previewFile = file;
+    if (previewBlob) {
+      try {
+        previewImage = await decodeBlobToImage(previewBlob);
+        previewFile = new File([previewBlob], pngUploadName(file.name), {
+          type: "image/png",
+          lastModified: file.lastModified,
         });
+      } catch {
+        previewImage = image;
+        previewFile = file;
       }
-    };
-
-    // The cropped canvas is encoded rather than turned into a data URL because
-    // the bytes are needed twice: once to decode the preview, and once as the
-    // design's `file` when cropping moved the artwork's frame. See the note in
-    // `handleImageUpload` on why `file` has to match `image`.
-    const croppedBlob = croppedCanvas
-      ? await new Promise<Blob | null>(res => croppedCanvas!.toBlob(res, "image/png"))
-      : null;
-    if (croppedCanvas && croppedBlob) {
-      const trimmed =
-        croppedCanvas.width !== image.width || croppedCanvas.height !== image.height;
-      const previewFile = trimmed
-        ? new File([croppedBlob], pngUploadName(file.name), {
-            type: "image/png",
-            lastModified: file.lastModified,
-          })
-        : file;
-      const objectUrl = URL.createObjectURL(croppedBlob);
-      const img = new Image();
-      img.onload = () => { URL.revokeObjectURL(objectUrl); processImage(img, previewFile); };
-      img.onerror = () => {
-        URL.revokeObjectURL(objectUrl);
-        setIsUploading(false);
-        processImage(image, file);
-      };
-      img.src = objectUrl;
-    } else {
-      processImage(image, file);
     }
-  }, [applyImageDirectly, isMobile, resolveUploadDpi, toast]);
+
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+    setIsUploading(false);
+
+    const { widthInches, heightInches } = inchesFromPixelsPair(sourcePxW, sourcePxH, dpi);
+
+    applyImageDirectly(
+      {
+        file: previewFile,
+        image: previewImage,
+        originalWidth: previewImage.naturalWidth || previewImage.width,
+        originalHeight: previewImage.naturalHeight || previewImage.height,
+        dpi,
+        // Recovery keeps a real print source too: the customer's own bytes,
+        // with the trim recorded as a window onto them rather than baked in.
+        // Previously this path shipped no `exportBlob` at all, so a recovered
+        // design printed from the editor preview.
+        exportBlob: prepared?.sourceBlob ?? (await ownUploadedBytes(file)),
+        exportCrop: box ?? undefined,
+      },
+      widthInches,
+      heightInches,
+      cleanAlpha,
+    );
+    if (isMobile) setMobilePanel("preview");
+
+    const effectiveDPI = Math.min(sourcePxW / widthInches, sourcePxH / heightInches);
+    if (effectiveDPI < LOW_RES_EFFECTIVE_DPI_THRESHOLD) {
+      toast({
+        title: t("toast.lowRes"),
+        description: t("toast.lowResDesc"),
+        variant: "warning",
+      });
+    }
+  }, [applyImageDirectly, isMobile, resolveUploadDpi, toast, t]);
 
   const handleImageUpload = useCallback(async (
     file: File,
@@ -459,27 +491,23 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
         Math.abs(imgWidthInches - artboardWidth) / Math.max(artboardWidth, 0.1) <= ARTBOARD_MATCH_TOLERANCE &&
         Math.abs(imgHeightInches - artboardHeight) / Math.max(artboardHeight, 0.1) <= ARTBOARD_MATCH_TOLERANCE;
 
-      const loadImageFromBlob = (blob: Blob): Promise<HTMLImageElement> =>
-        new Promise((res, rej) => {
-          const url = URL.createObjectURL(blob);
-          const img = new Image();
-          img.onload = () => { URL.revokeObjectURL(url); res(img); };
-          img.onerror = () => { URL.revokeObjectURL(url); rej(new Error("Image load failed")); };
-          img.src = url;
-        });
-
-      const canvasToBlob = (cvs: HTMLCanvasElement): Promise<Blob | null> =>
-        new Promise(res => cvs.toBlob(res, "image/png"));
-
       let exportBlob: Blob;
       let exportCrop: ImageInfo["exportCrop"];
       let croppedImg: HTMLImageElement;
       let inchWidthPx: number;
       let inchHeightPx: number;
+      /** Bytes matching `croppedImg`, for the draft `file`. Only the prepared
+       *  path leaves this to the storage downsample below. */
+      let previewBlob: Blob | null = null;
+
+      // Binary alpha means halftone-ready art, so every resample below has to
+      // stay hard-edged. Measured through a bounded probe on the source rather
+      // than on the preview that source is about to produce.
+      const cleanAlpha = (prepared?.binaryAlpha ?? false) || imageHasCleanAlpha(image);
 
       if (prepared) {
         // The server already oriented the source and measured its content box,
-        // so we skip the client full-res crop and never allocate a canvas at
+        // so we skip the client measurement and never allocate a canvas at
         // source size. The original file stays the print source untouched.
         setUploadProgress(60);
         exportBlob = prepared.sourceBlob;
@@ -488,74 +516,49 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
         inchWidthPx = sourceW;
         inchHeightPx = sourceH;
       } else {
-        const srcPxW = image.naturalWidth || image.width;
-        const srcPxH = image.naturalHeight || image.height;
-        // Full-size canvas copy / getImageData crashes Chrome on large 30"+
-        // rasters. Skip inline crop when the bitmap is too big and keep the
-        // original file as the print source (same as the prepare path).
-        const tooBigForInlineCanvas =
-          srcPxW * srcPxH > 16_000_000 || Math.max(srcPxW, srcPxH) > 4096;
+        const { width: srcPxW, height: srcPxH } = sourceSize(image);
 
-        let croppedCanvas: HTMLCanvasElement | null = null;
-        if (tooBigForInlineCanvas) {
-          croppedCanvas = null;
-        } else if (matchesArtboard) {
-          const fullCanvas = document.createElement("canvas");
-          fullCanvas.width = image.width;
-          fullCanvas.height = image.height;
-          const ctx = fullCanvas.getContext("2d", { willReadFrequently: true });
-          if (ctx) {
-            ctx.drawImage(image, 0, 0);
-            croppedCanvas = fullCanvas;
-          }
-        }
-        if (!croppedCanvas && !tooBigForInlineCanvas) {
-          if (isOpaqueRasterUpload(image)) {
-            const fullCanvas = document.createElement("canvas");
-            fullCanvas.width = image.width;
-            fullCanvas.height = image.height;
-            const fctx = fullCanvas.getContext("2d", { willReadFrequently: true });
-            if (fctx) {
-              fctx.drawImage(image, 0, 0);
-              croppedCanvas = fullCanvas;
-            }
-          } else {
-            croppedCanvas = await cropImageToContentAsync(image);
-          }
-        }
-        if (!croppedCanvas) {
-          if (tooBigForInlineCanvas) {
-            // Keep original bytes as the print source; the preview is
-            // downsampled below, so no full-size canvas is ever allocated.
-            setUploadProgress(60);
-            exportBlob = file;
-            croppedImg = image;
-            inchWidthPx = sourceW;
-            inchHeightPx = sourceH;
-          } else {
-            console.error("Failed to crop image, using original");
-            await handleFallbackImage(file, image, { dpi, skipCrop: matchesArtboard });
-            return;
-          }
-        } else {
-          setUploadProgress(60);
-          const blob = await canvasToBlob(croppedCanvas);
-          setUploadProgress(70);
-          if (!blob) {
-            await handleFallbackImage(file, image, { dpi, skipCrop: matchesArtboard });
-            return;
-          }
+        // A gangsheet-sized import is already the whole sheet, and an opaque
+        // upload's border is deliberate, so both keep the full frame.
+        // Everything else is measured, at every size: `measureContentBox` walks
+        // the source in fixed-size tiles, so there is no bitmap large enough to
+        // need a refusal here.
+        const box =
+          matchesArtboard || isOpaqueRasterUpload(image)
+            ? null
+            : await measureContentBox(image);
+        setUploadProgress(60);
 
-          try {
-            croppedImg = await loadImageFromBlob(blob);
-          } catch {
-            await handleFallbackImage(file, image, { dpi, skipCrop: matchesArtboard });
-            return;
-          }
-          exportBlob = blob;
-          inchWidthPx = croppedImg.naturalWidth || croppedImg.width;
-          inchHeightPx = croppedImg.naturalHeight || croppedImg.height;
+        // The trim is a window onto the customer's own bytes rather than a new
+        // bitmap: `exportCrop` is what the export, PDF, and cart paths decode
+        // through, so print keeps every pixel inside the box and nothing is
+        // re-encoded at any size. The bytes are copied out of the picked file
+        // because export happens much later; see `ownUploadedBytes`.
+        exportBlob = await ownUploadedBytes(file);
+        exportCrop = box ?? undefined;
+        inchWidthPx = box?.width ?? srcPxW;
+        inchHeightPx = box?.height ?? srcPxH;
+
+        const previewCanvas = drawContentPreview(image, box, MAX_STORED_IMAGE_DIMENSION, {
+          pixelated: cleanAlpha,
+        });
+        const blob = previewCanvas ? await canvasToPngBlob(previewCanvas) : null;
+        if (previewCanvas) {
+          previewCanvas.width = 0;
+          previewCanvas.height = 0;
         }
+        setUploadProgress(70);
+        if (!blob) {
+          await handleFallbackImage(file, image, { dpi, skipCrop: matchesArtboard });
+          return;
+        }
+        try {
+          croppedImg = await decodeBlobToImage(blob);
+        } catch {
+          await handleFallbackImage(file, image, { dpi, skipCrop: matchesArtboard });
+          return;
+        }
+        previewBlob = blob;
       }
 
       if (document.activeElement instanceof HTMLElement) {
@@ -578,17 +581,16 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
         downsampleCanvas.height = storedHeight;
         const dsCtx = downsampleCanvas.getContext("2d");
         if (!dsCtx) throw new Error("Could not create canvas context for downsampling");
-        const preserveCleanAlpha = prepared?.binaryAlpha || imageHasCleanAlpha(croppedImg);
-        dsCtx.imageSmoothingEnabled = !preserveCleanAlpha;
-        if (!preserveCleanAlpha) dsCtx.imageSmoothingQuality = "high";
+        dsCtx.imageSmoothingEnabled = !cleanAlpha;
+        if (!cleanAlpha) dsCtx.imageSmoothingQuality = "high";
         dsCtx.drawImage(croppedImg, 0, 0, storedWidth, storedHeight);
-        const dsBlob = await canvasToBlob(downsampleCanvas);
+        const dsBlob = await canvasToPngBlob(downsampleCanvas);
         downsampleCanvas.width = 0;
         downsampleCanvas.height = 0;
         setUploadProgress(85);
         if (dsBlob) {
           try {
-            croppedImg = await loadImageFromBlob(dsBlob);
+            croppedImg = await decodeBlobToImage(dsBlob);
             // The draft `file` below should persist these same downsampled
             // bytes, not the huge incoming original.
             downsampledPreviewBlob = dsBlob;
@@ -605,16 +607,14 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
 
       // `file` is what a draft save persists, and restore rebuilds `image` by
       // decoding it, so it has to frame the artwork the same way `image` does.
-      // The incoming upload does not whenever content-cropping trimmed
-      // transparent margin off it, or the server prepared the preview from it:
-      // the design's inch box describes the *cropped* artwork, so restore
-      // stretched the whole uncropped bitmap into that box and the artwork came
-      // back smaller, re-centred, with its margin reinstated — a recovered sheet
-      // printed differently from the one the customer built.
+      // The incoming upload does not whenever the trim took transparent margin
+      // off it, or the server prepared the preview from it: the design's inch
+      // box describes the *trimmed* artwork, so restore stretched the whole
+      // uncropped bitmap into that box and the artwork came back smaller,
+      // re-centred, with its margin reinstated — a recovered sheet printed
+      // differently from the one the customer built.
       let previewFile = file;
-      if (prepared) {
-        previewFile = prepared.previewFile;
-      } else if (downsampledPreviewBlob) {
+      if (downsampledPreviewBlob) {
         // Downsampled for storage: persist the same bytes `image` now shows so
         // a restored draft frames identically and never re-decodes a giant
         // original (which is kept separately in `exportBlob` for print).
@@ -622,14 +622,13 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
           type: "image/png",
           lastModified: file.lastModified,
         });
-      } else if (previewW !== image.width || previewH !== image.height) {
-        previewFile = new File([exportBlob], pngUploadName(file.name), {
+      } else if (prepared) {
+        previewFile = prepared.previewFile;
+      } else if (previewBlob) {
+        previewFile = new File([previewBlob], pngUploadName(file.name), {
           type: "image/png",
           lastModified: file.lastModified,
         });
-        // Identical bytes to the print source, so keep one Blob rather than two
-        // views of the same PNG.
-        exportBlob = previewFile;
       }
 
       const newImageInfo: ImageInfo = {
@@ -641,7 +640,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
         exportBlob,
         exportCrop,
       };
-      applyImageDirectly(newImageInfo, widthInches, heightInches, imageHasCleanAlpha(croppedImg));
+      applyImageDirectly(newImageInfo, widthInches, heightInches, cleanAlpha);
       if (isMobile) setMobilePanel("preview");
       if (matchesArtboard) {
         toast({ title: t("toast.gangsheetDetected"), description: t("toast.gangsheetDetectedDesc") });
@@ -667,7 +666,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
         const hIn = image.height / dpiFallback;
         const match = Math.abs(wIn - artboardWidth) / Math.max(artboardWidth, 0.1) <= 0.05 &&
           Math.abs(hIn - artboardHeight) / Math.max(artboardHeight, 0.1) <= 0.05;
-        await handleFallbackImage(file, image, { dpi: dpiFallback, skipCrop: match });
+        await handleFallbackImage(file, image, { dpi: dpiFallback, skipCrop: match, prepared });
       } catch (fallbackErr) {
         console.error("Fallback image processing also failed:", fallbackErr);
         toast({ title: t("toast.uploadFailed"), description: t("toast.uploadFailedDesc"), variant: "destructive" });
@@ -1052,7 +1051,17 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
           },
           onInline: async (rasterFile, img) => {
             const isPng = rasterFile.type === "image/png" || rasterFile.name.toLowerCase().endsWith(".png");
-            if (!isPng) {
+            // This re-encode needs a canvas at source size, which iOS Safari
+            // refuses past its ceiling by handing back a blank surface rather
+            // than an error — and the result becomes the design's print source,
+            // so a large JPEG imported as an empty sheet. Above the ceiling the
+            // original bytes go straight through instead: `handleImageUpload`
+            // reads any raster container, records the trim as a crop rect
+            // against those bytes, and encodes the editor preview as PNG itself.
+            const canConvertInline =
+              img.width * img.height <= SAFARI_MAX_CANVAS_AREA &&
+              Math.max(img.width, img.height) <= IOS_SAFE_CANVAS_DIM;
+            if (!isPng && canConvertInline) {
               const c = document.createElement("canvas");
               c.width = img.width;
               c.height = img.height;

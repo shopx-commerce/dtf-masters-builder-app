@@ -1,6 +1,7 @@
 import { StrokeSettings, ResizeSettings, ShapeSettings } from "@/components/image-editor";
 import { PDFDocument, PDFPage, rgb, PDFName, PDFArray, PDFDict, PDFStream, PDFRef } from 'pdf-lib';
 import { cropImageToContent, boundedImageCopyCanvas } from './image-crop';
+import { triggerDownload } from './download-file';
 
 export interface ContourPathResult {
   pathPoints: Array<{ x: number; y: number }>; // Points in inches
@@ -1965,18 +1966,9 @@ export async function downloadContourPDF(
   pdfDoc.setSubject('Contains CutContour spot color for cutting machines');
   pdfDoc.setKeywords(['CutContour', 'spot color', 'cutting', 'vector']);
   
-  // Save and download
   const pdfBytes = await pdfDoc.save();
   const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
-  const url = URL.createObjectURL(pdfBlob);
-  
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  triggerDownload(pdfBlob, filename, 'cutcontour');
 }
 
 // Download PDF with shape background and CutContour spot color outline
@@ -2158,18 +2150,9 @@ export async function downloadShapePDF(
   pdfDoc.setSubject('Contains CutContour spot color for cutting machines');
   pdfDoc.setKeywords(['CutContour', 'spot color', 'cutting', 'vector', 'shape']);
   
-  // Save and download
   const pdfBytes = await pdfDoc.save();
   const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
-  const url = URL.createObjectURL(pdfBlob);
-  
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  triggerDownload(pdfBlob, filename, 'cutcontour');
 }
 
 // Generate Contour PDF as base64 string (for email attachment)

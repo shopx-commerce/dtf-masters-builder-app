@@ -26,9 +26,18 @@ interface ExportInput {
   type: 'export';
   requestId: number;
   designs: DesignExportData[];
-  // Deduplicated source PNG buffers. If designs use `sourceIndex`, they refer
-  // into this array. Absent when the caller uses the older inline shape.
-  sources?: ArrayBuffer[];
+  /**
+   * Deduplicated source images. If designs use `sourceIndex`, they refer into
+   * this array. Absent when the caller uses the older inline shape.
+   *
+   * Blobs rather than ArrayBuffers on purpose. A Blob crosses to the worker as
+   * a reference to browser-managed storage, which can page to disk; reading
+   * every full-resolution upload into an ArrayBuffer first put all of them in
+   * the main thread's JS heap simultaneously, before a single pixel had been
+   * rendered. On a gangsheet with a dozen large uploads that was the peak of
+   * the whole export.
+   */
+  sources?: Blob[];
   outW: number;
   outH: number;
   exportDpi: number;
@@ -98,7 +107,12 @@ function stripHeightFor(outW: number): number {
   return Math.max(MIN_STRIP_HEIGHT, Math.min(MAX_STRIP_HEIGHT, byArea));
 }
 const BATCH_ROWS = 1024;
-const MAX_IDAT_BYTES = 2 * 1024 * 1024;
+/**
+ * How many bytes of finished IDAT chunks to hold in the heap before folding them
+ * into a Blob. This is the peak the PNG assembly costs, independent of how large
+ * the sheet is.
+ */
+const IDAT_FOLD_BYTES = 16 * 1024 * 1024;
 
 const CRC32_TABLE = (() => {
   const table = new Uint32Array(256);
@@ -188,7 +202,7 @@ type SourceBitmapCache = Map<string, ImageBitmap>;
  */
 async function getSourceBitmap(
   d: DesignExportData,
-  sources: ArrayBuffer[] | undefined,
+  sources: Blob[] | undefined,
   cache: SourceBitmapCache,
   targetW?: number,
   targetH?: number,
@@ -203,25 +217,32 @@ async function getSourceBitmap(
   const cached = cache.get(key);
   if (cached) return cached;
 
-  const buf = d.sourceIndex != null && sources ? sources[d.sourceIndex] : d.imageBuffer;
-  if (!buf) throw new Error('Export design is missing image data.');
-  const blob = new Blob([buf], { type: d.mimeType || 'image/png' });
+  const shared = d.sourceIndex != null && sources ? sources[d.sourceIndex] : undefined;
+  // The deduped shape hands us a Blob directly; the legacy inline shape still
+  // arrives as a buffer and has to be wrapped.
+  const blob = shared
+    ?? (d.imageBuffer ? new Blob([d.imageBuffer], { type: d.mimeType || 'image/png' }) : undefined);
+  if (!blob) throw new Error('Export design is missing image data.');
 
   const resizeQuality: ImageBitmapOptions['resizeQuality'] = d.alphaThresholded ? 'pixelated' : 'high';
+  // Crop rects are in EXIF-oriented pixels, and `createImageBitmap` does not
+  // reliably orient by default — see the note on `ORIENT_FROM_IMAGE` in
+  // `image-editor/utils.ts`. Without this a rotated JPEG prints the wrong slice.
+  const orient: ImageBitmapOptions = { imageOrientation: 'from-image' };
   const shouldResize =
     wantW > 0 && wantH > 0 &&
     (!crop || wantW < crop.width || wantH < crop.height);
-  const options: ImageBitmapOptions | undefined = shouldResize
-    ? { resizeWidth: wantW, resizeHeight: wantH, resizeQuality }
-    : undefined;
+  const options: ImageBitmapOptions = shouldResize
+    ? { ...orient, resizeWidth: wantW, resizeHeight: wantH, resizeQuality }
+    : { ...orient };
 
   let bitmap: ImageBitmap;
   if (crop) {
     bitmap = await createImageBitmap(blob, crop.x, crop.y, crop.width, crop.height, options);
-  } else if (options) {
+  } else if (shouldResize) {
     // Without a crop rect we only know the source size after a probe decode,
     // so clamp the request to the natural size to avoid upscaling here.
-    const probe = await createImageBitmap(blob);
+    const probe = await createImageBitmap(blob, orient);
     if (wantW >= probe.width && wantH >= probe.height) {
       cache.set(key, probe);
       return probe;
@@ -229,7 +250,7 @@ async function getSourceBitmap(
     bitmap = await createImageBitmap(probe, 0, 0, probe.width, probe.height, options);
     probe.close();
   } else {
-    bitmap = await createImageBitmap(blob);
+    bitmap = await createImageBitmap(blob, orient);
   }
   cache.set(key, bitmap);
   return bitmap;
@@ -321,7 +342,7 @@ async function drawDesignsOnStrip(
   stripY: number,
   stripH: number,
   exportDpi: number,
-  sources: ArrayBuffer[] | undefined,
+  sources: Blob[] | undefined,
   bitmapCache: SourceBitmapCache,
   stampCache: StampCache,
   stampCacheState: { totalBytes: number },
@@ -489,7 +510,7 @@ async function writeStripRows(
   return sawInk;
 }
 
-async function buildPngStreaming(input: ExportInput): Promise<Uint8Array> {
+async function buildPngStreaming(input: ExportInput): Promise<Blob> {
   const { designs, sources, outW, outH, exportDpi } = input;
   const ppm = Math.round(exportDpi / 0.0254);
   const designBounds: DesignExportBounds[] = designs.map((design) => {
@@ -541,13 +562,41 @@ async function buildPngStreaming(input: ExportInput): Promise<Uint8Array> {
   const cs = new CompressionStream('deflate');
   const writer = cs.writable.getWriter();
 
-  const compressedParts: Uint8Array[] = [];
+  /**
+   * The finished file, assembled incrementally.
+   *
+   * Previously this accumulated the entire compressed stream, concatenated it
+   * into one buffer, re-chunked that into IDATs, and concatenated again into a
+   * contiguous Uint8Array — four full-size copies of a file that can be 150 MB
+   * — and then transferred it as an ArrayBuffer the main thread copied once
+   * more into a Blob.
+   *
+   * Instead each compressed chunk becomes its own IDAT as it arrives, and the
+   * accumulated chunks are periodically folded into a Blob. A PNG may carry any
+   * number of IDAT chunks and decoders concatenate their contents, so the image
+   * is byte-identical apart from ~12 bytes of chunk framing per chunk. Peak
+   * memory becomes the fold threshold rather than the file.
+   */
+  const fileParts: BlobPart[] = [signature, ihdrChunk, physChunk];
+  let pending: Uint8Array[] = [];
+  let pendingBytes = 0;
+  const foldPendingIntoBlob = () => {
+    if (pending.length === 0) return;
+    fileParts.push(new Blob(pending));
+    pending = [];
+    pendingBytes = 0;
+  };
+
   const reader = cs.readable.getReader();
   const readPromise = (async () => {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      compressedParts.push(new Uint8Array(value));
+      if (!value || value.length === 0) continue;
+      const chunk = makePngChunk('IDAT', value);
+      pending.push(chunk);
+      pendingBytes += chunk.length;
+      if (pendingBytes >= IDAT_FOLD_BYTES) foldPendingIntoBlob();
     }
   })();
 
@@ -680,34 +729,12 @@ async function buildPngStreaming(input: ExportInput): Promise<Uint8Array> {
     throw err;
   }
 
-  let totalCompressed = 0;
-  for (const p of compressedParts) totalCompressed += p.length;
-  const compressed = new Uint8Array(totalCompressed);
-  let pos = 0;
-  for (const p of compressedParts) {
-    compressed.set(p, pos);
-    pos += p.length;
-  }
-
-  const idatChunks: Uint8Array[] = [];
-  for (let i = 0; i < compressed.length; i += MAX_IDAT_BYTES) {
-    idatChunks.push(makePngChunk('IDAT', compressed.subarray(i, Math.min(i + MAX_IDAT_BYTES, compressed.length))));
-  }
-
-  const iendChunk = makePngChunk('IEND', new Uint8Array(0));
-
-  const parts = [signature, ihdrChunk, physChunk, ...idatChunks, iendChunk];
-  const totalLen = parts.reduce((sum, part) => sum + part.length, 0);
-  const out = new Uint8Array(totalLen);
-  pos = 0;
-  for (const part of parts) {
-    out.set(part, pos);
-    pos += part.length;
-  }
-  return out;
+  pending.push(makePngChunk('IEND', new Uint8Array(0)));
+  foldPendingIntoBlob();
+  return new Blob(fileParts, { type: 'image/png' });
 }
 
-async function runExportLegacy(input: ExportInput): Promise<Uint8Array> {
+async function runExportLegacy(input: ExportInput): Promise<Blob> {
   const { designs, sources, outW, outH, exportDpi } = input;
 
   const canvas = new OffscreenCanvas(outW, outH);
@@ -811,14 +838,7 @@ async function runExportLegacy(input: ExportInput): Promise<Uint8Array> {
     completed: 0,
     total: 1,
   });
-  const totalLen = parts.reduce((sum, part) => sum + part.length, 0);
-  const out = new Uint8Array(totalLen);
-  let writePos = 0;
-  for (const part of parts) {
-    out.set(part, writePos);
-    writePos += part.length;
-  }
-  return out;
+  return new Blob(parts, { type: 'image/png' });
 }
 
 const hasStreaming = typeof CompressionStream !== 'undefined';
@@ -900,14 +920,14 @@ self.onmessage = async function(e: MessageEvent) {
   if (e.data.type === 'export') {
     const designs = e.data.designs as ExportInput['designs'] | undefined;
     try {
-      const bytes = hasStreaming
+      const blob = hasStreaming
         ? await buildPngStreaming(e.data)
         : await runExportLegacy(e.data);
-      const buffer = bytes.buffer as ArrayBuffer;
-      (self as unknown as Worker).postMessage(
-        { type: 'result', requestId: e.data.requestId, buffer, byteLength: bytes.byteLength },
-        [buffer],
-      );
+      // Posted as a Blob, with no transfer list — Blobs are not transferable,
+      // and they do not need to be. The main thread receives a reference to the
+      // same browser-managed storage instead of copying the whole sheet into its
+      // own heap the way a transferred ArrayBuffer forced it to.
+      self.postMessage({ type: 'result', requestId: e.data.requestId, blob, byteLength: blob.size });
     } catch (err: any) {
       self.postMessage({ type: 'error', requestId: e.data.requestId, error: err?.message || 'Export failed' });
     }

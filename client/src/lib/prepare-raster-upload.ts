@@ -29,7 +29,11 @@ export interface PreparedRaster {
   /** Editor-sized preview decoded from the server response. */
   previewImage: HTMLImageElement;
   previewFile: File;
-  /** Full-resolution print source: the user's original, untouched bytes. */
+  /**
+   * Full-resolution print source: the user's original, untouched bytes, copied
+   * out of the picked file so the export does not depend on it still being on
+   * disk. See `ownUploadedBytes`.
+   */
   sourceBlob: Blob;
   /** Content box inside `sourceBlob` that `previewImage` represents. */
   sourceCrop: SourceCrop;
@@ -45,6 +49,30 @@ export interface PreparedRaster {
 }
 
 export type RejectReason = "too_many_pixels" | "file_too_large" | "unreadable_dimensions";
+
+/**
+ * Take ownership of a picked file's bytes.
+ *
+ * A `File` from a picker or a drop is a *reference* to a path on disk plus the
+ * size and modification time it had when it was chosen. Nothing is read until
+ * something reads it, and if the file has moved, been renamed or deleted, been
+ * re-saved by the customer, or been turned back into a cloud placeholder by
+ * OneDrive or Dropbox in the meantime, that read fails.
+ *
+ * That matters because this file is the design's *print source*: the export
+ * decodes it at the placement size when Download is pressed, which can be an
+ * hour after the upload. Retaining the reference means a gangsheet quietly
+ * depends on the customer's folder staying untouched for the whole session, and
+ * it fails at the last possible step, after the sheet has rendered.
+ *
+ * The read costs one pass over the file here, while it is certainly still
+ * there. The bytes then live in browser-managed blob storage, which can page to
+ * disk, so this buys independence from the filesystem rather than heap.
+ */
+export async function ownUploadedBytes(file: File): Promise<Blob> {
+  const bytes = await file.arrayBuffer();
+  return new Blob([bytes], { type: file.type || "application/octet-stream" });
+}
 
 function loadImageFromBlob(blob: Blob): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -293,7 +321,7 @@ async function prepareRasterUploadInner(file: File): Promise<PreparedRaster> {
   return {
     previewImage,
     previewFile: new File([previewBlob], `${baseName}.png`, { type: "image/png" }),
-    sourceBlob: file,
+    sourceBlob: await ownUploadedBytes(file),
     sourceCrop: {
       x: Math.max(0, num("X-Anynest-Crop-X") || 0),
       y: Math.max(0, num("X-Anynest-Crop-Y") || 0),
