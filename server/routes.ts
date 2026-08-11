@@ -1,6 +1,9 @@
 import type { Express, NextFunction, Request, Response as ExpressResponse } from "express";
 import { createServer, type Server } from "http";
 import multer from "multer";
+import os from "os";
+import path from "path";
+import { mkdirSync, promises as fsp } from "fs";
 import sharp from "sharp";
 import express from "express";
 import rateLimit from "express-rate-limit";
@@ -26,6 +29,12 @@ import {
 } from "./lib/safe-external-url";
 
 import sgMail from "@sendgrid/mail";
+
+// Every customer upload is unique, so libvips' decoded-image cache gets no
+// reuse — on a memory-tight production instance it only raises resident
+// memory between requests. (Production has been OOM-killed; see the
+// prepare-slot gate below.)
+sharp.cache(false);
 
 // ─── Shopify helpers ────────────────────────────────────────────────────────
 
@@ -356,22 +365,35 @@ function sniffRasterFormat(buffer: Buffer): RasterFormat | null {
 
 class UnsupportedRasterError extends Error {}
 
+/** First bytes of an upload, whether it arrived as a buffer or a temp file. */
+async function readLeadingBytes(input: Buffer | string, count: number): Promise<Buffer> {
+  if (Buffer.isBuffer(input)) return input.subarray(0, count);
+  const handle = await fsp.open(input, "r");
+  try {
+    const buf = Buffer.alloc(count);
+    const { bytesRead } = await handle.read(buf, 0, count, 0);
+    return buf.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
 /**
  * Confirm a buffer really is one of the accepted raster formats, first from
  * its magic bytes and then from libvips' own verdict, before any pipeline work
  * runs against it.
  */
 async function assertAllowedRasterFormat(
-  buffer: Buffer,
+  input: Buffer | string,
   allowed: readonly RasterFormat[],
 ): Promise<sharp.Metadata> {
-  const sniffed = sniffRasterFormat(buffer);
+  const sniffed = sniffRasterFormat(await readLeadingBytes(input, 12));
   if (!sniffed || !allowed.includes(sniffed)) {
     throw new UnsupportedRasterError(
       `Unsupported image format. Only ${allowed.join(", ").toUpperCase()} files are accepted.`,
     );
   }
-  const metadata = await sharp(buffer, {
+  const metadata = await sharp(input, {
     failOn: "none",
     limitInputPixels: SHARP_PIXEL_LIMIT,
   }).metadata();
@@ -384,8 +406,57 @@ async function assertAllowedRasterFormat(
   return metadata;
 }
 
+/**
+ * App-owned temp directory for raster upload bodies, with an age-gated
+ * reaper. The reaper is defense in depth: the abort handler below cleans up
+ * promptly, and anything that slips past it (process crash mid-write) is
+ * swept within the hour. The age gate keeps a reap from touching files that
+ * belong to requests still in flight.
+ */
+const RASTER_TMP_DIR = path.join(os.tmpdir(), "anynest-raster-uploads");
+mkdirSync(RASTER_TMP_DIR, { recursive: true });
+const RASTER_TMP_MAX_AGE_MS = 60 * 60 * 1000;
+
+async function reapStaleRasterTemp(): Promise<void> {
+  try {
+    const names = await fsp.readdir(RASTER_TMP_DIR);
+    const cutoff = Date.now() - RASTER_TMP_MAX_AGE_MS;
+    for (const name of names) {
+      const filePath = path.join(RASTER_TMP_DIR, name);
+      try {
+        const stats = await fsp.stat(filePath);
+        if (stats.mtimeMs < cutoff) await fsp.unlink(filePath);
+      } catch {}
+    }
+  } catch {}
+}
+void reapStaleRasterTemp();
+setInterval(() => void reapStaleRasterTemp(), RASTER_TMP_MAX_AGE_MS).unref();
+
+/**
+ * Temp paths created for a request, recorded the moment the storage engine
+ * names the file — multer's disk storage does NOT clean up when the client
+ * disconnects mid-body (its cleanup covers only its own limit/parse errors),
+ * and the route handler's `finally` never runs because the handler is never
+ * reached. The abort middleware below unlinks these on premature close.
+ */
+const rasterTempPaths = new WeakMap<Request, string[]>();
+
 const rasterUpload = multer({
-  storage: multer.memoryStorage(),
+  // Disk, not memory: bodies here run up to 100 MB, and several customers
+  // uploading at once used to hold every one of them in RAM at the same
+  // time — a direct contributor to production OOM kills. libvips also
+  // streams a large decode from a file more frugally than from a buffer.
+  storage: multer.diskStorage({
+    destination: RASTER_TMP_DIR,
+    filename: (req, _file, cb) => {
+      const name = `${nanoid(24)}.upload`;
+      const list = rasterTempPaths.get(req as Request) ?? [];
+      list.push(path.join(RASTER_TMP_DIR, name));
+      rasterTempPaths.set(req as Request, list);
+      cb(null, name);
+    },
+  }),
   limits: {
     fileSize: MAX_PREPARE_FILE_BYTES,
     fieldSize: 10 * 1024 * 1024,
@@ -406,6 +477,60 @@ const rasterUpload = multer({
     else cb(new Error("Only PNG, JPEG, and WebP files are allowed"));
   },
 });
+
+/**
+ * Delete a request's raster temp files when the connection closes before a
+ * response was completed — the client-abort window multer leaves uncovered.
+ * When the handler DID finish (`writableEnded`), its own `finally` owns
+ * cleanup and this stays out of the way. Double-unlinks are harmless: every
+ * unlink here and in the handlers swallows ENOENT.
+ */
+function cleanupRasterTempOnAbort(req: Request, res: ExpressResponse, next: NextFunction): void {
+  res.on("close", () => {
+    if (res.writableEnded) return;
+    const paths = rasterTempPaths.get(req);
+    if (!paths) return;
+    for (const filePath of paths) {
+      void fsp.unlink(filePath).catch(() => {});
+    }
+  });
+  next();
+}
+
+/**
+ * One heavy decode at a time.
+ *
+ * A single 150 MP prepare peaks at hundreds of MB inside libvips, and
+ * concurrent decodes stack that peak per request — production has been
+ * OOM-killed (`signal: killed` in the deployment log) exactly this way.
+ * A short FIFO absorbs bursts; past that, callers shed with 503, which the
+ * builder's prepare retry already treats as transient and re-attempts with
+ * backoff.
+ */
+const PREPARE_MAX_QUEUE = 8;
+let prepareSlotBusy = false;
+const prepareSlotWaiters: Array<(release: () => void) => void> = [];
+
+function makePrepareRelease(): () => void {
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const next = prepareSlotWaiters.shift();
+    if (next) next(makePrepareRelease());
+    else prepareSlotBusy = false;
+  };
+}
+
+/** Resolves with a release fn, or null when the queue is full (caller sheds). */
+async function acquirePrepareSlot(): Promise<(() => void) | null> {
+  if (!prepareSlotBusy) {
+    prepareSlotBusy = true;
+    return makePrepareRelease();
+  }
+  if (prepareSlotWaiters.length >= PREPARE_MAX_QUEUE) return null;
+  return new Promise((resolve) => prepareSlotWaiters.push(resolve));
+}
 
 // ─── Proxy response hardening ────────────────────────────────────────────────
 
@@ -589,7 +714,7 @@ type SharpReadOpts = {
  * answer trustworthy. Roughly a megabyte even for a 150 MP source.
  */
 async function probeAlpha(
-  buffer: Buffer,
+  buffer: Buffer | string,
   sharpOpts: SharpReadOpts,
   srcW: number,
   srcH: number,
@@ -640,7 +765,7 @@ async function probeAlpha(
  * or held in memory.
  */
 async function measureContentBounds(
-  buffer: Buffer,
+  buffer: Buffer | string,
   sharpOpts: SharpReadOpts,
   srcW: number,
   srcH: number,
@@ -1440,13 +1565,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/image-info", rasterUpload.single("image"), async (req, res) => {
+  app.post("/api/image-info", cleanupRasterTempOnAbort, rasterUpload.single("image"), async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ error: "No image file provided" });
       }
 
-      const metadata = await assertAllowedRasterFormat(req.file.buffer, ["png", "jpeg", "webp"]);
+      const metadata = await assertAllowedRasterFormat(req.file.path, ["png", "jpeg", "webp"]);
 
       res.json({
         width: metadata.width,
@@ -1468,6 +1593,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         error: "Failed to extract image metadata",
         details: error instanceof Error ? error.message : "Unknown error",
       });
+    } finally {
+      if (req.file?.path) {
+        void fsp.unlink(req.file.path).catch(() => {});
+      }
     }
   });
 
@@ -1482,9 +1611,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
    * whether the source alpha is binary (so halftone-ready art keeps hard
    * edges instead of being resampled soft).
    */
-  app.post("/api/prepare-raster-upload", rasterUpload.single("image"), async (req, res) => {
+  app.post("/api/prepare-raster-upload", cleanupRasterTempOnAbort, rasterUpload.single("image"), async (req, res) => {
+    const uploadedPath = req.file?.path;
+    let releasePrepareSlot: (() => void) | null = null;
     try {
-      if (!req.file) {
+      if (!req.file || !uploadedPath) {
         return res.status(400).json({ error: "No image file provided" });
       }
 
@@ -1494,7 +1625,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         limitInputPixels: SHARP_PIXEL_LIMIT,
       };
 
-      const meta = await assertAllowedRasterFormat(req.file.buffer, ["png", "jpeg", "webp"]);
+      const meta = await assertAllowedRasterFormat(uploadedPath, ["png", "jpeg", "webp"]);
       // `metadata()` reports pre-rotation dimensions; EXIF orientations 5-8
       // swap the axes once `.rotate()` auto-orients the pipeline.
       const swapAxes = (meta.orientation ?? 0) >= 5;
@@ -1511,15 +1642,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
+      // Everything above touched only the file header; the full-image decode
+      // passes start here, so this is where the memory gate goes.
+      releasePrepareSlot = await acquirePrepareSlot();
+      if (!releasePrepareSlot) {
+        res.set("Retry-After", "10");
+        return res.status(503).json({
+          error: "The server is busy preparing other images. Please try again in a moment.",
+        });
+      }
+
       // Crop to content only for genuinely cut-out artwork. A PNG that carries
       // an alpha channel but no transparent pixels is treated like a photo:
       // trimming it would eat a deliberate solid border, which is exactly what
       // the inline path's opaque-raster branch avoids.
       const alpha = meta.hasAlpha
-        ? await probeAlpha(req.file.buffer, sharpOpts, srcW, srcH)
+        ? await probeAlpha(uploadedPath, sharpOpts, srcW, srcH)
         : { hasTransparentPixels: false, binaryAlpha: false };
       const bounds = alpha.hasTransparentPixels
-        ? await measureContentBounds(req.file.buffer, sharpOpts, srcW, srcH)
+        ? await measureContentBounds(uploadedPath, sharpOpts, srcW, srcH)
         : { left: 0, top: 0, width: srcW, height: srcH };
 
       const previewScale = fitWithinMegapixels(
@@ -1531,7 +1672,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const previewW = Math.max(1, Math.round(bounds.width * previewScale));
       const previewH = Math.max(1, Math.round(bounds.height * previewScale));
 
-      let pipeline = sharp(req.file.buffer, sharpOpts).rotate();
+      let pipeline = sharp(uploadedPath, sharpOpts).rotate();
       if (bounds.width !== srcW || bounds.height !== srcH) {
         pipeline = pipeline.extract({
           left: bounds.left,
@@ -1601,6 +1742,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         error: "Failed to prepare image for import",
         details: message,
       });
+    } finally {
+      releasePrepareSlot?.();
+      if (uploadedPath) {
+        void fsp.unlink(uploadedPath).catch(() => {});
+      }
     }
   });
 
