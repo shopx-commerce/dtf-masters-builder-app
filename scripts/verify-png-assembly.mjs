@@ -1,249 +1,95 @@
 /**
- * Proof that the export worker's PNG assembly is lossless.
+ * Proof that the export worker's PNG assembly is lossless, and that a sheet
+ * rendered as parallel bands is byte-for-byte the sheet rendered serially.
  *
- * The worker used to accumulate the whole compressed stream, concatenate it,
- * re-chunk it into IDATs, and concatenate again — four full-size copies of a file
- * that can be 150 MB. It now wraps each compressed chunk in its own IDAT as it
- * arrives and folds them into a Blob periodically. That is legal PNG (a decoder
- * concatenates IDAT contents), but "legal" is not "identical", and this is the
- * file a print shop prints, so it gets checked rather than reasoned about.
+ * Two claims are checked, both about a file a print shop prints:
  *
- * The pure functions below are copied verbatim from
- * `client/src/lib/export-worker.ts`. Anything reimplemented here would prove
- * something about this file rather than about the worker — so if the worker's
- * filter or chunking changes, re-copy them rather than adapting them.
+ *  1. Chunked IDATs folded into a Blob decode to exactly the pixels that went
+ *     in, at the right size and DPI. That is legal PNG — a decoder concatenates
+ *     IDAT contents — but "legal" is not "identical".
+ *  2. Filtering a strip as a band, using the row above it as the "up" reference,
+ *     produces the same bytes as filtering it inline in one continuous pass.
+ *     This is the whole reason a band renders one extra row: without it the
+ *     first row of every band would have to fall back to None/Sub and the file
+ *     would differ. A difference here would not throw anywhere — it would just
+ *     be a slightly different, still-valid file, so it has to be measured.
+ *
+ * The functions under test are lifted out of the real sources at run time and
+ * compiled, rather than copied into this file. An earlier version of this script
+ * kept verbatim copies and they went stale the moment the worker's filter
+ * changed, which meant it was proving something about itself.
  *
  *   node scripts/verify-png-assembly.mjs
  */
 
 import sharp from "sharp";
+import { compileDeclarations, extract, readSource as read } from "./lib/extract-ts.mjs";
 
-// ── verbatim from export-worker.ts ────────────────────────────────────────────
+/** Compile the real declarations into a module this script can call. */
+async function loadWorkerInternals() {
+  const budget = read("client/src/lib/image-budget.ts");
+  const stream = read("client/src/lib/png-stream.ts");
+  const worker = read("client/src/lib/export-worker.ts");
 
-const BATCH_ROWS = 1024;
+  const pieces = [
+    extract(budget, "IOS_SAFE_CANVAS_DIM", "image-budget.ts"),
+    extract(budget, "SAFARI_MAX_CANVAS_AREA", "image-budget.ts"),
+    extract(stream, "MAX_STRIP_HEIGHT", "png-stream.ts"),
+    extract(stream, "MIN_STRIP_HEIGHT", "png-stream.ts"),
+    extract(stream, "stripHeightFor", "png-stream.ts"),
+    extract(stream, "stripRangesFor", "png-stream.ts"),
+    extract(stream, "CRC32_TABLE", "png-stream.ts"),
+    extract(stream, "crc32", "png-stream.ts"),
+    extract(stream, "makePngChunk", "png-stream.ts"),
+    extract(stream, "pngHeaderParts", "png-stream.ts"),
+    extract(worker, "BATCH_ROWS", "export-worker.ts"),
+    extract(worker, "IDAT_FOLD_BYTES", "export-worker.ts"),
+    extract(worker, "paethPredictor", "export-worker.ts"),
+    extract(worker, "FILTER_SCORE_STRIDE", "export-worker.ts"),
+    extract(worker, "filterRowAdaptive", "export-worker.ts"),
+    extract(worker, "isRowAllZero", "export-worker.ts"),
+    extract(worker, "writeEmptyRows", "export-worker.ts"),
+    extract(worker, "writeStripRows", "export-worker.ts"),
+    extract(worker, "PngSink", "export-worker.ts"),
+    extract(worker, "filterBandToBuffer", "export-worker.ts"),
+  ];
 
-const CRC32_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let i = 0; i < 256; i++) {
-    let c = i;
-    for (let j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
-    table[i] = c >>> 0;
-  }
-  return table;
-})();
-
-function crc32(data) {
-  let c = 0xFFFFFFFF;
-  for (let i = 0; i < data.length; i++) {
-    c = CRC32_TABLE[(c ^ data[i]) & 0xFF] ^ (c >>> 8);
-  }
-  return (c ^ 0xFFFFFFFF) >>> 0;
+  return compileDeclarations({
+    prelude: "interface FilteredRowSink { write(bytes: Uint8Array): Promise<void>; }",
+    pieces,
+    exports: [
+      "stripRangesFor", "stripHeightFor", "makePngChunk", "pngHeaderParts",
+      "filterRowAdaptive", "isRowAllZero", "writeEmptyRows", "writeStripRows",
+      "filterBandToBuffer", "PngSink", "BATCH_ROWS", "IDAT_FOLD_BYTES",
+      "FILTER_SCORE_STRIDE",
+    ],
+  });
 }
 
-function makePngChunk(type, data) {
-  const chunk = new Uint8Array(12 + data.length);
-  const dv = new DataView(chunk.buffer);
-  dv.setUint32(0, data.length);
-  chunk[4] = type.charCodeAt(0);
-  chunk[5] = type.charCodeAt(1);
-  chunk[6] = type.charCodeAt(2);
-  chunk[7] = type.charCodeAt(3);
-  chunk.set(data, 8);
-  dv.setUint32(8 + data.length, crc32(chunk.subarray(4, 8 + data.length)));
-  return chunk;
-}
+const W = {};
 
-function paethPredictor(a, b, c) {
-  const p = a + b - c;
-  const pa = p >= a ? p - a : a - p;
-  const pb = p >= b ? p - b : b - p;
-  const pc = p >= c ? p - c : c - p;
-  if (pa <= pb && pa <= pc) return a;
-  if (pb <= pc) return b;
-  return c;
-}
-
-function filterRowAdaptive(cur, prev, bpp, rowBytes, scratch, out, outOff) {
-  const { sub, up, avg, paeth } = scratch;
-  let sNone = 0, sSub = 0, sUp = 0, sAvg = 0, sPaeth = 0;
-  for (let i = 0; i < rowBytes; i++) {
-    const x = cur[i];
-    const a = i >= bpp ? cur[i - bpp] : 0;
-    const b = prev[i];
-    const c = i >= bpp ? prev[i - bpp] : 0;
-
-    sNone += x < 128 ? x : 256 - x;
-
-    const vs = (x - a) & 0xff; sub[i] = vs; sSub += vs < 128 ? vs : 256 - vs;
-    const vu = (x - b) & 0xff; up[i] = vu; sUp += vu < 128 ? vu : 256 - vu;
-    const vg = (x - ((a + b) >> 1)) & 0xff; avg[i] = vg; sAvg += vg < 128 ? vg : 256 - vg;
-    const vp = (x - paethPredictor(a, b, c)) & 0xff; paeth[i] = vp; sPaeth += vp < 128 ? vp : 256 - vp;
-  }
-
-  let best = 0, bestSum = sNone;
-  if (sSub < bestSum) { best = 1; bestSum = sSub; }
-  if (sUp < bestSum) { best = 2; bestSum = sUp; }
-  if (sAvg < bestSum) { best = 3; bestSum = sAvg; }
-  if (sPaeth < bestSum) { best = 4; }
-
-  out[outOff] = best;
-  const d = outOff + 1;
-  switch (best) {
-    case 0: out.set(cur, d); break;
-    case 1: out.set(sub, d); break;
-    case 2: out.set(up, d); break;
-    case 3: out.set(avg, d); break;
-    default: out.set(paeth, d); break;
+/** Collects everything written to it, so filtered bytes can be compared. */
+class CollectingSink {
+  constructor() { this.parts = []; }
+  async write(bytes) { this.parts.push(Uint8Array.from(bytes)); }
+  bytes() {
+    let total = 0;
+    for (const p of this.parts) total += p.length;
+    const out = new Uint8Array(total);
+    let pos = 0;
+    for (const p of this.parts) { out.set(p, pos); pos += p.length; }
+    return out;
   }
 }
 
-async function writeEmptyRows(writer, _outW, rowCount, _emptyRow, filteredRowLen) {
-  for (let startRow = 0; startRow < rowCount; startRow += BATCH_ROWS) {
-    const batchCount = Math.min(BATCH_ROWS, rowCount - startRow);
-    const batch = new Uint8Array(batchCount * filteredRowLen);
-    await writer.write(batch);
-  }
-}
+// ── synthetic sheets ─────────────────────────────────────────────────────────
 
-function isRowAllZero(pixels, offset, length) {
-  const end = offset + length;
-  let i = offset;
-  for (; i + 8 <= end; i += 8) {
-    if (
-      pixels[i] | pixels[i + 1] | pixels[i + 2] | pixels[i + 3] |
-      pixels[i + 4] | pixels[i + 5] | pixels[i + 6] | pixels[i + 7]
-    ) return false;
-  }
-  for (; i < end; i++) {
-    if (pixels[i]) return false;
-  }
-  return true;
-}
-
-async function writeStripRows(writer, pixels, stripH, filteredRowLen, rowBytes, bpp, prevRow, scratch) {
-  let sawInk = false;
-  for (let startRow = 0; startRow < stripH; startRow += BATCH_ROWS) {
-    const endRow = Math.min(startRow + BATCH_ROWS, stripH);
-    const batchCount = endRow - startRow;
-    const batch = new Uint8Array(batchCount * filteredRowLen);
-    for (let r = 0; r < batchCount; r++) {
-      const rowIdx = startRow + r;
-      const rowStart = rowIdx * rowBytes;
-      const cur = pixels.subarray(rowStart, rowStart + rowBytes);
-      if (isRowAllZero(pixels, rowStart, rowBytes)) {
-        prevRow.fill(0);
-      } else {
-        sawInk = true;
-        filterRowAdaptive(cur, prevRow, bpp, rowBytes, scratch, batch, r * filteredRowLen);
-        prevRow.set(cur);
-      }
-    }
-    await writer.write(batch);
-  }
-  return sawInk;
-}
-
-// ── the assembly under test, mirroring buildPngStreaming ──────────────────────
-
-/**
- * `strips` mirrors the worker's per-strip decision: an `empty` strip takes the
- * `writeEmptyRows` path (what a region of the sheet with no designs in it does),
- * a `pixels` strip goes through `writeStripRows`.
- */
-async function buildPng({ outW, outH, dpi, strips, foldBytes }) {
-  const ppm = Math.round(dpi / 0.0254);
-  const signature = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
-
-  const ihdrData = new Uint8Array(13);
-  const ihdrDv = new DataView(ihdrData.buffer);
-  ihdrDv.setUint32(0, outW);
-  ihdrDv.setUint32(4, outH);
-  ihdrData[8] = 8;
-  ihdrData[9] = 6;
-  const ihdrChunk = makePngChunk("IHDR", ihdrData);
-
-  const physData = new Uint8Array(9);
-  const physDv = new DataView(physData.buffer);
-  physDv.setUint32(0, ppm);
-  physDv.setUint32(4, ppm);
-  physData[8] = 1;
-  const physChunk = makePngChunk("pHYs", physData);
-
-  const cs = new CompressionStream("deflate");
-  const writer = cs.writable.getWriter();
-
-  const fileParts = [signature, ihdrChunk, physChunk];
-  let pending = [];
-  let pendingBytes = 0;
-  let idatCount = 0;
-  let foldCount = 0;
-  const foldPendingIntoBlob = () => {
-    if (pending.length === 0) return;
-    fileParts.push(new Blob(pending));
-    pending = [];
-    pendingBytes = 0;
-    foldCount++;
-  };
-
-  const reader = cs.readable.getReader();
-  const readPromise = (async () => {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value || value.length === 0) continue;
-      const chunk = makePngChunk("IDAT", value);
-      idatCount++;
-      pending.push(chunk);
-      pendingBytes += chunk.length;
-      if (pendingBytes >= foldBytes) foldPendingIntoBlob();
-    }
-  })();
-
-  const rowBytes = outW * 4;
-  const filteredRowLen = 1 + rowBytes;
-  const emptyRow = new Uint8Array(filteredRowLen);
-  const bpp = 4;
-  const prevRow = new Uint8Array(rowBytes);
-  const scratch = {
-    sub: new Uint8Array(rowBytes),
-    up: new Uint8Array(rowBytes),
-    avg: new Uint8Array(rowBytes),
-    paeth: new Uint8Array(rowBytes),
-  };
-
-  for (const strip of strips) {
-    if (strip.kind === "empty") {
-      await writeEmptyRows(writer, outW, strip.rows, emptyRow, filteredRowLen);
-      prevRow.fill(0);
-    } else {
-      await writeStripRows(writer, strip.px, strip.rows, filteredRowLen, rowBytes, bpp, prevRow, scratch);
-    }
-  }
-
-  await writer.close();
-  await readPromise;
-
-  pending.push(makePngChunk("IEND", new Uint8Array(0)));
-  foldPendingIntoBlob();
-  const blob = new Blob(fileParts, { type: "image/png" });
-  return { blob, idatCount, foldCount };
-}
-
-// ── test cases ───────────────────────────────────────────────────────────────
-
-const empty = (rows) => ({ kind: "empty", rows });
-const pixels = (px, w) => ({ kind: "pixels", px, rows: px.length / (w * 4) });
-
-function rgba(w, h) {
-  return new Uint8ClampedArray(w * h * 4);
-}
-
-/** A strip with content, some fully blank rows inside it, and hard edges. */
-function contentStrip(w, h, seed) {
-  const px = rgba(w, h);
+/** Full-colour art with hard edges and fully blank rows scattered through it. */
+function artwork(w, h, seed) {
+  const px = new Uint8ClampedArray(w * h * 4);
   for (let y = 0; y < h; y++) {
-    // Every 5th row left fully transparent, exercising the zero-row fast path
-    // *inside* a content strip and the filter's "up" reference continuity.
+    // Exercises the zero-row fast path inside a content strip, and the "up"
+    // reference continuity either side of it.
     if (y % 5 === 4) continue;
     for (let x = 0; x < w; x++) {
       const i = (y * w + x) * 4;
@@ -257,8 +103,8 @@ function contentStrip(w, h, seed) {
 }
 
 /** Incompressible content, so deflate emits many small output chunks. */
-function noiseStrip(w, h, seed) {
-  const px = rgba(w, h);
+function noise(w, h, seed) {
+  const px = new Uint8ClampedArray(w * h * 4);
   let s = seed | 1;
   for (let i = 0; i < px.length; i += 4) {
     s = (s * 1103515245 + 12345) & 0x7fffffff;
@@ -270,61 +116,249 @@ function noiseStrip(w, h, seed) {
   return px;
 }
 
-/** The reference image: the concatenation of every strip's pixels. */
-function expectedPixels(outW, strips) {
-  const parts = strips.map((strip) =>
-    strip.kind === "empty" ? new Uint8ClampedArray(strip.rows * outW * 4) : strip.px,
-  );
+/** Cutout artwork: sparse blobs on transparency, the common gangsheet shape. */
+function cutouts(w, h, seed) {
+  const px = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const inside = ((x + seed) % 97) < 40 && ((y + seed) % 61) < 25;
+      if (!inside) continue;
+      const i = (y * w + x) * 4;
+      px[i] = (x * 11 + seed) & 0xff;
+      px[i + 1] = (y * 17) & 0xff;
+      px[i + 2] = 200;
+      px[i + 3] = 255;
+    }
+  }
+  return px;
+}
+
+/** Vertically concatenate row blocks into one sheet. */
+function stack(w, blocks) {
   let total = 0;
-  for (const p of parts) total += p.length;
+  for (const b of blocks) total += b.length;
   const out = new Uint8ClampedArray(total);
   let pos = 0;
-  for (const p of parts) { out.set(p, pos); pos += p.length; }
+  for (const b of blocks) { out.set(b, pos); pos += b.length; }
   return out;
 }
 
-async function runCase(label, { outW, strips, dpi, foldBytes }) {
-  const outH = strips.reduce((sum, s) => sum + s.rows, 0);
+// ── the two paths ────────────────────────────────────────────────────────────
 
-  const { blob, idatCount, foldCount } = await buildPng({ outW, outH, dpi, strips, foldBytes });
-  const bytes = Buffer.from(await blob.arrayBuffer());
+/**
+ * The serial path: one continuous filter pass, strip by strip, carrying the
+ * "up" reference across strip boundaries. Mirrors `buildPngStreaming`.
+ */
+async function filterSerial(sink, pixels, outW, strips, emptyStrips) {
+  const rowBytes = outW * 4;
+  const filteredRowLen = 1 + rowBytes;
+  const emptyRow = new Uint8Array(filteredRowLen);
+  const prevRow = new Uint8Array(rowBytes);
+  let sawInk = false;
+  for (let i = 0; i < strips.length; i++) {
+    const { y, height } = strips[i];
+    if (emptyStrips.has(i)) {
+      await W.writeEmptyRows(sink, outW, height, emptyRow, filteredRowLen);
+      prevRow.fill(0);
+      continue;
+    }
+    const slice = pixels.subarray(y * rowBytes, (y + height) * rowBytes);
+    if (await W.writeStripRows(sink, slice, height, filteredRowLen, rowBytes, 4, prevRow)) {
+      sawInk = true;
+    }
+  }
+  return sawInk;
+}
 
-  const image = sharp(bytes);
-  const meta = await image.metadata();
-  const decoded = await image.ensureAlpha().raw().toBuffer();
+/**
+ * The band path: each strip filtered independently, given the one row above it
+ * that the band renderer draws and discards.
+ */
+function filterBands(pixels, outW, strips, emptyStrips, dropContextRow = false) {
+  const rowBytes = outW * 4;
+  const out = [];
+  let sawInk = false;
+  for (let i = 0; i < strips.length; i++) {
+    const { y, height } = strips[i];
+    if (emptyStrips.has(i)) {
+      out.push(new Uint8Array(height * (1 + rowBytes)));
+      continue;
+    }
+    const contextRow = y > 0 && !dropContextRow ? 1 : 0;
+    const renderY = y - contextRow;
+    const renderH = height + contextRow;
+    const rendered = pixels.subarray(renderY * rowBytes, (renderY + renderH) * rowBytes);
+    const band = W.filterBandToBuffer(rendered, contextRow, height, rowBytes, 4);
+    if (band.sawInk) sawInk = true;
+    out.push(band.filtered);
+  }
+  let total = 0;
+  for (const p of out) total += p.length;
+  const joined = new Uint8Array(total);
+  let pos = 0;
+  for (const p of out) { joined.set(p, pos); pos += p.length; }
+  return { filtered: joined, sawInk };
+}
 
-  const expected = expectedPixels(outW, strips);
+/** Compress an already-filtered row stream through the real PngSink. */
+async function assemble(filtered, outW, outH, dpi) {
+  const sink = new W.PngSink(outW, outH, dpi);
+  // Fed in pieces, because that is how both real paths feed it.
+  const step = 1 << 16;
+  for (let off = 0; off < filtered.length; off += step) {
+    await sink.write(filtered.subarray(off, Math.min(off + step, filtered.length)));
+  }
+  return sink.finish();
+}
+
+function firstDifference(a, b) {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) if (a[i] !== b[i]) return i;
+  return a.length === b.length ? -1 : n;
+}
+
+// ── cases ────────────────────────────────────────────────────────────────────
+
+async function runCase(label, { outW, blocks, emptyStripIndices = [], dpi = 300, stripHeight }) {
+  const pixels = stack(outW, blocks);
+  const rowBytes = outW * 4;
+  const outH = pixels.length / rowBytes;
+
+  // Fixed strip height so a small test sheet still crosses several boundaries;
+  // the real geometry comes from stripRangesFor and is checked separately.
+  const strips = [];
+  for (let y = 0; y < outH; y += stripHeight) {
+    strips.push({ y, height: Math.min(stripHeight, outH - y) });
+  }
+  const emptyStrips = new Set(emptyStripIndices);
+
+  const serialSink = new CollectingSink();
+  const serialSawInk = await filterSerial(serialSink, pixels, outW, strips, emptyStrips);
+  const serialFiltered = serialSink.bytes();
+  const banded = filterBands(pixels, outW, strips, emptyStrips);
 
   const problems = [];
+
+  // The blank-sheet guard refuses to upload a print file that came out empty.
+  // The parallel path aggregates this across bands, so it has to reach the same
+  // verdict as one continuous pass or a blank sheet ships.
+  if (banded.sawInk !== serialSawInk) {
+    problems.push(`blank guard disagrees: serial saw ink ${serialSawInk}, bands ${banded.sawInk}`);
+  }
+
+  const diff = firstDifference(serialFiltered, banded.filtered);
+  if (diff !== -1) {
+    const row = Math.floor(diff / (1 + rowBytes));
+    problems.push(
+      `filtered bytes diverge at ${diff} (row ${row}): serial ${serialFiltered[diff]}, ` +
+        `band ${banded.filtered[diff]}`,
+    );
+  }
+
+  const serialBlob = await assemble(serialFiltered, outW, outH, dpi);
+  const bandBlob = await assemble(banded.filtered, outW, outH, dpi);
+  const serialBytes = Buffer.from(await serialBlob.arrayBuffer());
+  const bandBytes = Buffer.from(await bandBlob.arrayBuffer());
+  if (!serialBytes.equals(bandBytes)) {
+    problems.push(`assembled files differ (${serialBytes.length} vs ${bandBytes.length} bytes)`);
+  }
+
+  const image = sharp(serialBytes);
+  const meta = await image.metadata();
+  const decoded = await image.ensureAlpha().raw().toBuffer();
   if (meta.width !== outW || meta.height !== outH) {
     problems.push(`size ${meta.width}x${meta.height}, expected ${outW}x${outH}`);
   }
   const expectedPpm = Math.round(dpi / 0.0254);
-  // sharp reports density in DPI, rounded from the pHYs pixels-per-metre.
   const gotPpm = Math.round((meta.density ?? 0) / 0.0254);
   if (Math.abs(gotPpm - expectedPpm) > 1) {
     problems.push(`density ${meta.density} dpi (pHYs ${gotPpm} vs ${expectedPpm} ppm)`);
   }
+
+  // Empty strips are transparent in the file but carry pixels in `blocks`;
+  // blank them in the reference so the comparison is against what was encoded.
+  const expected = Uint8ClampedArray.from(pixels);
+  for (const i of emptyStripIndices) {
+    const { y, height } = strips[i];
+    expected.fill(0, y * rowBytes, (y + height) * rowBytes);
+  }
   if (decoded.length !== expected.length) {
     problems.push(`pixel length ${decoded.length}, expected ${expected.length}`);
   } else {
-    let firstDiff = -1;
-    for (let i = 0; i < decoded.length; i++) {
-      if (decoded[i] !== expected[i]) { firstDiff = i; break; }
-    }
-    if (firstDiff >= 0) {
-      const px = Math.floor(firstDiff / 4);
+    const px = firstDifference(decoded, expected);
+    if (px !== -1) {
+      const p = Math.floor(px / 4);
       problems.push(
-        `pixel mismatch at byte ${firstDiff} (pixel ${px % outW},${Math.floor(px / outW)}): ` +
-          `got ${decoded[firstDiff]}, expected ${expected[firstDiff]}`,
+        `pixel mismatch at byte ${px} (pixel ${p % outW},${Math.floor(p / outW)}): ` +
+          `got ${decoded[px]}, expected ${expected[px]}`,
       );
     }
   }
 
   const ok = problems.length === 0;
-  const detail = `${outW}x${outH}, ${idatCount} IDAT chunk(s), ${foldCount} blob fold(s), ${bytes.length} bytes`;
-  console.log(`${ok ? "pass" : "FAIL"}  ${label.padEnd(34)} ${detail}`);
+  const detail =
+    `${outW}x${outH}, ${strips.length} strip(s), ${serialBytes.length} bytes` +
+    `, ink ${banded.sawInk ? "yes" : "no"}`;
+  console.log(`${ok ? "pass" : "FAIL"}  ${label.padEnd(36)} ${detail}`);
   for (const p of problems) console.error(`        ${p}`);
+  return ok;
+}
+
+/**
+ * The comparison has to be capable of failing.
+ *
+ * Every case above passes whether or not the context row is doing anything, if
+ * the two paths are secretly the same code. Filtering the same sheet with the
+ * context row withheld must therefore produce different bytes — if it does not,
+ * these tests prove nothing.
+ */
+async function checkNegativeControl() {
+  const outW = 320;
+  // Structured art at a strip height that puts the boundaries on inked rows.
+  // Noise is useless here: every predictor scores about the same on random
+  // bytes, so None wins each row whatever sits above it, and dropping the
+  // context row changes nothing.
+  const pixels = artwork(outW, 287, 11);
+  const outH = pixels.length / (outW * 4);
+  const strips = [];
+  for (let y = 0; y < outH; y += 128) strips.push({ y, height: Math.min(128, outH - y) });
+
+  const serialSink = new CollectingSink();
+  await filterSerial(serialSink, pixels, outW, strips, new Set());
+  const serial = serialSink.bytes();
+  const withoutContext = filterBands(pixels, outW, strips, new Set(), true).filtered;
+
+  const diff = firstDifference(serial, withoutContext);
+  const ok = diff !== -1;
+  console.log(
+    `${ok ? "pass" : "FAIL"}  ${"negative control".padEnd(36)} ` +
+      (ok ? `dropping the context row diverges at byte ${diff}` : "no divergence — test is vacuous"),
+  );
+  return ok;
+}
+
+/** The geometry both halves must agree on, checked on real sheet sizes. */
+function checkGeometry() {
+  const cases = [
+    { inches: 22, height: 120 },
+    { inches: 24.5, height: 60 },
+    { inches: 11, height: 240 },
+  ];
+  let ok = true;
+  for (const { inches, height } of cases) {
+    const outW = Math.round(inches * 300);
+    const outH = Math.round(height * 300);
+    const strips = W.stripRangesFor(outW, outH);
+    const covered = strips.reduce((sum, s) => sum + s.height, 0);
+    const contiguous = strips.every((s, i) => (i === 0 ? s.y === 0 : s.y === strips[i - 1].y + strips[i - 1].height));
+    const area = outW * strips[0].height;
+    const good = covered === outH && contiguous && area <= 16_777_216;
+    if (!good) ok = false;
+    console.log(
+      `${good ? "pass" : "FAIL"}  ${`geometry ${inches}x${height}in`.padEnd(36)} ` +
+        `${strips.length} strips of ${strips[0].height} rows, ${(area / 1e6).toFixed(1)} MP each`,
+    );
+  }
   return ok;
 }
 
@@ -334,66 +368,81 @@ async function main() {
     process.exit(2);
   }
 
+  Object.assign(W, await loadWorkerInternals());
+  console.log(`filter score stride: ${W.FILTER_SCORE_STRIDE}, batch rows: ${W.BATCH_ROWS}\n`);
+
   const results = [];
-  const W = 320;
-  const BIG_FOLD = 16 * 1024 * 1024;
+  results.push(checkGeometry());
+  results.push(await checkNegativeControl());
+  console.log("");
 
-  // Content, empty, content. The empty strip is where filter continuity across a
-  // strip boundary can break, since it resets the "up" reference.
-  results.push(await runCase("content / empty / content", {
-    outW: W,
-    dpi: 300,
-    foldBytes: BIG_FOLD,
-    strips: [pixels(contentStrip(W, 150, 11), W), empty(200), pixels(contentStrip(W, 90, 77), W)],
+  // 128 rather than a round 100: `artwork` blanks every fifth row, and a strip
+  // height divisible by 5 lands every boundary on a blank row, which is exactly
+  // the case where the context row makes no difference.
+  results.push(await runCase("full-colour art across strips", {
+    outW: 320,
+    stripHeight: 128,
+    blocks: [artwork(320, 150, 11), artwork(320, 137, 77)],
   }));
 
-  results.push(await runCase("single content strip", {
-    outW: W,
-    dpi: 300,
-    foldBytes: BIG_FOLD,
-    strips: [pixels(contentStrip(W, 233, 5), W)],
+  results.push(await runCase("cutout art, sparse coverage", {
+    outW: 256,
+    stripHeight: 64,
+    blocks: [cutouts(256, 300, 3)],
   }));
 
-  results.push(await runCase("entirely empty sheet", {
-    outW: W,
-    dpi: 150,
-    foldBytes: BIG_FOLD,
-    strips: [empty(1100)],
+  // Strips 3 and 4 fall entirely inside the blank block, so they take the
+  // geometric "no designs here" path the serial exporter uses.
+  results.push(await runCase("blank gap between designs", {
+    outW: 320,
+    stripHeight: 64,
+    emptyStripIndices: [3, 4],
+    blocks: [artwork(320, 150, 11), new Uint8ClampedArray(320 * 200 * 4), artwork(320, 90, 77)],
   }));
 
-  results.push(await runCase("empty strips at both ends", {
-    outW: W,
-    dpi: 300,
-    foldBytes: BIG_FOLD,
-    strips: [empty(64), pixels(contentStrip(W, 40, 21), W), empty(64), pixels(contentStrip(W, 33, 22), W), empty(7)],
-  }));
-
-  // The ordering risk: many IDAT chunks and many folds. A tiny threshold plus
-  // incompressible noise forces both.
-  results.push(await runCase("many IDATs, many folds", {
+  results.push(await runCase("noise, many deflate chunks", {
     outW: 512,
-    dpi: 300,
-    foldBytes: 4096,
-    strips: [
-      pixels(noiseStrip(512, 400, 1234), 512),
-      pixels(contentStrip(512, 120, 9), 512),
-      pixels(noiseStrip(512, 260, 99), 512),
-    ],
+    stripHeight: 128,
+    blocks: [noise(512, 400, 1234), artwork(512, 120, 9), noise(512, 260, 99)],
   }));
 
-  // A height that straddles BATCH_ROWS, plus a ragged final batch.
-  results.push(await runCase("straddles batch boundary", {
+  results.push(await runCase("strip straddles batch boundary", {
     outW: 200,
-    dpi: 300,
-    foldBytes: 8192,
-    strips: [pixels(contentStrip(200, 1024, 3), 200), pixels(contentStrip(200, 7, 4), 200)],
+    stripHeight: 1024,
+    blocks: [artwork(200, 1024, 3), artwork(200, 7, 4)],
+  }));
+
+  results.push(await runCase("band boundary lands on blank row", {
+    // Strip height 5 puts every boundary on the `y % 5 === 4` transparent row,
+    // so every band's context row is fully zero — the case where a wrong "up"
+    // reference would be hardest to notice.
+    outW: 128,
+    stripHeight: 5,
+    blocks: [artwork(128, 60, 42)],
+  }));
+
+  // Designs that draw nothing: the strips are not geometrically empty, so both
+  // paths filter real rows and both must report no ink.
+  results.push(await runCase("sheet renders nothing", {
+    outW: 128,
+    stripHeight: 64,
+    blocks: [new Uint8ClampedArray(128 * 200 * 4)],
+  }));
+
+  results.push(await runCase("single strip, no context row", {
+    outW: 320,
+    stripHeight: 4096,
+    blocks: [artwork(320, 233, 5)],
   }));
 
   const passed = results.filter(Boolean).length;
   const failed = results.length - passed;
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed === 0) {
-    console.log("PNG assembly is byte-exact: chunked IDATs + blob folding decode to identical pixels.");
+    console.log(
+      "Bands filter to the same bytes as one serial pass, and the assembled PNG " +
+        "decodes to the pixels that went in.",
+    );
   }
   process.exit(failed === 0 ? 0 : 1);
 }

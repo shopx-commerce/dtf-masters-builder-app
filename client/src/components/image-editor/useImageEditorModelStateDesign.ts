@@ -1326,8 +1326,13 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       : (selectedDesignId ? [selectedDesignId] : []);
     if (targetIds.length === 0) return;
     saveSnapshot();
-    const { removeBackgroundFromImage, removeBackgroundFromCanvas } = await import("@/lib/background-removal");
-    const { applyEditAtPrintResolution, printSourceFieldsAfterEdit } = await import("@/lib/print-source-edit");
+    const { removeBackgroundFromCanvas } = await import("@/lib/background-removal");
+    const {
+      applyEditAtPrintResolution,
+      applyEditToPreviewSource,
+      printSourceFieldsAfterEdit,
+    } = await import("@/lib/print-source-edit");
+    const { createTrimmingEdit, geometryAfterTrim } = await import("@/lib/trim-after-edit");
     const targetDesigns = designsRef.current.filter(d => targetIds.includes(d.id));
 
     // Run the removal against the full-resolution print source so it reaches
@@ -1339,39 +1344,87 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     // from a selection of eight in parallel would ask the device for a gigabyte of canvas
     // before the first flood fill finished. The removal worker processes them serially
     // regardless, so the parallelism bought nothing but the memory spike.
-    const results: (Partial<ImageInfo> | null)[] = [];
+    const updates = new Map<string, { info: ImageInfo; fields: Partial<DesignItem> }>();
+    let trimmedCount = 0;
     for (const d of targetDesigns) {
-      const edited = await applyEditAtPrintResolution(
+      // A fresh wrapper per attempt: each one records what its trim took, and a
+      // retry against a different source must not read the first one's answer.
+      const printPass = createTrimmingEdit(canvas => removeBackgroundFromCanvas(canvas, 75));
+      let edited = await applyEditAtPrintResolution(
         d.imageInfo,
         d.widthInches,
         d.heightInches,
-        canvas => removeBackgroundFromCanvas(canvas, 75),
+        printPass.edit,
       ).catch(() => null);
-      if (edited) {
-        results.push(printSourceFieldsAfterEdit(edited));
-        continue;
+      let trim = edited ? printPass.trim() : null;
+
+      if (!edited) {
+        // The preview is the only source this design has. Editing it and
+        // promoting the result keeps what prints identical to what the customer
+        // approved on screen, which is the whole point of the path above.
+        const preview = d.imageInfo.image;
+        const previewMaxEdge = Math.max(
+          1,
+          preview?.naturalWidth || preview?.width || 0,
+          preview?.naturalHeight || preview?.height || 0,
+        );
+        const previewPass = createTrimmingEdit(canvas => removeBackgroundFromCanvas(canvas, 75));
+        edited = await applyEditToPreviewSource(d.imageInfo, previewMaxEdge, previewPass.edit)
+          .catch(() => null);
+        trim = edited ? previewPass.trim() : null;
       }
-      const image = await removeBackgroundFromImage(d.imageInfo.image, 75).catch(() => null);
-      results.push(image ? { image } : null);
+      if (!edited) continue;
+
+      const fields: Partial<DesignItem> = {};
+      const geometry = trim
+        ? geometryAfterTrim(d, trim, artboardWidthRef.current, artboardHeightRef.current)
+        : null;
+      if (geometry) {
+        fields.widthInches = geometry.widthInches;
+        fields.heightInches = geometry.heightInches;
+        fields.transform = geometry.transform;
+        trimmedCount++;
+      }
+      // The halftone rebuild watches the design's inches and re-screens from
+      // `halftoneSourceImage`. Trimming changes those inches, so a source left
+      // pointing at the pre-removal artwork would repaint it over this edit a
+      // moment later. Halftoning never touches the print source, so the edited
+      // one is exactly the un-screened artwork to rebuild from.
+      //
+      // A halftoned design with no source at all is a restored draft, and the
+      // rebuild keys off that absence to heal itself. Filling it in without also
+      // changing the geometry would take away its trigger and leave the design
+      // unscreened, so that case is left for the rebuild to sort out.
+      if (d.halftoneSourceImage || (d.halftoned && geometry)) {
+        fields.halftoneSourceImage = edited.previewImage;
+      }
+      updates.set(d.id, { info: { ...d.imageInfo, ...printSourceFieldsAfterEdit(edited) }, fields });
     }
-    const updates = new Map<string, ImageInfo>();
-    targetDesigns.forEach((d, i) => {
-      if (results[i]) updates.set(d.id, { ...d.imageInfo, ...results[i]! });
-    });
     if (updates.size === 0) {
       toast({ title: "Remove failed", description: "Could not remove white background.", variant: "destructive" });
       return;
     }
     setDesigns(prev => prev.map(d => {
       const next = updates.get(d.id);
-      return next ? { ...d, imageInfo: next } : d;
+      return next ? { ...d, ...next.fields, imageInfo: next.info } : d;
     }));
-    if (selectedDesignId && updates.has(selectedDesignId)) {
-      setImageInfo(updates.get(selectedDesignId)!);
+    const selected = selectedDesignId ? updates.get(selectedDesignId) : undefined;
+    if (selected) {
+      setImageInfo(selected.info);
+      const { widthInches, heightInches } = selected.fields;
+      if (widthInches !== undefined && heightInches !== undefined) {
+        setResizeSettings(prev => ({ ...prev, widthInches, heightInches }));
+      }
     }
     uiActions.setWandDeleteModeActive(false);
-    toast({ title: "White background removed", description: `Applied to ${updates.size} design${updates.size !== 1 ? "s" : ""}.` });
-  }, [selectedDesignId, selectedDesignIds, saveSnapshot, setDesigns, toast, uiActions]);
+    const designCount = `${updates.size} design${updates.size !== 1 ? "s" : ""}`;
+    toast({
+      title: "White background removed",
+      description: trimmedCount > 0
+        ? `Applied to ${designCount}, and trimmed the empty space it left behind.`
+        : `Applied to ${designCount}.`,
+    });
+  }, [selectedDesignId, selectedDesignIds, saveSnapshot, setDesigns, setResizeSettings, toast, uiActions]);
 
   const handleWandDelete = useCallback(async (nx: number, ny: number, designId: string) => {
     const design = designsRef.current.find(d => d.id === designId);
