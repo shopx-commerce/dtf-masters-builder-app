@@ -15,7 +15,11 @@ type AjaxProduct = {
   variants?: AjaxVariant[];
 };
 
-function storefrontAjaxBaseUrl(): string {
+function storefrontAjaxBaseUrl(shop?: string | null): string {
+  const s = String(shop || "").trim();
+  if (s) {
+    return `https://${s.replace(/^https?:\/\//i, "").split("/")[0]}`;
+  }
   const custom = String(process.env.SHOP_CUSTOM_DOMAIN || "").trim();
   if (custom) {
     return `https://${custom.replace(/^https?:\/\//i, "").split("/")[0]}`;
@@ -81,11 +85,11 @@ async function fetchProductById(base: string, productId: string): Promise<AjaxPr
 
 export async function fetchStorefrontVariantList(
   variantIdRaw: string,
-  opts: { productId?: string | null; productHandle?: string | null } = {},
+  opts: { productId?: string | null; productHandle?: string | null; shop?: string | null } = {},
 ) {
   const digits = String(variantIdRaw ?? "").replace(/\D/g, "");
   if (!digits) return null;
-  const base = storefrontAjaxBaseUrl();
+  const base = storefrontAjaxBaseUrl(opts.shop);
   if (!base) return null;
 
   const productHandle = String(opts.productHandle || "").trim();

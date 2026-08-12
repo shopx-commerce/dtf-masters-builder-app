@@ -78,6 +78,11 @@ export function useLayerAssetUploader({
   const seededLayerIdsRef = useRef<Set<string>>(new Set());
   const activeCountRef = useRef(0);
   const pumpRef = useRef<() => void>(() => {});
+  // Debug-only: reports when a whole run of queued layer uploads (e.g. many distinct
+  // designs added at once) has drained, so ATC/upload-speed testing doesn't have to
+  // count individual "[layer-asset]" start/finish pairs by hand.
+  const batchStartRef = useRef<number | null>(null);
+  const batchDoneRef = useRef(0);
   const aliveRef = useRef(true);
   useEffect(() => {
     const gcTimers = gcTimersRef.current;
@@ -118,11 +123,14 @@ export function useLayerAssetUploader({
       const blob = record.kind === "screened"
         ? await layerScreenedToPngBlob(source)
         : await layerBitmapToPngBlob(source);
+      console.log(`[layer-asset] Layer upload starting (${record.filename}, ${blob.size} bytes)...`);
+      const uploadStartedAt = performance.now();
       const uploaded = await uploadProductionToR2(blob, record.filename, transport.uploadUrl, undefined, {
         objectKey,
         useShellRelay: transport.useShellRelay,
         productionFormat: "png",
       });
+      console.log(`[layer-asset] Layer upload finished in ${(performance.now() - uploadStartedAt).toFixed(0)}ms`);
       const key = uploaded.key || objectKey;
       if (record.cancelled || !aliveRef.current) {
         deleteAsset(key, transport);
@@ -149,7 +157,14 @@ export function useLayerAssetUploader({
       activeCountRef.current += 1;
       void runUpload(token).finally(() => {
         activeCountRef.current -= 1;
+        batchDoneRef.current += 1;
         pumpRef.current();
+        if (activeCountRef.current === 0 && queueRef.current.length === 0 && batchStartRef.current != null) {
+          const elapsed = performance.now() - batchStartRef.current;
+          console.log(`[layer-asset] All ${batchDoneRef.current} layer upload(s) finished in ${elapsed.toFixed(0)}ms`);
+          batchStartRef.current = null;
+          batchDoneRef.current = 0;
+        }
       });
     }
   }, [runUpload]);
@@ -220,6 +235,7 @@ export function useLayerAssetUploader({
         cancelled: false,
       });
       sourcesRef.current.set(token, design);
+      if (batchStartRef.current == null) batchStartRef.current = performance.now();
       queueRef.current.push(token);
     }
 
@@ -254,6 +270,7 @@ export function useLayerAssetUploader({
         cancelled: false,
       });
       sourcesRef.current.set(screenedToken, design);
+      if (batchStartRef.current == null) batchStartRef.current = performance.now();
       queueRef.current.push(screenedToken);
     }
 

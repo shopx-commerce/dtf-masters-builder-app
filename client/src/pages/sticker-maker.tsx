@@ -182,6 +182,7 @@ export default function StickerMaker({ profile = HOT_PEEL_PROFILE }: StickerMake
     const q = new URLSearchParams({ variant: vid });
     if (productId) q.set("product_id", productId);
     if (productHandle) q.set("product_handle", productHandle);
+    if (shopDomain) q.set("shop", shopDomain);
     return `/api/storefront-variant-config?${q.toString()}`;
   };
 

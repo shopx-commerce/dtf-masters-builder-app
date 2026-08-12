@@ -862,6 +862,8 @@ export function useImageEditorModelCart(
           // encoded sheet one more time at the exact moment the device was already holding
           // the export, which is how a phone ran out of memory on a large gangsheet and
           // reported it as the store refusing the file.
+          console.log(`[handleAddToCart] Layer upload starting (${filename}, ${(productionBlob as Blob).size} bytes)...`);
+          const uploadStartedAt = performance.now();
           const uploaded = await uploadProductionToR2(
             productionBlob as Blob,
             filename,
@@ -869,6 +871,7 @@ export function useImageEditorModelCart(
             onUploadProgress,
             uploadOpts,
           );
+          console.log(`[handleAddToCart] Layer upload finished in ${(performance.now() - uploadStartedAt).toFixed(0)}ms`);
           productionUrl = uploaded.productionUrl;
           uploadedProductionKey = uploaded.key || uploadedProductionKey;
           // Prefer the small client-rendered preview over the full-res production URL — falls

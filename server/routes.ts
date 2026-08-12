@@ -1240,11 +1240,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const variantId = String(req.query.variant ?? req.query.variant_id ?? "").trim();
     const productId = String(req.query.product_id ?? req.query.productId ?? "").trim();
     const productHandle = String(req.query.product_handle ?? req.query.productHandle ?? "").trim();
+    const shop = String(req.query.shop ?? "").trim();
     if (!variantId) {
       return res.status(400).json({ configured: false, error: "variant or variant_id param required" });
     }
     try {
-      const raw = await fetchStorefrontVariantList(variantId, { productId, productHandle });
+      const raw = await fetchStorefrontVariantList(variantId, { productId, productHandle, shop });
       if (!raw) {
         return res.status(502).json({
           configured: false,
