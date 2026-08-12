@@ -10,7 +10,7 @@ import {
 } from "./constants";
 import type { InitialDesignState } from "./types";
 
-type RestoredAsset = {
+export type RestoredAsset = {
   url: string;
   key?: string;
   mimeType?: string;

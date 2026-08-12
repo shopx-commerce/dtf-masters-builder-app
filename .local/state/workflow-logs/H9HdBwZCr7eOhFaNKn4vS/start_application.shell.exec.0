@@ -1,0 +1,186 @@
+[1G[0K⠙[1G[0K
+> rest-express@1.0.0 dev
+> NODE_ENV=development tsx server/index.ts
+
+[1G[0K⠙[1G[0K7:17:15 AM [express] serving on port 5000
+Browserslist: browsers data (caniuse-lite) is 22 months old. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+7:17:33 AM [express] POST /api/image-info 200 in 447ms :: {"width":3600,"height":3600,"format":"png"…
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m7:29:39 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/image-editor/editor-action-toolbar.tsx, /src/index.css?v=3Rzk9--jiRSreJDuAL-PZ[22m
+[replit-cartographer] Error processing /home/runner/workspace/client/src/components/image-editor/editor-action-toolbar.tsx: SyntaxError: Adjacent JSX elements must be wrapped in an enclosing tag. Did you want a JSX fragment <>...</>? (911:4)
+    at toParseError [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parse-error.ts:95:45[90m)[39m
+    at raise [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/tokenizer/index.ts:1497:19[90m)[39m
+    at jsxParseElementAt [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/plugins/jsx/index.ts:543:20[90m)[39m
+    at jsxParseElement [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/plugins/jsx/index.ts:559:19[90m)[39m
+    at parseExprAtom [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/plugins/jsx/index.ts:573:21[90m)[39m
+    at parseExprSubscripts [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:714:23[90m)[39m
+    at parseUpdate [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:693:21[90m)[39m
+    at parseMaybeUnary [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:655:23[90m)[39m
+    at parseMaybeUnary [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/plugins/typescript/index.ts:3735:20[90m)[39m
+    at parseMaybeUnaryOrPrivate [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:389:14[90m)[39m
+    at parseExprOps [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:401:23[90m)[39m
+    at parseMaybeConditional [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:356:23[90m)[39m
+    at parseMaybeAssign [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:298:21[90m)[39m
+    at fn [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/plugins/typescript/index.ts:3588:23[90m)[39m
+    at tryParse [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/util.ts:174:20[90m)[39m
+    at parseMaybeAssign [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/plugins/typescript/index.ts:3587:20[90m)[39m
+    at callback [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:252:12[90m)[39m
+    at allowInAnd [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:3117:12[90m)[39m
+    at parseMaybeAssignAllowIn [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:251:17[90m)[39m
+    at parseParenAndDistinguishExpression [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:1771:16[90m)[39m
+    at parseExprAtom [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:1131:21[90m)[39m
+    at parseExprAtom [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/plugins/jsx/index.ts:583:22[90m)[39m
+    at parseExprSubscripts [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:714:23[90m)[39m
+    at parseUpdate [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:693:21[90m)[39m
+    at parseMaybeUnary [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:655:23[90m)[39m
+    at parseMaybeUnary [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/plugins/typescript/index.ts:3735:20[90m)[39m
+    at parseMaybeUnaryOrPrivate [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:389:14[90m)[39m
+    at parseExprOpBaseRightExpr [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:569:12[90m)[39m
+    at parseExprOpRightExpr [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:554:21[90m)[39m
+    at parseExprOp [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:485:27[90m)[39m
+    at parseExprOp [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/plugins/typescript/index.ts:2797:20[90m)[39m
+    at parseExprOps [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:407:17[90m)[39m
+    at parseMaybeConditional [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:356:23[90m)[39m
+    at parseMaybeAssign [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:298:21[90m)[39m
+    at parseMaybeAssign [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/plugins/typescript/index.ts:3607:22[90m)[39m
+    at parseExpressionBase [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:221:23[90m)[39m
+    at callback [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:212:39[90m)[39m
+    at allowInAnd [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:3117:12[90m)[39m
+    at parseExpression [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:212:17[90m)[39m
+    at jsxParseExpressionContainer [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/plugins/jsx/index.ts:376:33[90m)[39m
+    at jsxParseElementAt [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/plugins/jsx/index.ts:500:24[90m)[39m
+    at jsxParseElementAt [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/plugins/jsx/index.ts:483:34[90m)[39m
+    at jsxParseElementAt [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/plugins/jsx/index.ts:483:34[90m)[39m
+    at jsxParseElement [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/plugins/jsx/index.ts:559:19[90m)[39m
+    at parseExprAtom [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/plugins/jsx/index.ts:573:21[90m)[39m
+    at parseExprSubscripts [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:714:23[90m)[39m
+    at parseUpdate [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:693:21[90m)[39m
+    at parseMaybeUnary [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:655:23[90m)[39m
+    at parseMaybeUnary [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/plugins/typescript/index.ts:3735:20[90m)[39m
+    at parseMaybeUnaryOrPrivate [90m(/home/runner/workspace/[39mnode_modules/[4m@babel/parser[24m/src/parser/expression.ts:389:14[90m)[39m {
+  code: [32m'BABEL_PARSER_SYNTAX_ERROR'[39m,
+  reasonCode: [32m'UnwrappedAdjacentJSXElements'[39m,
+  loc: Position { line: [33m911[39m, column: [33m4[39m, index: [33m47419[39m },
+  pos: [33m47419[39m,
+  syntaxPlugin: [32m'jsx'[39m
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m7:29:40 AM[22m [31m[1m[vite][22m[39m [31mInternal server error: /home/runner/workspace/client/src/components/image-editor/editor-action-toolbar.tsx: Adjacent JSX elements must be wrapped in an enclosing tag. Did you want a JSX fragment <>...</>? (911:4)
+
+[0m [90m 909 |[31m         )}
+ [90m 910 |[31m       [33m<[31m[33m/[31m[33mdiv[31m[33m>[31m
+[31m[1m>[22m[31m[90m 911 |[31m     [33m<[31m[33m/[31m[33mdiv[31m[33m>[31m
+ [90m     |[31m     [31m[1m^[22m[31m
+ [90m 912 |[31m   [33m<[31m[33m/[31m[33mdiv[31m[33m>[31m
+ [90m 913 |[31m
+ [90m 914 |[31m     [33m<[31m[33m/[31m[33m>[31m[0m[39m
+  Plugin: [35mvite:react-babel[39m
+  File: [36m/home/runner/workspace/client/src/components/image-editor/editor-action-toolbar.tsx[39m:911:4
+[33m  909|          )}
+  910|        </div>
+  911|      </div>
+     |      ^
+  912|    </div>
+  913|  [39m
+      at toParseError (/home/runner/workspace/node_modules/@babel/parser/src/parse-error.ts:95:45)
+      at raise (/home/runner/workspace/node_modules/@babel/parser/src/tokenizer/index.ts:1497:19)
+      at jsxParseElementAt (/home/runner/workspace/node_modules/@babel/parser/src/plugins/jsx/index.ts:543:20)
+      at jsxParseElement (/home/runner/workspace/node_modules/@babel/parser/src/plugins/jsx/index.ts:559:19)
+      at parseExprAtom (/home/runner/workspace/node_modules/@babel/parser/src/plugins/jsx/index.ts:573:21)
+      at parseExprSubscripts (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:714:23)
+      at parseUpdate (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:693:21)
+      at parseMaybeUnary (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:655:23)
+      at parseMaybeUnary (/home/runner/workspace/node_modules/@babel/parser/src/plugins/typescript/index.ts:3735:20)
+      at parseMaybeUnaryOrPrivate (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:389:14)
+      at parseExprOps (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:401:23)
+      at parseMaybeConditional (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:356:23)
+      at parseMaybeAssign (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:298:21)
+      at fn (/home/runner/workspace/node_modules/@babel/parser/src/plugins/typescript/index.ts:3588:23)
+      at tryParse (/home/runner/workspace/node_modules/@babel/parser/src/parser/util.ts:174:20)
+      at parseMaybeAssign (/home/runner/workspace/node_modules/@babel/parser/src/plugins/typescript/index.ts:3587:20)
+      at callback (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:252:12)
+      at allowInAnd (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:3117:12)
+      at parseMaybeAssignAllowIn (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:251:17)
+      at parseParenAndDistinguishExpression (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:1771:16)
+      at parseExprAtom (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:1131:21)
+      at parseExprAtom (/home/runner/workspace/node_modules/@babel/parser/src/plugins/jsx/index.ts:583:22)
+      at parseExprSubscripts (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:714:23)
+      at parseUpdate (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:693:21)
+      at parseMaybeUnary (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:655:23)
+      at parseMaybeUnary (/home/runner/workspace/node_modules/@babel/parser/src/plugins/typescript/index.ts:3735:20)
+      at parseMaybeUnaryOrPrivate (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:389:14)
+      at parseExprOpBaseRightExpr (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:569:12)
+      at parseExprOpRightExpr (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:554:21)
+      at parseExprOp (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:485:27)
+      at parseExprOp (/home/runner/workspace/node_modules/@babel/parser/src/plugins/typescript/index.ts:2797:20)
+      at parseExprOps (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:407:17)
+      at parseMaybeConditional (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:356:23)
+      at parseMaybeAssign (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:298:21)
+      at parseMaybeAssign (/home/runner/workspace/node_modules/@babel/parser/src/plugins/typescript/index.ts:3607:22)
+      at parseExpressionBase (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:221:23)
+      at callback (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:212:39)
+      at allowInAnd (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:3117:12)
+      at parseExpression (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:212:17)
+      at jsxParseExpressionContainer (/home/runner/workspace/node_modules/@babel/parser/src/plugins/jsx/index.ts:376:33)
+      at jsxParseElementAt (/home/runner/workspace/node_modules/@babel/parser/src/plugins/jsx/index.ts:500:24)
+      at jsxParseElementAt (/home/runner/workspace/node_modules/@babel/parser/src/plugins/jsx/index.ts:483:34)
+      at jsxParseElementAt (/home/runner/workspace/node_modules/@babel/parser/src/plugins/jsx/index.ts:483:34)
+      at jsxParseElement (/home/runner/workspace/node_modules/@babel/parser/src/plugins/jsx/index.ts:559:19)
+      at parseExprAtom (/home/runner/workspace/node_modules/@babel/parser/src/plugins/jsx/index.ts:573:21)
+      at parseExprSubscripts (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:714:23)
+      at parseUpdate (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:693:21)
+      at parseMaybeUnary (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:655:23)
+      at parseMaybeUnary (/home/runner/workspace/node_modules/@babel/parser/src/plugins/typescript/index.ts:3735:20)
+      at parseMaybeUnaryOrPrivate (/home/runner/workspace/node_modules/@babel/parser/src/parser/expression.ts:389:14)
+[1G[0K⠙[1G[0K[1mnpm[22m [96mnotice[39m
+[1mnpm[22m [96mnotice[39m New [31mmajor[39m version of npm available! [31m10.8.2[39m -> [34m12.0.2[39m
+[1mnpm[22m [96mnotice[39m Changelog: [34mhttps://github.com/npm/cli/releases/tag/v12.0.2[39m
+[1mnpm[22m [96mnotice[39m To update run: [4mnpm install -g npm@12.0.2[24m
+[1mnpm[22m [96mnotice[39m
+[1G[0K⠙[1G[0K

@@ -160,6 +160,33 @@ function waitForShellMessage<T>(
   });
 }
 
+async function deleteViaShellRelay(key: string, designId: string): Promise<void> {
+  const requestId = newRelayId("del");
+  const wait = waitForShellMessage(requestId, "dtf-builder-r2-deleted", SHELL_RELAY_TIMEOUT_MS, () => undefined);
+  window.parent.postMessage({ type: "dtf-builder-r2-delete", requestId, key, designId }, "*");
+  await wait;
+}
+
+/** Removes a layer asset the builder uploaded; the server treats a missing object as success. */
+export async function deleteR2Asset(
+  key: string,
+  designId: string,
+  uploadUrl: string,
+  options: Pick<R2UploadOptions, "useShellRelay"> = {},
+): Promise<void> {
+  if (!key || !designId) return;
+  if (shouldUseShellRelay(options)) {
+    await deleteViaShellRelay(key, designId);
+    return;
+  }
+  const res = await builderFetch(uploadUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ step: "r2-delete", key, designId }),
+  });
+  await readUploadJson(res, uploadUrl);
+}
+
 async function prepareViaShellRelay(
   filename: string,
   totalBytes: number,

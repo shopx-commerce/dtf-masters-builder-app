@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { isTrustedShellMessage, sanitizeShellUploadUrl } from "@/lib/shell-message";
 import { isTrustedCartStatus } from "@/lib/cart-submit-token";
 import {
@@ -33,6 +33,9 @@ export function useAddToCartStall({
   const addToCartStallTimeoutRef = useRef<number | null>(null);
   const lastAddToCartPngBytesRef = useRef<number>(0);
   const shellUploadUrlRef = useRef<string | null>(null);
+  const shellShopKeyRef = useRef<string | null>(null);
+  /** Flips once the storefront shell announces itself, so upload transport becomes usable. */
+  const [shellConfigReady, setShellConfigReady] = useState(false);
 
   const refreshAddToCartStallTimeout = useCallback((pngBytes?: number) => {
     if (addToCartStallTimeoutRef.current != null) {
@@ -67,9 +70,24 @@ export function useAddToCartStall({
         const safeUploadUrl = sanitizeShellUploadUrl(e.data.uploadUrl);
         if (safeUploadUrl) shellUploadUrlRef.current = safeUploadUrl;
       }
+      // Opaque identifier used only to build an R2 object-key path (never navigated to or
+      // rendered), so — unlike uploadUrl — no separate sanitizer is needed beyond the
+      // isTrustedShellMessage check already performed above.
+      if (typeof e.data.shopKey === 'string' && e.data.shopKey.trim()) {
+        shellShopKeyRef.current = String(e.data.shopKey).trim();
+      }
+      setShellConfigReady(true);
     };
     window.addEventListener('message', onShellConfig);
     return () => window.removeEventListener('message', onShellConfig);
+  }, []);
+
+  // Announces readiness so the shell can (re)send its config instead of racing this mount.
+  useEffect(() => {
+    try {
+      if (window.parent === window) return;
+      window.parent.postMessage({ type: 'dtf-builder-ready' }, '*');
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -123,6 +141,8 @@ export function useAddToCartStall({
     addToCartStallTimeoutRef,
     lastAddToCartPngBytesRef,
     shellUploadUrlRef,
+    shellShopKeyRef,
+    shellConfigReady,
     refreshAddToCartStallTimeout,
     clearStallTimeout,
   };
