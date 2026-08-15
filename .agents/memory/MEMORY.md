@@ -26,3 +26,4 @@
 - [Resumable upload sessions](resumable-upload-sessions.md) — bind resume caches to content digests, canonicalize multipart part lists, resume on the preparing route, wake lock while bytes move.
 - [Fill Sheet trim boundary](fill-sheet-trim-boundary.md) — trim expendable fill copies before the growth ladder, carry fillIds through merges/continuations, growth inherits the caller's snapshot intent.
 - [External branch startup](external-branch-startup.md) — fetched code may reference an absent local .env; use Replit environment variables instead of copying secrets into files.
+- [Production file recovery](production-file-recovery.md) — 404 gangsheet + live cart preview = never generated; rebuild from public state JSON + layer assets by mirroring export-worker math.

@@ -14,3 +14,17 @@ uri = "file://recovered/server-copy-now.png"
 type = "image"
 title = "What the production URL serves right now"
 description = "Fresh download of the customer's production file (v10, rewritten 17:44 UTC) — 24.5\"×35\" at 300 DPI, non-blank."
+
+[[outputs]]
+id = "OfzoC172br6LenWPbC6j9"
+uri = "file://recovered-print-files/gangsheet-0cf1567d-24.5x45in.png"
+type = "image"
+title = "Gangsheet 24.5\" × 45\" (order 0cf1567d)"
+description = "Rebuilt production print file — 7350×13500 px at 300 DPI, transparent background. Verified against the cart preview."
+
+[[outputs]]
+id = "4-i5Q_XDlhp8JpsiV5QQN"
+uri = "file://recovered-print-files/gangsheet-e369268e-24.5x35in.png"
+type = "image"
+title = "Gangsheet 24.5\" × 35\" (order e369268e)"
+description = "Rebuilt production print file — 7350×10500 px at 300 DPI, transparent background. Verified against the cart preview."

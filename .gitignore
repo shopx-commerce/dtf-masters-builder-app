@@ -21,3 +21,4 @@ tmp_*
 scratch-perf/
 .cursor/*.log
 /recovered/
+recovered-print-files/
