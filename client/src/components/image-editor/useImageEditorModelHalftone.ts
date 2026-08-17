@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import type { ImageInfo, HalftoneSettings, HalftoneStrength } from "@/lib/types";
 import { applyHalftoneScreen } from "@/lib/halftone-core";
 import { runHalftone } from "@/lib/halftone";
+import { stampEditSplit } from "@/lib/edit-split";
 import type { ImageEditorBagAfterUploadCrop } from "./image-editor-hook-bag.types";
 
 /** Apply 1-bit alpha threshold to an ImageInfo, returning a cleaned copy.
@@ -225,18 +226,25 @@ export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) 
               // alphaThresholded → nearest-neighbour scaling in export so
               //   bilinear interpolation cannot reintroduce semi-transparent
               //   edge pixels
-              setDesigns(prev => prev.map(d => {
-                if (d.id !== designId) return d;
-                if ((d.halftoneSourceImage ?? d.imageInfo.image) !== src) return d;
-                return {
-                  ...d,
-                  imageInfo: { ...d.imageInfo, image: img },
-                  halftoned: true,
-                  halftoneSettings,
-                  halftoneSourceImage: src,
-                  alphaThresholded: true,
-                };
-              }));
+              setDesigns(prev => {
+                const next = prev.map(d => {
+                  if (d.id !== designId) return d;
+                  if ((d.halftoneSourceImage ?? d.imageInfo.image) !== src) return d;
+                  return {
+                    ...d,
+                    imageInfo: { ...d.imageInfo, image: img },
+                    halftoned: true,
+                    halftoneSettings,
+                    halftoneSourceImage: src,
+                    alphaThresholded: true,
+                  };
+                });
+                // A rebuild (`skipSnapshot`) re-screens a look this design already has —
+                // only a customer-initiated screen splits a copy away from its row of
+                // identical siblings. Without that guard, resizing a row of duplicated
+                // halftoned copies would shatter it into one row per copy.
+                return options?.skipSnapshot ? next : stampEditSplit(next, new Set([designId]), "halftone");
+              });
               if (selectedDesignId === designId) setImageInfo(newInfo);
             }
             resolve();

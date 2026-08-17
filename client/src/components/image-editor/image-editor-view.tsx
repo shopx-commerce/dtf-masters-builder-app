@@ -358,7 +358,10 @@ export default function ImageEditorView() {
     () =>
       layerListVisible
         ? layerRows.map((row) => {
-            const rowKey = `${row.baseName}::${row.sizeKey}`;
+            // Third segment: the edit-split tag. Without it a split copy's row and its
+            // source row (same name, same size) would collide in React keys and share
+            // name/count editing state. Format documented on LayerRowProps.rowKey.
+            const rowKey = `${row.baseName}::${row.sizeKey}::${row.editSplit ?? ""}`;
             return <LayerRow key={rowKey} rowKey={rowKey} row={row} handlers={layerHandlers} />;
           })
         : null,

@@ -18,6 +18,7 @@ import { isSVGFile, isEPSFile, SvgTooComplexError } from "@/lib/vector-file";
 import { SvgRasterTimeoutError } from "@/lib/svg-raster";
 import { trimVectorImport } from "@/lib/vector-trim";
 import { runWithConcurrency, resolveUploadConcurrency } from "@/lib/upload-queue";
+import { stampEditSplit } from "@/lib/edit-split";
 import {
   checkFileSizeBudget,
   checkPixelBudget,
@@ -1368,17 +1369,23 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
       assetDataUrlCacheRef.current.delete(design.id);
       restoredLayerAssetRef.current.delete(design.id);
       clearContourCacheIfActive();
-      setDesigns(prev => prev.map(current => current.id === design.id
-        ? {
-            ...current,
-            imageInfo: nextInfo,
-            originalDPI: nextDpi,
-            alphaThresholded: false,
-            halftoned: false,
-            halftoneSettings: undefined,
-            halftoneSourceImage: undefined,
-          }
-        : current
+      // If this design shares a row with identical copies, the upscaled copy
+      // splits into its own row (same behavior as resizing one copy).
+      setDesigns(prev => stampEditSplit(
+        prev.map(current => current.id === design.id
+          ? {
+              ...current,
+              imageInfo: nextInfo,
+              originalDPI: nextDpi,
+              alphaThresholded: false,
+              halftoned: false,
+              halftoneSettings: undefined,
+              halftoneSourceImage: undefined,
+            }
+          : current
+        ),
+        new Set([design.id]),
+        "upscale",
       ));
       setImageInfo(nextInfo);
       setResizeSettings(prev => ({ ...prev, widthInches: design.widthInches, heightInches: design.heightInches }));
@@ -1518,10 +1525,17 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
       const updates = new Map<string, ImageInfo>();
       targetDesigns.forEach((d, i) => { if (results[i]) updates.set(d.id, results[i]!); });
       if (updates.size === 0) { toast({ title: t("toast.alphaFailed"), description: t("toast.alphaFailedDesc"), variant: "destructive" }); return; }
-      setDesigns(prev => prev.map(d => {
-        const newInfo = updates.get(d.id);
-        return newInfo ? { ...d, imageInfo: newInfo, alphaThresholded: true } : d;
-      }));
+      // Cleaned copies whose row siblings were not cleaned split into their own
+      // row (one row for the whole batch) — same behavior as resizing a copy.
+      // Cleaning a whole row (or the full page) stamps nothing: nothing diverged.
+      setDesigns(prev => stampEditSplit(
+        prev.map(d => {
+          const newInfo = updates.get(d.id);
+          return newInfo ? { ...d, imageInfo: newInfo, alphaThresholded: true } : d;
+        }),
+        new Set(updates.keys()),
+        "clean",
+      ));
       if (selectedDesignId && updates.has(selectedDesignId)) setImageInfo(updates.get(selectedDesignId)!);
       toast({ title: t("toast.alphaApplied"), description: updates.size !== 1 ? t("toast.alphaAppliedDescPlural", { count: updates.size }) : t("toast.alphaAppliedDesc", { count: updates.size }) });
     } catch (err) {
@@ -1612,10 +1626,17 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
       }
     }
 
-    setDesigns(prev => prev.map(d =>
-      d.id === designId
-        ? { ...d, ...designFields, imageInfo: info, widthInches, heightInches }
-        : d
+    // A cropped copy no longer looks like its row siblings, so it splits into
+    // its own row (the crop usually changes printed size too, which would split
+    // it anyway — the tag also covers same-size crops and carries the badge).
+    setDesigns(prev => stampEditSplit(
+      prev.map(d =>
+        d.id === designId
+          ? { ...d, ...designFields, imageInfo: info, widthInches, heightInches }
+          : d
+      ),
+      new Set([designId]),
+      "crop",
     ));
     if (selectedDesignId === designId) setImageInfo(info);
     setResizeSettings(prev => ({ ...prev, widthInches, heightInches }));

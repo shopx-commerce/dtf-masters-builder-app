@@ -146,6 +146,7 @@ export function useImageEditorModelCart(
         halftoned: Boolean(d.halftoned),
         halftoneSettings: d.halftoneSettings,
         printFileName: Boolean(d.printFileName),
+        editSplit: d.editSplit,
         originalDpi: d.originalDPI,
       },
     }));

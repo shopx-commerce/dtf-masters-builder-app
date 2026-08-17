@@ -86,6 +86,18 @@ export interface DesignItem {
    * belongs to more than one group at once.
    */
   groupId?: string;
+  /**
+   * Present on a copy whose pixels were edited away from its row siblings
+   * (halftone / upscale / pixel clean / crop applied to some-but-not-all
+   * copies). The layers panel groups rows by name + size + this tag, so a
+   * tagged copy gets its own row — the same split behavior a resized copy
+   * already has via the size half of the key. Value is `tool:uniqueId`; the
+   * tool prefix drives the row badge. An edit that covers a whole row
+   * uniformly stamps nothing (nothing diverged). Optional scalar so it
+   * round-trips the snapshot + draft + design-state pipelines without a
+   * migration, exactly like `groupId`. See lib/edit-split.ts.
+   */
+  editSplit?: string;
 }
 
 export function computeLayerRect(

@@ -340,6 +340,10 @@ export function useRestoreDesignState({
                     ? layer.settings.halftoneSettings as DesignItem["halftoneSettings"]
                     : undefined,
                 printFileName: Boolean(layer.settings?.printFileName),
+                editSplit:
+                  typeof layer.settings?.editSplit === "string" && layer.settings.editSplit
+                    ? layer.settings.editSplit
+                    : undefined,
               };
             } catch (err) {
               console.warn("[builder] skipped layer restore", err);

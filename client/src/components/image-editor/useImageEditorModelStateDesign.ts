@@ -32,6 +32,7 @@ import { useAddToCartStall } from "./use-add-to-cart-stall";
 import { useRestoreDesignState } from "./use-restore-design-state";
 import { useLayerAssetUploader } from "./use-layer-asset-uploader";
 import type { ImageInfo, ResizeSettings, ImageTransform, DesignItem } from "@/lib/types";
+import { baseNameOf, sizeKeyOf, rowKeyOf } from "@/lib/edit-split";
 import { HOT_PEEL_PROFILE } from "@/lib/profiles";
 import type { ImageEditorProps } from "./types";
 import {
@@ -1278,6 +1279,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
          printFileName: d.printFileName,
          halftoned: d.halftoned,
          halftoneSettings: d.halftoneSettings,
+         editSplit: d.editSplit,
        })));
       infoMap = new Map(currentDesigns.map(d => [d.id, d.imageInfo]));
       snapshotCacheRef.current = { designs: currentDesigns, json, infoMap };
@@ -1299,6 +1301,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       printFileName?: boolean;
       halftoned?: boolean;
       halftoneSettings?: DesignItem["halftoneSettings"];
+      editSplit?: string;
     }>;
     try {
       parsed = JSON.parse(snap.designsJson);
@@ -1327,6 +1330,10 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
              alphaThresholded: savedInfo ? undefined : existing.alphaThresholded,
              halftoned: p.halftoned,
              halftoneSettings: p.halftoneSettings,
+             // Explicit for the same reason as printFileName: undoing past the
+             // pixel edit that split this copy off must also clear its tag so
+             // the copy re-joins its original row (and redo re-splits it).
+             editSplit: p.editSplit,
              // The original source image is retained in-memory when possible;
              // restored layers reload their original asset before rebuilding.
              halftoneSourceImage: p.halftoned ? existing.halftoneSourceImage : undefined,
@@ -1344,6 +1351,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
              originalDPI: savedInfo.dpi,
              halftoned: p.halftoned,
              halftoneSettings: p.halftoneSettings,
+             editSplit: p.editSplit,
            } as DesignItem;
         }
         return null;
@@ -1670,15 +1678,17 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   }, [activeImageInfo]);
 
   const layerRows = useMemo(() => {
-    const baseNameOf = (name: string) => name.replace(/ copy( \d+)?$/, '');
-    const sizeKeyOf = (d: DesignItem) => `${(d.widthInches * d.transform.s).toFixed(2)}x${(d.heightInches * d.transform.s).toFixed(2)}`;
+    // Row identity (name + size + edit-split tag) lives in lib/edit-split.ts so this
+    // grouping and the split stamping inside the edit tools can never disagree. The
+    // tag segment is what moves a pixel-edited copy (halftone/upscale/clean/crop on
+    // one of several copies) into its own row, mirroring how a resize already does.
     const firstSizeByBase = new Map<string, string>();
     const groups = new Map<string, DesignItem[]>();
     for (const d of designs) {
       const base = baseNameOf(d.name);
       const sk = sizeKeyOf(d);
       if (!firstSizeByBase.has(base)) firstSizeByBase.set(base, sk);
-      const key = `${base}::${sk}`;
+      const key = rowKeyOf(d);
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key)!.push(d);
     }
@@ -1690,6 +1700,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
         sizeKey,
         designs: designsInGroup,
         isResized: sizeKey !== origSize,
+        editSplit: designsInGroup[0].editSplit,
       };
     });
   }, [designs]);

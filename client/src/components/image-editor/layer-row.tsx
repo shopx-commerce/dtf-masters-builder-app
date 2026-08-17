@@ -17,12 +17,15 @@ import {
   useMyEditingNameValue,
   getEditingSnapshot,
 } from "@/state/editing-store";
+import { editSplitToolOf, EDIT_SPLIT_BADGE_KEYS } from "@/lib/edit-split";
 
 export interface LayerRowGroup {
   baseName: string;
   sizeKey: string;
   designs: DesignItem[];
   isResized: boolean;
+  /** Edit-split tag shared by every design in this row (see lib/edit-split.ts) — drives the row's tool badge. */
+  editSplit?: string;
 }
 
 /**
@@ -47,8 +50,10 @@ export interface LayerRowHandlers {
 }
 
 export interface LayerRowProps {
-  /** Stable key of the form `${baseName}::${sizeKey}` — used to look up
-   *  per-row slices out of the editing store. */
+  /** Stable key of the form `${baseName}::${sizeKey}::${editSplit ?? ""}` —
+   *  used to look up per-row slices out of the editing store. The third
+   *  segment separates copies that were pixel-edited away from their
+   *  siblings (see lib/edit-split.ts); it is empty for ordinary rows. */
   rowKey: string;
   row: LayerRowGroup;
   handlers: LayerRowHandlers;
@@ -366,6 +371,16 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
                 {t("editor.resized")}
               </span>
             )}
+            {(() => {
+              // Copies pixel-edited away from their original row carry a tool
+              // badge, so two same-named rows at the same size stay tellable.
+              const tool = editSplitToolOf(row.editSplit);
+              return tool ? (
+                <span className="ml-1 text-[9px] text-cyan-600/80 font-medium">
+                  {t(EDIT_SPLIT_BADGE_KEYS[tool])}
+                </span>
+              ) : null;
+            })()}
           </p>
         )}
         <p
