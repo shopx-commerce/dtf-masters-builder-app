@@ -1,0 +1,23 @@
+ull the latest main from GitHub and rebuild. Do not re-derive or "improve" any of this — it is measured and verified.
+
+git fetch origin
+git status                 # confirm no local uncommitted edits you care about
+git pull --ff-only origin main
+npm install                # only if package files changed; they did not
+npm run build
+The new commit is aed57a3 — "Stop the packer heaping what it cannot fit, and let a margin change reach the whole sheet". It changes auto-arrange only. Seven files:
+
+client/src/lib/nest-core.ts — adds reseatFilmBottom, a post-pass that re-seats the designs whose ink sets the film's bottom edge, trying both orientations, and keeps the result only when the film gets shorter.
+client/src/lib/arrange-core.ts — calls that pass on the chosen layout, skipping it when the sheet already bills at the cheapest possible length.
+client/src/components/image-editor/useImageEditorModelArrangeKeyboard.ts — designs the packer could not seat are no longer moved onto the sheet's bottom edge on top of other artwork; they stay where the customer put them, unless they aren't currently on the sheet at all.
+client/src/components/image-editor/image-editor-view.tsx, editor-action-toolbar.tsx, layer-row.tsx — the two margin dropdowns and the layer-row Apply button now pass arrangeAll so a sheet-wide setting repacks the whole sheet instead of just the selection.
+scripts/verify-arrange-integrity.ts — new verification script; it replaces the deleted scripts/audit-arrange-overlap.ts.
+After building, run the verification suite and expect all of it to pass:
+
+npx tsx scripts/verify-arrange-integrity.ts
+npx tsx scripts/verify-arrange-tidy.ts
+The first takes about a minute and should end with "no arrange prints ink on ink, and none pays film for standing a design up". The second should end with "automatic nesting keeps up with the button, and never bills more".
+
+Two things not to be alarmed by. npx tsc --noEmit reports 19 errors; all 19 are pre-existing, in orphaned contour/cut-line files (true-contour.ts, cadcut-*, silhouette-contour.ts and friends) plus one allowedHosts typing in server/vite.ts. They are unrelated to this change and have no runtime effect. And the build warns that some chunks exceed 500 kB, which it did before too.
+
+Do not change the orientation logic inside the packers themselves. Judging orientation by where a design's ink ends rather than where it starts was tried and reverted: it fixed one case but cost film on others (21.3" to 22.8" on a test sheet), because a greedy pass cannot know which design will end up setting the sheet's length. That is why the fix is a post-pass that only accepts a change when the film actually gets shorter.
