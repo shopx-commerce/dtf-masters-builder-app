@@ -1,0 +1,24 @@
+ull the latest main from GitHub and deploy it. The repo is buywitheze-droid/Anynestapplive and the commit you want is b84c065, "Restore the printed name label, and stop large uploads failing on capable machines". Do not rebuild or reinterpret any of this work — it is already implemented and verified locally. Just take the code as it is.
+
+git fetch origin
+git checkout main
+git reset --hard origin/main   # only if you have no local commits you need
+npm install
+npm run build
+What changed, so you know what to smoke-test:
+
+Printed name label ("Name Stamp") is back. New files client/src/lib/print-label.ts and client/src/lib/print-label-pdf.ts are the single source of truth for where the label goes and how it is drawn. The toggle is the stamp icon next to Apply in each layers row. It applies to every copy in the row, including duplicates and Fill Sheet copies, and it undoes with Ctrl+Z.
+
+Large uploads no longer bounce off the server on capable machines. client/src/lib/image-budget.ts now scales the inline-decode megapixel ceiling by device: mobile stays at 40 MP, desktops go up to 120 MP based on memory and cores. client/src/lib/prepare-raster-upload.ts gained a "server" error kind so HTTP 500/503/408/429 are reported as the server being busy rather than as a dropped connection. There are new translation keys in en.ts, es.ts and fr.ts — do not drop them.
+
+Nesting and motion. client/src/lib/arrange-core.ts may now accept a tidier layout on a billing tie within a bounded relocation budget, and preview-section.tsx tweens design positions after a rearrange with a delayed busy pill for longer waits.
+
+Small cleanup. Clearing the contour cache after an AI upscale no longer constructs the contour worker, which removed a 109 KB chunk from the build.
+
+Two verification scripts are included. Run them after the build and paste the output back:
+
+npx tsx scripts/verify-print-label.ts
+npx tsx scripts/verify-arrange-tidy.ts
+Both must pass. verify-print-label.ts proves the label is drawn inside the film the nester reserved for it and that every mask cell under the label is marked as ink; verify-arrange-tidy.ts proves automatic nesting never bills more than the Auto-Arrange button.
+
+Expected pre-existing failures — do not try to fix these, they are unrelated and were there before: npx tsc --noEmit reports 19 errors, all in the orphaned contour/cut-line files (true-contour.ts, silhouette-contour.ts, image-utils.ts, cadcut-*, ctcontour.ts, unified-contour.ts, vector-stroke.ts, shape-outline.ts, canvas-utils.ts, contour-outline.ts, plus one allowedHosts type mismatch in server/vite.ts). They are type-only and the build succeeds regardless. If you see exactly 19, that is correct.
