@@ -6,10 +6,13 @@ import {
   canUseMemoryEfficientPngExport,
   decodePrintSourceAtSize,
   exportPngWithWorker,
+  getDesignLabel,
   getExportMemoryWarning,
   injectPngDpi,
   resolveExportDpi,
 } from "./utils";
+import { drawPrintLabel, labelReadsUpsideDown } from "@/lib/print-label";
+import { drawPrintLabelOnPdfPage } from "@/lib/print-label-pdf";
 import { triggerDownload } from "@/lib/download-file";
 import type { ImageEditorBagAfterUploadCrop } from "./image-editor-hook-bag.types";
 import { thresholdImageInfo } from "./useImageEditorModelHalftone";
@@ -166,22 +169,17 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
             rotate: degrees(-rotDeg),
           });
 
-          if (design.printFileName) {
+          const pdfLabel = getDesignLabel(design);
+          if (pdfLabel) {
             const { StandardFonts } = await import('pdf-lib');
             const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-            const displayName = design.name.replace(/\.[^/.]+$/, '');
-            const fontSize = Math.max(4, Math.round(0.08 * 72));
-            const textWidth = font.widthOfTextAtSize(displayName, fontSize);
-            const margin = 0.02 * 72;
-            const textX = centerXPt + (designWidthPt / 2) * cosR - (designHeightPt / 2) * sinR - textWidth - margin;
-            const textY = centerYPt - (designWidthPt / 2) * sinR - (designHeightPt / 2) * cosR + margin;
-            page.drawText(displayName, {
-              x: textX,
-              y: textY,
-              size: fontSize,
-              font,
-              rotate: degrees(-rotDeg),
-            });
+            drawPrintLabelOnPdfPage(page, font, pdfLabel, {
+              centerXPt,
+              centerYPt,
+              rotationDeg: rotDeg,
+              artHeightInches: design.heightInches * design.transform.s,
+              artHeightPt: designHeightPt,
+            }, degrees);
           }
 
           if (spotColorsByDesign) {
@@ -284,6 +282,7 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
               alphaThresholded: d.alphaThresholded,
               printFileName: d.printFileName,
               name: d.name,
+              label: getDesignLabel(d) ?? undefined,
             })),
             outW,
             outH,
@@ -327,16 +326,17 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
             ctx.rotate((design.transform.rotation * Math.PI) / 180);
             ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
             ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
-            if (design.printFileName) {
+            // Same layout the worker path and the preview use. This fallback used to put the
+            // label inside the bottom-right corner unconditionally while they put it below,
+            // so which of the two a customer got depended on whether the worker was available.
+            const fallbackLabel = getDesignLabel(design);
+            const fallbackArtH = design.heightInches * design.transform.s;
+            if (fallbackLabel && fallbackArtH > 0) {
               ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
-              const fontSize = Math.max(8, Math.round(drawH * 0.045));
-              ctx.font = `bold ${fontSize}px sans-serif`;
-              ctx.fillStyle = '#000000';
-              ctx.textAlign = 'right';
-              ctx.textBaseline = 'bottom';
-              const margin = Math.round(fontSize * 0.3);
-              const displayName = design.name.replace(/\.[^/.]+$/, '');
-              ctx.fillText(displayName, drawW / 2 - margin, drawH / 2 - margin);
+              drawPrintLabel(
+                ctx, fallbackLabel, drawH / fallbackArtH,
+                labelReadsUpsideDown(design.transform.rotation),
+              );
               ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
             }
             ctx.restore();

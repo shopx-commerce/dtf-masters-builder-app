@@ -372,6 +372,18 @@ export function getContourWorkerManager(): ContourWorkerManager {
   return managerInstance;
 }
 
+/**
+ * Invalidate any cached contour, without bringing the worker into existence to do it.
+ *
+ * The manager spawns its worker in its constructor, so reaching for it just to clear a cache
+ * downloads and starts a 136 KB worker that then sits idle. Callers here only ever want the
+ * invalidation — a design's pixels changed, so a contour traced from the old ones is stale — and
+ * if no contour has been traced this session there is nothing to invalidate.
+ */
+export function clearContourCacheIfActive(): void {
+  managerInstance?.clearCache();
+}
+
 export async function processContourInWorker(
   image: HTMLImageElement,
   strokeSettings: {

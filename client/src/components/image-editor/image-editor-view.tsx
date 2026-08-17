@@ -33,6 +33,7 @@ import {
   useUiActions,
   useUiStore,
 } from "@/state/ui-store";
+import { ArrangeBusyPill } from "./arrange-busy-pill";
 
 /**
  * The tools in the phone's Design tools sheet, and the thing the bar offers to repeat.
@@ -71,6 +72,7 @@ export default function ImageEditorView() {
     isAddingToCart, isEditMode, isUpdateFlow, isDragOver, artboardWidth, artboardHeight,
     forceRegenerateProduction, setForceRegenerateProduction,
     quantity, designGap, duplicateCount, designs, setDesigns, selectedDesignId, setSelectedDesignId,
+    arrangeStage, arrangeEpoch,
     selectedDesignIds, setSelectedDesignIds,
     proportionalLock,
     setProportionalLock,
@@ -86,6 +88,7 @@ export default function ImageEditorView() {
     handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta,
     handleEffectiveSizeChange, handleResizeChange, handleDuplicateDesign,
     handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleSetGroupCount,
+    handleTogglePrintName,
     handleDeleteDesign, handleDeleteGroup, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleAlignCorner,
     handleAutoArrange, canFill, handleFillEmptySpace, handleArtboardHeightPick, handleThresholdAlpha,
     handleThresholdAlphaAll, handleCropDesign, handleCropApply, handleDownload, handleAddToCart,
@@ -313,6 +316,7 @@ export default function ImageEditorView() {
   const layerHandlersLiveRef = useRef({
     handleSelectDesign,
     handleSetGroupCount,
+    handleTogglePrintName,
     handleDeleteGroup,
     setDesigns,
     getLayerThumbnail,
@@ -320,6 +324,7 @@ export default function ImageEditorView() {
   layerHandlersLiveRef.current = {
     handleSelectDesign,
     handleSetGroupCount,
+    handleTogglePrintName,
     handleDeleteGroup,
     setDesigns,
     getLayerThumbnail,
@@ -329,6 +334,7 @@ export default function ImageEditorView() {
       handleSelectDesign: (id) => layerHandlersLiveRef.current.handleSelectDesign(id),
       handleSetGroupCount: (row, count) =>
         layerHandlersLiveRef.current.handleSetGroupCount(row, count),
+      handleTogglePrintName: (ids) => layerHandlersLiveRef.current.handleTogglePrintName(ids),
       handleDeleteGroup: (ids) => layerHandlersLiveRef.current.handleDeleteGroup(ids),
       handleAutoArrangeRef,
       setDesigns: (updater) => layerHandlersLiveRef.current.setDesigns(updater),
@@ -947,6 +953,7 @@ export default function ImageEditorView() {
                   designTransform={activeDesignTransform}
                   onTransformChange={handleDesignTransformChange}
                   designs={designs}
+                  arrangeEpoch={arrangeEpoch}
                   selectedDesignId={selectedDesignId}
                   selectedDesignIds={selectedDesignIds}
                   onSelectDesign={handleSelectDesign}
@@ -971,6 +978,7 @@ export default function ImageEditorView() {
                    onWandDeactivate={handleWandDeactivate}
                    onRegisterFocus={registerCanvasFocus}
                 />
+                <ArrangeBusyPill stage={arrangeStage} />
 
                 {/* Contextual tools. Nothing selected means no sheet at all, so
                     the controls cost zero canvas for as long as they are of no
@@ -1570,6 +1578,7 @@ export default function ImageEditorView() {
               designTransform={activeDesignTransform}
               onTransformChange={handleDesignTransformChange}
               designs={designs}
+              arrangeEpoch={arrangeEpoch}
               selectedDesignId={selectedDesignId}
               selectedDesignIds={selectedDesignIds}
               onSelectDesign={handleSelectDesign}
@@ -1591,6 +1600,7 @@ export default function ImageEditorView() {
               onWandDeleteTap={handleWandDelete}
               onWandDeactivate={handleWandDeactivate}
             />
+            <ArrangeBusyPill stage={arrangeStage} />
           </div>
         )}
       </div>

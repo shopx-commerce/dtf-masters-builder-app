@@ -11,12 +11,64 @@
  *
  * Large sources are accepted via the server prepare path (sharp/libvips):
  * the browser never full-decodes them. Inline decode is reserved for
- * sources that fit comfortably in a mobile tab.
+ * sources that fit comfortably in the tab doing the decoding — which is a
+ * different size on a phone than on a workstation, hence
+ * `inlineDecodeMegapixelBudget` rather than one constant for everything.
  */
 
+import { isMobileDevice, resolveUploadConcurrency } from "./upload-queue";
+
 /** Soft threshold: above this, route through `/api/prepare-raster-upload`
- *  instead of decoding the full raster in the browser. */
+ *  instead of decoding the full raster in the browser. The floor for every
+ *  device; see `inlineDecodeMegapixelBudget` for what a desktop is allowed. */
 export const MAX_INLINE_DECODE_MEGAPIXELS = 40;
+
+/**
+ * Megapixels of raster that may be decoding at once across the whole upload queue.
+ *
+ * A decoded pixel is four bytes, so this is about 1.6 GB. The per-image ceiling below has to
+ * survive being multiplied by the queue width, because dragging a folder in starts several
+ * decodes at once — raising the per-image number without dividing by the queue would turn one
+ * safe upload into four unsafe ones.
+ */
+const SIMULTANEOUS_DECODE_MEGAPIXELS = 400;
+
+/**
+ * The largest raster this device should full-decode in the browser rather than hand to the
+ * server prepare endpoint.
+ *
+ * Two very different machines were being held to one number. The 40 MP floor exists because an
+ * iOS tab has a few hundred megabytes to work with and a large decode kills it outright — but
+ * a desktop with memory to spare was being sent down the server path on the same rule, and
+ * that path decodes one image at a time behind a queue of eight. A large file could therefore
+ * sit through three retries against a busy or out-of-memory server and surface as "the
+ * connection dropped", while the machine that could have decoded it in a second sat idle.
+ * Sending work the client can do to a server that cannot is the worst of both.
+ *
+ * Raising this relaxes no canvas limit. The only full-size canvas on the inline path is the
+ * JPEG-to-PNG re-encode, which is guarded separately by `SAFARI_MAX_CANVAS_AREA` and
+ * `IOS_SAFE_CANVAS_DIM`; above those the original bytes pass straight through and the trim is
+ * recorded as a crop rectangle instead. What grows here is only the browser's own decode, and
+ * the content measurement that follows it works in 2048 pixel tiles regardless of source size.
+ *
+ * `MAX_SOURCE_MEGAPIXELS` still caps everything, so the server path keeps the extreme tail.
+ */
+export function inlineDecodeMegapixelBudget(): number {
+  if (typeof navigator === "undefined" || isMobileDevice()) return MAX_INLINE_DECODE_MEGAPIXELS;
+
+  // Not in every browser's typings, and absent on Safari and Firefox. Reported in powers of
+  // two and capped at 8, so 8 means "8 or more" — all the fidelity this needs.
+  const memoryGiB = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  const perImage = memoryGiB === undefined ? 60
+    : memoryGiB >= 8 ? 120
+    : memoryGiB >= 4 ? 80
+    : MAX_INLINE_DECODE_MEGAPIXELS;
+
+  const shared = Math.floor(SIMULTANEOUS_DECODE_MEGAPIXELS / Math.max(1, resolveUploadConcurrency()));
+  // Never below the floor: a machine that reports little memory but runs a wide queue must not
+  // end up stricter than the baseline every device already coped with.
+  return Math.max(MAX_INLINE_DECODE_MEGAPIXELS, Math.min(perImage, shared));
+}
 
 /**
  * @deprecated Prefer MAX_INLINE_DECODE_MEGAPIXELS. Kept as an alias so
@@ -58,7 +110,9 @@ export function checkPixelBudget(
   width: number,
   height: number,
   maxSourceMP = MAX_SOURCE_MEGAPIXELS,
-  maxInlineMP = MAX_INLINE_DECODE_MEGAPIXELS,
+  // Evaluated per call, so the answer tracks the device rather than whatever was true when the
+  // module was first imported.
+  maxInlineMP = inlineDecodeMegapixelBudget(),
 ): BudgetOutcome {
   if (!(width > 0) || !(height > 0)) {
     return { ok: false, reason: "unreadable_dimensions", megapixels: 0 };

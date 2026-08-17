@@ -23,6 +23,7 @@
 import ExportWorkerModule from "@/lib/export-worker?worker";
 import { isMobileDevice } from "@/lib/upload-queue";
 import { stripRangesFor } from "@/lib/png-stream";
+import type { PrintLabelLayout } from "@/lib/print-label";
 
 export interface ParallelBandDesign {
   widthInches: number;
@@ -38,6 +39,8 @@ export interface ParallelBandDesign {
   alphaThresholded?: boolean;
   printFileName?: boolean;
   name?: string;
+  /** Where the printed filename goes, decided on the main thread. See `DesignExportData`. */
+  label?: PrintLabelLayout;
 }
 
 export interface ParallelExportProgress {

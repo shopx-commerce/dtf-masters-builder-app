@@ -1235,6 +1235,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
          widthInches: d.widthInches,
          heightInches: d.heightInches,
          name: d.name,
+         printFileName: d.printFileName,
          halftoned: d.halftoned,
          halftoneSettings: d.halftoneSettings,
        })));
@@ -1255,6 +1256,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       widthInches: number;
       heightInches: number;
       name: string;
+      printFileName?: boolean;
       halftoned?: boolean;
       halftoneSettings?: DesignItem["halftoneSettings"];
     }>;
@@ -1279,6 +1281,9 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
             widthInches: p.widthInches,
             heightInches: p.heightInches,
             name: p.name,
+             // Written back explicitly: the spread above carries the live flag, so an undo of a
+             // label toggle would otherwise leave the label on.
+             printFileName: p.printFileName,
              alphaThresholded: savedInfo ? undefined : existing.alphaThresholded,
              halftoned: p.halftoned,
              halftoneSettings: p.halftoneSettings,
@@ -1295,6 +1300,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
              widthInches: p.widthInches,
              heightInches: p.heightInches,
              name: p.name,
+             printFileName: p.printFileName,
              originalDPI: savedInfo.dpi,
              halftoned: p.halftoned,
              halftoneSettings: p.halftoneSettings,
@@ -2194,7 +2200,6 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
         id: newId,
         name: base,
         transform: { ...d.transform, nx, ny },
-        printFileName: false,
         groupId: nextGroupId,
       };
     });
@@ -2233,7 +2238,6 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
         id: newId,
         name: baseName,
         transform: { ...design.transform, nx, ny },
-        printFileName: false,
       });
     }
     saveSnapshot();
@@ -2274,7 +2278,6 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
         id: newId,
         name: baseName,
         transform: { ...design.transform, nx, ny },
-        printFileName: false,
       });
     }
     saveSnapshot();
@@ -2300,7 +2303,6 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       id: newId,
       name: baseName,
       transform: { ...design.transform, nx, ny },
-      printFileName: false,
     };
     saveSnapshot();
     setDesigns(prev => [...prev, newDesign]);
@@ -2360,7 +2362,6 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
         id: newId,
         name: d.name.replace(/ copy( \d+)?$/, ''),
         transform: { ...d.transform, nx, ny },
-        printFileName: false,
         groupId: nextGroupId,
       };
     });
@@ -2368,6 +2369,34 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     setSelectedDesignIds(new Set(newIds));
     setSelectedDesignId(newIds[newIds.length - 1]);
   }, [saveSnapshot, artboardWidth, artboardHeight]);
+
+  /**
+   * Turns the printed filename on or off for a whole layer row.
+   *
+   * Enabling it grows the design's footprint — by a band under the artwork, or by nothing at all
+   * when the label fits in the artwork's own empty corner — so the designs are re-clamped
+   * afterwards. Without that, switching the label on for a design already sitting against the
+   * bottom edge would put its label off the film, which is the one failure the customer cannot
+   * see in the preview until it comes back from the printer.
+   *
+   * Positions are otherwise left alone. Re-nesting the sheet because someone ticked a label would
+   * move work they had placed deliberately; auto-arrange is still one click away.
+   */
+  const handleTogglePrintName = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    saveSnapshot();
+    const idSet = new Set(ids);
+    const turningOn = !designsRef.current.some(d => idSet.has(d.id) && d.printFileName);
+    setDesigns(prev => {
+      const labelled = prev.map(d => (idSet.has(d.id) ? { ...d, printFileName: turningOn } : d));
+      if (!turningOn) return labelled;
+      return labelled.map(d => {
+        if (!idSet.has(d.id)) return d;
+        const { nx, ny } = clampDesignToArtboard(d, artboardWidthRef.current, artboardHeightRef.current);
+        return { ...d, transform: { ...d.transform, nx, ny } };
+      });
+    });
+  }, [saveSnapshot]);
 
   const handleDeleteGroup = useCallback((ids: string[]) => {
     if (ids.length === 0) return;
@@ -2517,5 +2546,5 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
 
 
   // Base editor state; arrange/upload/export/cart hooks extend this bag in image-editor-provider.
-  return { onDesignUploaded, profile, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode, toast, t, lang, isMobile, isLgUp, imageInfo, setImageInfo, resizeSettings, setResizeSettings, isProcessing, setIsProcessing, isAddingToCart, setIsAddingToCart, isUpdateFlow, setIsUpdateFlow, addToCartProgressLabel, setAddToCartProgressLabel, exportProgressLabel, setExportProgressLabel, addToCartInFlightRef, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, shellShopKeyRef, shellConfigReady, designIdRef, refreshAddToCartStallTimeout, isUploading, setIsUploading, uploadProgress, setUploadProgress, artboardWidth, setArtboardWidth, artboardHeight, setArtboardHeight, artboardWidthRef, artboardHeightRef, contentFillCacheRef, handleAutoArrangeRef, shrinkSheetToFitRef, manualHeightFloorRef, clearManualHeightFloor, quantity, setQuantity, designGap, setDesignGap, duplicateCount, setDuplicateCount, clampDuplicateCount, parseDuplicateCount, handleDuplicateCountKeyDown, designTransform, setDesignTransform, designs, setDesigns, selectedDesignId, setSelectedDesignId, selectedDesignIds, setSelectedDesignIds, clipboardRef, proportionalLock, setProportionalLock, designInfoRef, sidebarFileRef, headerUploadInputRef, canvasRef, downloadContainer, setDownloadContainer, fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer, copySpotSelectionsRef, pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo, mountedRef, designsRef, nudgeSnapshotSavedRef, nudgeTimeoutRef, thumbnailCacheRef, assetDataUrlCacheRef, restoredLayerAssetRef, getLayerAssetRef, getLayerScreenedAssetRef, releaseLayerAssetOwnership, multiDragAccumRef, multiResizeStartRef, multiRotateStartRef, snapshotCacheRef, getSnapshot, saveSnapshot, applySnapshot, handleUndo, handleRedo, handleInteractionEnd, handleRemoveWhiteBackground, handleWandDelete, selectedDesign, activeImageInfo, activeDesignTransform, activeWidthInches, activeHeightInches, activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, draftRecoveryAvailable, isRecoveringDraft, recoverEditorDraft, discardEditorDraft, rehydrateDesignImage, ensureDesignImagesAvailable, handleSelectDesign, handleMultiSelect, handleGroupSelected, handleUngroupSelected, selectedHasGroup, getLayerThumbnail, handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta, handleEffectiveSizeChange, isArtboardFull, handleDuplicateDesign, handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleCopySelected, handlePaste, handleDeleteGroup, handleDeleteDesign, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleCanvasContextMenu };
+  return { onDesignUploaded, profile, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode, toast, t, lang, isMobile, isLgUp, imageInfo, setImageInfo, resizeSettings, setResizeSettings, isProcessing, setIsProcessing, isAddingToCart, setIsAddingToCart, isUpdateFlow, setIsUpdateFlow, addToCartProgressLabel, setAddToCartProgressLabel, exportProgressLabel, setExportProgressLabel, addToCartInFlightRef, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, shellShopKeyRef, shellConfigReady, designIdRef, refreshAddToCartStallTimeout, isUploading, setIsUploading, uploadProgress, setUploadProgress, artboardWidth, setArtboardWidth, artboardHeight, setArtboardHeight, artboardWidthRef, artboardHeightRef, contentFillCacheRef, handleAutoArrangeRef, shrinkSheetToFitRef, manualHeightFloorRef, clearManualHeightFloor, quantity, setQuantity, designGap, setDesignGap, duplicateCount, setDuplicateCount, clampDuplicateCount, parseDuplicateCount, handleDuplicateCountKeyDown, designTransform, setDesignTransform, designs, setDesigns, selectedDesignId, setSelectedDesignId, selectedDesignIds, setSelectedDesignIds, clipboardRef, proportionalLock, setProportionalLock, designInfoRef, sidebarFileRef, headerUploadInputRef, canvasRef, downloadContainer, setDownloadContainer, fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer, copySpotSelectionsRef, pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo, mountedRef, designsRef, nudgeSnapshotSavedRef, nudgeTimeoutRef, thumbnailCacheRef, assetDataUrlCacheRef, restoredLayerAssetRef, getLayerAssetRef, getLayerScreenedAssetRef, releaseLayerAssetOwnership, multiDragAccumRef, multiResizeStartRef, multiRotateStartRef, snapshotCacheRef, getSnapshot, saveSnapshot, applySnapshot, handleUndo, handleRedo, handleInteractionEnd, handleRemoveWhiteBackground, handleWandDelete, selectedDesign, activeImageInfo, activeDesignTransform, activeWidthInches, activeHeightInches, activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, draftRecoveryAvailable, isRecoveringDraft, recoverEditorDraft, discardEditorDraft, rehydrateDesignImage, ensureDesignImagesAvailable, handleSelectDesign, handleMultiSelect, handleGroupSelected, handleUngroupSelected, selectedHasGroup, getLayerThumbnail, handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta, handleEffectiveSizeChange, isArtboardFull, handleDuplicateDesign, handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleCopySelected, handlePaste, handleTogglePrintName, handleDeleteGroup, handleDeleteDesign, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleCanvasContextMenu };
 }

@@ -1,4 +1,5 @@
 import { makePngChunk, pngHeaderParts, stripRangesFor } from "./png-stream";
+import { drawPrintLabel, labelReadsUpsideDown, type PrintLabelLayout } from "./print-label";
 
 interface DesignExportData {
   widthInches: number;
@@ -20,6 +21,15 @@ interface DesignExportData {
   alphaThresholded?: boolean;
   printFileName?: boolean;
   name?: string;
+  /**
+   * Where the printed filename goes, decided on the main thread.
+   *
+   * Not recomputed here on purpose. Choosing between the artwork's own corner and a band
+   * underneath needs the design's ink silhouette, which is built from a canvas the main thread
+   * has and this worker does not. Sending the answer is what guarantees the film reserved by the
+   * nester is the film the label lands on.
+   */
+  label?: PrintLabelLayout;
 }
 
 interface ExportInput {
@@ -53,6 +63,11 @@ interface DesignExportBounds {
   bottom: number;
   width: number;
   height: number;
+  /** The design's centre on the sheet, and where that centre sits inside `width` × `height`. */
+  centerX: number;
+  centerY: number;
+  pivotX: number;
+  pivotY: number;
   stampKey: string;
 }
 
@@ -63,7 +78,10 @@ const STAMP_CACHE_MAX_BYTES = 64 * 1024 * 1024; // 64 MB RGBA per stamp (= ~4096
 const STAMP_CACHE_TOTAL_MAX_BYTES = 256 * 1024 * 1024; // 256 MB across all stamps
 
 function makeStampKey(d: DesignExportData, drawW: number, drawH: number): string {
-  const nameKey = d.printFileName && d.name ? `|n${d.name}` : '';
+  // The label's own text and placement, not just the flag: a name that had to be shortened to fit
+  // and a name that did not are different pixels, and a label in the corner is a different canvas
+  // from one in a band. Two copies of a design may only share a pre-render if both match.
+  const labelKey = d.label ? `|n${d.label.text}|p${d.label.placement}` : '';
   return [
     designSourceKey(d),
     drawW,
@@ -73,7 +91,7 @@ function makeStampKey(d: DesignExportData, drawW: number, drawH: number): string
     d.flipY ? 1 : 0,
     d.alphaThresholded ? 1 : 0,
     d.printFileName ? 1 : 0,
-    nameKey,
+    labelKey,
   ].join('|');
 }
 
@@ -92,6 +110,58 @@ function designDrawSize(d: DesignExportData, exportDpi: number) {
   };
 }
 
+/**
+ * How far the label reaches outside the artwork's own bounding box, in whole pixels per side.
+ *
+ * The design's pre-render canvas used to be sized to the artwork alone while the label was drawn
+ * a tenth of an inch below it — off the canvas, so the label was clipped away entirely and never
+ * reached the printed sheet. These paddings are what give it somewhere to land.
+ *
+ * A label placed inside the artwork returns zeroes: it is already inside the box.
+ */
+function labelPadding(d: DesignExportData, drawW: number, drawH: number) {
+  const none = { left: 0, top: 0, right: 0, bottom: 0 };
+  const label = d.label;
+  const artH = d.heightInches * d.s;
+  if (!label || !(artH > 0)) return none;
+
+  // Against the drawn artwork rather than the nominal export DPI, so the label keeps its
+  // proportions after `drawW`/`drawH` were rounded to whole pixels.
+  const pxPerInch = drawH / artH;
+  const x0 = label.rect.x * pxPerInch;
+  const y0 = label.rect.y * pxPerInch;
+  const x1 = (label.rect.x + label.rect.width) * pxPerInch;
+  const y1 = (label.rect.y + label.rect.height) * pxPerInch;
+
+  const rad = (d.rotation * Math.PI) / 180;
+  const cosA = Math.cos(rad);
+  const sinA = Math.sin(rad);
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const [x, y] of [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]) {
+    const rx = x * cosA - y * sinA;
+    const ry = x * sinA + y * cosA;
+    if (rx < minX) minX = rx;
+    if (rx > maxX) maxX = rx;
+    if (ry < minY) minY = ry;
+    if (ry > maxY) maxY = ry;
+  }
+
+  // The artwork's canvas puts the pivot on a whole pixel, so its edges sit at these distances
+  // from the pivot and the padding is whatever the label needs beyond them.
+  const cos = Math.abs(cosA);
+  const sin = Math.abs(sinA);
+  const aabbW = Math.max(1, Math.ceil(drawW * cos + drawH * sin));
+  const aabbH = Math.max(1, Math.ceil(drawW * sin + drawH * cos));
+  const pivotX = Math.round(aabbW / 2);
+  const pivotY = Math.round(aabbH / 2);
+  return {
+    left: Math.max(0, Math.ceil(-pivotX - minX)),
+    top: Math.max(0, Math.ceil(-pivotY - minY)),
+    right: Math.max(0, Math.ceil(maxX - (aabbW - pivotX))),
+    bottom: Math.max(0, Math.ceil(maxY - (aabbH - pivotY))),
+  };
+}
+
 function designAabb(d: DesignExportData, outW: number, outH: number, exportDpi: number) {
   const { drawW, drawH } = designDrawSize(d, exportDpi);
   const centerX = d.nx * outW;
@@ -101,17 +171,23 @@ function designAabb(d: DesignExportData, outW: number, outH: number, exportDpi: 
   const sin = Math.abs(Math.sin(rad));
   const aabbW = Math.max(1, Math.ceil(drawW * cos + drawH * sin));
   const aabbH = Math.max(1, Math.ceil(drawW * sin + drawH * cos));
+  const pad = labelPadding(d, drawW, drawH);
+  // Every expression below reduces to the unpadded one when there is no label, so an unlabelled
+  // sheet exports the same bytes it always did.
   return {
     drawW,
     drawH,
     centerX,
     centerY,
-    aabbW,
-    aabbH,
-    left: centerX - aabbW / 2,
-    right: centerX + aabbW / 2,
-    top: centerY - aabbH / 2,
-    bottom: centerY + aabbH / 2,
+    aabbW: aabbW + pad.left + pad.right,
+    aabbH: aabbH + pad.top + pad.bottom,
+    /** Where the design's centre sits inside its pre-render canvas, on a whole pixel. */
+    pivotX: Math.round(aabbW / 2) + pad.left,
+    pivotY: Math.round(aabbH / 2) + pad.top,
+    left: centerX - aabbW / 2 - pad.left,
+    right: centerX + aabbW / 2 + pad.right,
+    top: centerY - aabbH / 2 - pad.top,
+    bottom: centerY + aabbH / 2 + pad.bottom,
   };
 }
 
@@ -139,6 +215,10 @@ function boundsForDesigns(
       bottom: bounds.bottom,
       width: bounds.aabbW,
       height: bounds.aabbH,
+      centerX: bounds.centerX,
+      centerY: bounds.centerY,
+      pivotX: bounds.pivotX,
+      pivotY: bounds.pivotY,
       stampKey: makeStampKey(design, bounds.drawW, bounds.drawH),
     };
   });
@@ -262,7 +342,6 @@ async function getOrBuildStamp(
   d: DesignExportData,
   bounds: DesignExportBounds,
   bitmap: ImageBitmap,
-  exportDpi: number,
   cache: StampCache,
   cacheState: StampCacheState,
 ): Promise<{ stamp: OffscreenCanvas | null; aabbW: number; aabbH: number }> {
@@ -286,23 +365,19 @@ async function getOrBuildStamp(
   sctx.imageSmoothingEnabled = !d.alphaThresholded;
   sctx.imageSmoothingQuality = 'high';
   sctx.save();
-  // Round the internal pivot so it lands on an integer pixel, matching the
-  // pre-cache path that translated to Math.round(centerX). This guarantees
-  // byte-identical output regardless of whether we hit the stamp cache.
-  sctx.translate(Math.round(aabbW / 2), Math.round(aabbH / 2));
+  // The pivot lands on an integer pixel, matching the pre-cache path that translated to
+  // Math.round(centerX). This guarantees byte-identical output regardless of whether we hit the
+  // stamp cache. It is offset by any padding the label needed on the top and left.
+  sctx.translate(bounds.pivotX, bounds.pivotY);
   sctx.rotate((d.rotation * Math.PI) / 180);
   sctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
   sctx.drawImage(bitmap, -bounds.drawW / 2, -bounds.drawH / 2, bounds.drawW, bounds.drawH);
-  if (d.printFileName && d.name) {
+  const artH = d.heightInches * d.s;
+  if (d.label && artH > 0) {
+    // Undo the flip so the name is never printed mirrored. The label's coordinates are defined in
+    // this unflipped space, which is the space the nest mask reserved its film in.
     sctx.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
-    const marginPx = 0.1 * exportDpi;
-    const fontSize = Math.max(8, Math.round(bounds.drawH * 0.045));
-    sctx.font = `bold ${fontSize}px sans-serif`;
-    const displayName = d.name.replace(/\.[^/.]+$/, '');
-    sctx.fillStyle = '#000000';
-    sctx.textAlign = 'right';
-    sctx.textBaseline = 'top';
-    sctx.fillText(displayName, bounds.drawW / 2, bounds.drawH / 2 + marginPx);
+    drawPrintLabel(sctx, d.label, bounds.drawH / artH, labelReadsUpsideDown(d.rotation));
   }
   sctx.restore();
 
@@ -329,8 +404,8 @@ async function drawDesignsOnStrip(
     if (p.bottom < stripY || p.top > stripBottom) continue;
     const d = p.design;
     const bitmap = await getSourceBitmap(d, sources, bitmapCache, p.drawW, p.drawH);
-    const { stamp, aabbW, aabbH } = await getOrBuildStamp(
-      d, p, bitmap, exportDpi, stampCache, stampCacheState,
+    const { stamp } = await getOrBuildStamp(
+      d, p, bitmap, stampCache, stampCacheState,
     );
     if (!stamp) {
       // A null stamp means the browser refused a 2d context for the design's
@@ -342,13 +417,11 @@ async function drawDesignsOnStrip(
       );
     }
 
-    // Placement chosen so the design's pivot lands on the same integer pixel
-    // as the pre-cache code path (Math.round of the design's absolute center),
-    // preserving byte-identical output.
-    const stampCenterInX = Math.round(aabbW / 2);
-    const stampCenterInY = Math.round(aabbH / 2);
-    const drawX = Math.round(p.left + p.width / 2) - stampCenterInX;
-    const drawY = Math.round(p.top - stripY + p.height / 2) - stampCenterInY;
+    // The design's pivot lands on the same integer pixel as the pre-cache code path
+    // (Math.round of the design's absolute centre), preserving byte-identical output. `stripY` is
+    // whole, so subtracting it after rounding is the same as rounding the difference.
+    const drawX = Math.round(p.centerX) - p.pivotX;
+    const drawY = Math.round(p.centerY) - stripY - p.pivotY;
     ctx.drawImage(stamp, drawX, drawY);
   }
 }
@@ -943,16 +1016,10 @@ async function runExportLegacy(input: ExportInput): Promise<Blob> {
     ctx.rotate((design.rotation * Math.PI) / 180);
     ctx.scale(design.flipX ? -1 : 1, design.flipY ? -1 : 1);
     ctx.drawImage(bitmap, -drawW / 2, -drawH / 2, drawW, drawH);
-    if (design.printFileName && design.name) {
+    const legacyArtH = design.heightInches * design.s;
+    if (design.label && legacyArtH > 0) {
       ctx.scale(design.flipX ? -1 : 1, design.flipY ? -1 : 1);
-      const marginPx = 0.1 * exportDpi;
-      const fontSize = Math.max(8, Math.round(drawH * 0.045));
-      ctx.font = `bold ${fontSize}px sans-serif`;
-      const displayName = design.name.replace(/\.[^/.]+$/, '');
-      ctx.fillStyle = '#000000';
-      ctx.textAlign = 'right';
-      ctx.textBaseline = 'top';
-      ctx.fillText(displayName, drawW / 2, drawH / 2 + marginPx);
+      drawPrintLabel(ctx, design.label, drawH / legacyArtH, labelReadsUpsideDown(design.rotation));
       ctx.scale(design.flipX ? -1 : 1, design.flipY ? -1 : 1);
     }
     ctx.restore();

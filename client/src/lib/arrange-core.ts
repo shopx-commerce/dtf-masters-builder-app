@@ -99,6 +99,38 @@ export interface ArrangeInput {
 }
 
 const EPS = 0.01;
+
+/**
+ * How much slack a settled layout may carry before tidying it is worth a reshuffle.
+ *
+ * The default gap between designs is a quarter inch, so an inch is about four gaps: a layout
+ * within an inch of the shortest one possible has no slack left that anybody would see, and
+ * the search for a tidier version can be skipped outright.
+ */
+const TIDY_MIN_INCHES = 1;
+
+/**
+ * The largest share of the sheet an arrange the user did not ask for may relocate purely to
+ * look tidier.
+ *
+ * This has no say over price. A layout that bills less wins regardless of how much it moves,
+ * and that comparison happens first. This governs only the layouts that cost exactly the same
+ * and merely look better, where the question is whether the tidier result is worth designs
+ * shifting out from under someone who asked for one more copy.
+ *
+ * Tuned on `verify-arrange-tidy.ts`, which builds sheets a copy at a time and then asks how
+ * much film the Auto-Arrange button can still recover. Candidate tidier layouts turn out to
+ * cluster either side of 0.6 — a sweep produces a genuinely different packing rather than a
+ * local tidy-up, so its churn is never small. At 0.65 ten of the twelve sheets come out with
+ * nothing left for the button to do, against seven before this existed; the two it still
+ * declines would each need three quarters of the sheet moved, which is the whole sheet jumping
+ * and is what this refuses.
+ */
+const MAX_TIDY_CHURN = 0.65;
+
+/** How far a design has to shift, in inches, before it counts as having been relocated. */
+const MOVE_TOLERANCE_INCHES = 0.05;
+
 const DEBUG_OVERLAP = false; // Set true to log when rotation is used (for overlap debugging)
 /** ARRANGE_RANK_DEBUG=1 dumps the candidate ranking. Node-only; workers have no `process`. */
 const DEBUG_RANK = typeof process !== 'undefined' && !!process.env?.ARRANGE_RANK_DEBUG;
@@ -811,9 +843,31 @@ export function runArrange(input: ArrangeInput) {
    * only tie. Searching past that point is spending hundreds of milliseconds to re-derive a
    * number that is already known to be optimal.
    */
-  const billableFloor = billable(packingHeightLowerBound(items, usableW));
+  const heightFloor = packingHeightLowerBound(items, usableW);
+  const billableFloor = billable(heightFloor);
   const billsAtFloor = (c: Candidate): boolean =>
     c.overflows === 0 && billable(c.filmHeight) <= billableFloor + EPS;
+
+  /**
+   * Share of the designs one layout moves relative to another.
+   *
+   * Positions arrive as fractions of the sheet, so they are converted back to inches before
+   * being compared: the same normalised delta is a rounding error on a 240 inch sheet and a
+   * visible jump on a 12 inch one.
+   */
+  const churn = (from: Candidate, to: Candidate): number => {
+    if (to.result.length === 0) return 0;
+    const before = new Map(from.result.map(p => [p.id, p]));
+    let moved = 0;
+    for (const p of to.result) {
+      const q = before.get(p.id);
+      if (!q
+        || q.rotation !== p.rotation
+        || Math.abs(q.nx - p.nx) * artboardWidth > MOVE_TOLERANCE_INCHES
+        || Math.abs(q.ny - p.ny) * artboardHeight > MOVE_TOLERANCE_INCHES) moved++;
+    }
+    return moved / to.result.length;
+  };
 
   const runNestCandidates = (): Candidate[] => {
     if (!hasMasks || items.length > NEST_ITEM_LIMIT) return [];
@@ -917,14 +971,23 @@ export function runArrange(input: ArrangeInput) {
   const describe = (chosen: Candidate) => ({
     ...chosen,
     packedExtent: Math.max(chosen.maxHeight, chosen.filmHeight),
-    minRequiredHeight: packingHeightLowerBound(items, usableW),
+    minRequiredHeight: heightFloor,
   });
 
-  // Adding a copy asked for the sheet to absorb it, not to be rebuilt. When the settled
-  // layout already bills at the floor, the sweep below is guaranteed to tie at best, and
-  // `preferStable` would then discard every one of its results anyway. Skipping it takes a
-  // copy-count change from a full 76-pack sweep to a single incremental nest.
-  if (preferStable && stable && billsAtFloor(stable)) return describe(stable);
+  // Adding a copy asked for the sheet to absorb it, not to be rebuilt, so a settled layout
+  // that is already as short as any layout of this artwork could be is returned untouched.
+  // The sweep below could only tie, and would spend a full 76-pack search proving it.
+  //
+  // Billing at the cheapest rung is not on its own enough to skip that search. A sheet can
+  // bill at the floor with its designs strewn down the film and gaps between them, and since
+  // every later copy starts from this layout, nothing would ever tighten it — which is why
+  // the sheet stays loose until someone presses Auto-Arrange by hand. When there is that
+  // much slack the sweep runs, and the churn test below decides whether taking its answer is
+  // worth the disruption.
+  if (preferStable && stable && billsAtFloor(stable)
+      && stable.filmHeight - heightFloor <= TIDY_MIN_INCHES) {
+    return describe(stable);
+  }
 
   const rectCandidates: Candidate[] =
     fixedRects && fixedRects.length > 0
@@ -990,7 +1053,18 @@ export function runArrange(input: ArrangeInput) {
   if (stable.overflows > winner.overflows) return describe(winner);
 
   if (preferStable) {
-    return describe(billable(winner.filmHeight) < billable(stable.filmHeight) - EPS ? winner : stable);
+    // A cheaper sheet is worth any amount of disruption — that is the customer's money.
+    if (billable(winner.filmHeight) < billable(stable.filmHeight) - EPS) return describe(winner);
+    // Same price, tidier sheet. Worth taking only when there was real slack to remove and
+    // collecting it does not rearrange most of the sheet. Overflowing layouts sit this out:
+    // the sheet is about to grow a rung and everything gets packed again on the taller film,
+    // so moving designs now is motion the user watches twice for nothing.
+    if (winner.overflows === 0
+      && stable.filmHeight - winner.filmHeight > TIDY_MIN_INCHES
+      && churn(stable, winner) <= MAX_TIDY_CHURN) {
+      return describe(winner);
+    }
+    return describe(stable);
   }
 
   // An explicit Auto-Arrange is a licence to move things, not a licence to make them worse.

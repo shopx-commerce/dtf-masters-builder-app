@@ -32,6 +32,7 @@ import {
   prepareRasterUpload,
   type PreparedRaster,
   PrepareNetworkError,
+  prepareErrorMessageKey,
 } from "@/lib/prepare-raster-upload";
 import {
   LOW_RES_EFFECTIVE_DPI_THRESHOLD,
@@ -56,7 +57,7 @@ import {
 import { createVectorPrintSourceResolver, hasVectorPrintSource } from "@/lib/vector-print-source";
 import { VECTOR_TARGET_DPI, vectorPrintDpi } from "@/lib/vector-raster-limits";
 import { getUpscaleManager, resolveUpscaleScale } from "@/lib/upscale-manager";
-import { getContourWorkerManager } from "@/lib/contour-worker-manager";
+import { clearContourCacheIfActive } from "@/lib/contour-worker-manager";
 import { revokeThumbnailCacheEntry } from "@/lib/thumbnail-cache";
 import { saveUploadToLibrary } from "@/lib/uploads-library";
 import { detectUpscaleSupport } from "@/lib/upscale-support";
@@ -462,7 +463,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
               title: t("toast.uploadFailed"),
               description:
                 err instanceof PrepareNetworkError
-                  ? t(err.kind === "file" ? "toast.uploadFileGoneDesc" : "toast.uploadNetworkDesc")
+                  ? t(prepareErrorMessageKey(err))
                   : err instanceof Error ? err.message : t("toast.uploadFailedDesc"),
               variant: "destructive",
             });
@@ -1114,7 +1115,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
           title: t("toast.uploadFailed"),
           description:
             err instanceof PrepareNetworkError
-              ? t(err.kind === "file" ? "toast.uploadFileGoneDesc" : "toast.uploadNetworkDesc")
+              ? t(prepareErrorMessageKey(err))
               : err instanceof Error ? err.message : t("toast.failedLoadFile", { name: file.name }),
           variant: "destructive",
         });
@@ -1366,7 +1367,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
       contentFillCacheRef.current.delete(oldSrc);
       assetDataUrlCacheRef.current.delete(design.id);
       restoredLayerAssetRef.current.delete(design.id);
-      getContourWorkerManager().clearCache();
+      clearContourCacheIfActive();
       setDesigns(prev => prev.map(current => current.id === design.id
         ? {
             ...current,

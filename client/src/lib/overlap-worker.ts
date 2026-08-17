@@ -15,7 +15,16 @@ interface OverlapRequest {
     rotation: number;
     cx: number;
     cy: number;
-    stampExtraH?: number;
+    /**
+     * The printed filename's opaque box, in the same pixels as `drawW`/`drawH` and relative to
+     * the design's centre, or absent when the design has no label.
+     *
+     * A box rather than a full-width band under the artwork. The band was a safe
+     * over-approximation while the label was always below the design, but it is wrong in both
+     * directions now: it claims film either side of a short name, and misses a label that sits
+     * inside the artwork's own corner.
+     */
+    labelBox?: { x: number; y: number; w: number; h: number };
   }>;
   /**
    * Decoded artwork, already scaled to the footprint it is drawn at, shared by
@@ -87,9 +96,10 @@ self.onmessage = (e: MessageEvent<OverlapRequest>) => {
       ctx.translate(d.cx, d.cy);
       ctx.rotate((d.rotation * Math.PI) / 180);
       ctx.drawImage(bitmap, -d.drawW / 2, -d.drawH / 2, d.drawW, d.drawH);
-      if (d.stampExtraH && d.stampExtraH > 0) {
+      // Opaque, because the label prints a white rectangle: anything underneath it is covered.
+      if (d.labelBox) {
         ctx.fillStyle = 'rgba(0,0,0,1)';
-        ctx.fillRect(-d.drawW / 2, d.drawH / 2, d.drawW, d.stampExtraH);
+        ctx.fillRect(d.labelBox.x, d.labelBox.y, d.labelBox.w, d.labelBox.h);
       }
       const rgba = ctx.getImageData(0, 0, rw, rh).data;
       // Extract only alpha channel to save memory

@@ -2,10 +2,15 @@
  * Turns a design into the ink silhouette the nester packs with.
  *
  * The mask covers the design's whole footprint — artwork plus, when the filename is set to
- * print, the band of text underneath it — at the nester's grid resolution. Anything the
- * printer will put on film has to be ink here, because the packer's only guarantee is that
- * ink is spaced and on-sheet; a feature missing from the mask is a feature another design
- * is free to sit on top of.
+ * print, the label's opaque box — at the nester's grid resolution. Anything the printer will
+ * put on film has to be ink here, because the packer's only guarantee is that ink is spaced
+ * and on-sheet; a feature missing from the mask is a feature another design is free to sit on
+ * top of.
+ *
+ * This is also where the label's placement is decided, because deciding it needs the artwork's
+ * ink and nothing else does. A design with an empty bottom-right corner gets its label tucked
+ * in there for free; anything solid pays for a band underneath. The answer travels out on the
+ * result so the preview and the export draw the label exactly where the film was reserved.
  *
  * Masks are cached per source image and footprint size. The cache key includes the image
  * URL, which changes whenever a pixel edit produces a new blob, so an edited design cannot
@@ -13,16 +18,24 @@
  */
 
 import { NEST_ALPHA_THRESHOLD, NEST_CELL_INCHES, type NestMask } from './nest-core';
+import {
+  canvasLabelMeasure,
+  layoutPrintLabel,
+  type LabelRect,
+  type PrintLabelLayout,
+} from './print-label';
 
 export interface DesignMaskRequest {
   image: HTMLImageElement | ImageBitmap;
-  /** Artwork footprint in inches at its current scale, excluding the stamp band. */
+  /** Artwork footprint in inches at its current scale, excluding any label band. */
   artW: number;
   artH: number;
-  /** Height of the printed-filename band below the artwork, in inches. 0 when disabled. */
-  stampExtra: number;
-  /** Filename as printed, so the band reserves only the width the text needs. */
-  stampText?: string;
+  /**
+   * File name to print on the design, or undefined when the label is off. The band it needs is
+   * worked out here rather than passed in: only this function knows where the ink is, and
+   * whether the label can tuck into the artwork instead of costing extra film depends on that.
+   */
+  labelName?: string;
   flipX?: boolean;
   flipY?: boolean;
   /** Stable identity for the pixels — normally the image URL. */
@@ -33,6 +46,11 @@ export interface DesignMask {
   mask: NestMask;
   /** Share of the footprint covered by ink, 0..1. */
   inkRatio: number;
+  /**
+   * Where the label went, for everything downstream that has to agree with the space reserved
+   * here — the preview, the export worker, overlap detection. Null when there is no label.
+   */
+  label: PrintLabelLayout | null;
 }
 
 /**
@@ -90,45 +108,42 @@ function getScratch(cols: number, rows: number): CanvasRenderingContext2D | null
 }
 
 /**
- * Adds the printed-filename band. The export draws the name right-aligned to the artwork's
- * right edge, one tenth of an inch below it, at 4.5% of the artwork height — so the band is
- * measured here with the same font rather than assumed to span the full width, which on a
- * wide design with a short name would throw away inches of usable film.
+ * Cell range covering a rectangle given in the label's coordinates — inches from the artwork's
+ * centre, y down.
+ *
+ * Rounded outwards on every edge. A cell the rectangle only clips still counts, for the same
+ * reason the artwork is supersampled: a mask that under-reports by half a cell is an invitation
+ * for the packer to seat a neighbour in the gap.
  */
-function markStampBand(
+function cellRange(rect: LabelRect, artW: number, artH: number, cols: number, rows: number) {
+  const toCol = (inches: number) => (inches + artW / 2) / NEST_CELL_INCHES;
+  const toRow = (inches: number) => (inches + artH / 2) / NEST_CELL_INCHES;
+  return {
+    col0: Math.max(0, Math.floor(toCol(rect.x))),
+    col1: Math.min(cols, Math.ceil(toCol(rect.x + rect.width))),
+    row0: Math.max(0, Math.floor(toRow(rect.y))),
+    row1: Math.min(rows, Math.ceil(toRow(rect.y + rect.height))),
+  };
+}
+
+/**
+ * Paints the label's background box into the mask as ink.
+ *
+ * The box is opaque white, so as far as the film is concerned it is as solid as artwork — a
+ * neighbour packed underneath it would be erased. Marking the box rather than a full-width band
+ * is what lets a wide design with a short name keep the film either side of its label.
+ */
+function markLabel(
   bits: Uint8Array,
   cols: number,
-  artRows: number,
-  totalRows: number,
-  request: DesignMaskRequest,
+  rows: number,
+  artW: number,
+  artH: number,
+  label: PrintLabelLayout,
 ): void {
-  const { stampExtra, stampText, artH } = request;
-  if (stampExtra <= 0 || !stampText) return;
-
-  const marginRows = Math.round(0.1 / NEST_CELL_INCHES);
-  const top = Math.min(totalRows - 1, artRows + marginRows);
-  if (top >= totalRows) return;
-
-  const fontInches = artH * 0.045;
-  let textCols = cols;
-  const ctx = scratchCtx;
-  if (ctx && fontInches > 0) {
-    const probePx = 100;
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.font = `bold ${probePx}px sans-serif`;
-    const displayName = stampText.replace(/\.[^/.]+$/, '');
-    const widthInches = (ctx.measureText(displayName).width / probePx) * fontInches;
-    ctx.restore();
-    textCols = Math.min(cols, Math.max(1, Math.ceil(widthInches / NEST_CELL_INCHES)));
-  }
-
-  // Right-aligned, unless the name is wider than the design, in which case it is clamped
-  // to the footprint rather than allowed to reserve space the footprint does not own.
-  const startCol = request.flipX ? 0 : Math.max(0, cols - textCols);
-  const endCol = Math.min(cols, startCol + textCols);
-  for (let r = top; r < totalRows; r++) {
-    bits.fill(1, r * cols + startCol, r * cols + endCol);
+  const { col0, col1, row0, row1 } = cellRange(label.rect, artW, artH, cols, rows);
+  for (let r = row0; r < row1; r++) {
+    if (col1 > col0) bits.fill(1, r * cols + col0, r * cols + col1);
   }
 }
 
@@ -138,18 +153,20 @@ function markStampBand(
  * bounding-box packing rather than guess.
  */
 export function getDesignNestMask(request: DesignMaskRequest): DesignMask | null {
-  const { image, artW, artH, stampExtra } = request;
+  const { image, artW, artH } = request;
   if (!(artW > 0) || !(artH > 0)) return null;
 
   const cols = cellsFor(artW);
   const artRows = cellsFor(artH);
-  const totalRows = cellsFor(artH + stampExtra);
+  // Rotation is deliberately absent: it turns the whole footprint, label included, so it cannot
+  // change the mask. The one thing it does affect — whether the text reads upside down — is
+  // asked separately at draw time.
   const key = [
     request.sourceKey,
-    cols, artRows, totalRows,
+    cols, artRows,
     request.flipX ? 1 : 0,
     request.flipY ? 1 : 0,
-    stampExtra > 0 ? (request.stampText ?? '') : '',
+    request.labelName ?? '',
   ].join('|');
 
   const hit = cache.get(key);
@@ -181,29 +198,57 @@ export function getDesignNestMask(request: DesignMaskRequest): DesignMask | null
     return null;
   }
 
-  const bits = new Uint8Array(cols * totalRows);
+  const artBits = new Uint8Array(cols * artRows);
   try {
     const data = ctx.getImageData(0, 0, sampleW, sampleH).data;
     for (let sy = 0; sy < sampleH; sy++) {
       const rowBase = ((sy / ss) | 0) * cols;
       let p = sy * sampleW * 4 + 3;
       for (let sx = 0; sx < sampleW; sx++, p += 4) {
-        if (data[p] > NEST_ALPHA_THRESHOLD) bits[rowBase + ((sx / ss) | 0)] = 1;
+        if (data[p] > NEST_ALPHA_THRESHOLD) artBits[rowBase + ((sx / ss) | 0)] = 1;
       }
     }
   } catch {
     return null;
   }
 
-  let ink = 0;
-  for (let i = 0; i < artRows * cols; i++) if (bits[i]) ink++;
+  // The artwork's ink is known now, so the label can be offered the corner. Everything in this
+  // mask is in the same space the design is displayed and printed in — the flips were applied
+  // when the artwork was drawn above — so the label's coordinates need no further mapping.
+  const label = request.labelName
+    ? layoutPrintLabel(
+        {
+          name: request.labelName,
+          artWidthInches: artW,
+          artHeightInches: artH,
+          isClearOfInk: (rect) => {
+            const { col0, col1, row0, row1 } = cellRange(rect, artW, artH, cols, artRows);
+            for (let r = row0; r < row1; r++) {
+              const base = r * cols;
+              for (let c = col0; c < col1; c++) if (artBits[base + c]) return false;
+            }
+            return true;
+          },
+        },
+        canvasLabelMeasure(ctx),
+      )
+    : null;
 
-  markStampBand(bits, cols, artRows, totalRows, request);
-  for (let i = artRows * cols; i < bits.length; i++) if (bits[i]) ink++;
+  const totalRows = cellsFor(artH + (label?.bandInches ?? 0));
+  let bits = artBits;
+  if (totalRows > artRows) {
+    bits = new Uint8Array(cols * totalRows);
+    bits.set(artBits);
+  }
+  if (label) markLabel(bits, cols, totalRows, artW, artH, label);
+
+  let ink = 0;
+  for (let i = 0; i < bits.length; i++) if (bits[i]) ink++;
 
   const result: DesignMask = {
     mask: { cols, rows: totalRows, bits },
     inkRatio: ink / (cols * totalRows),
+    label,
   };
 
   if (cache.size >= CACHE_MAX) {

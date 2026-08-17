@@ -1,5 +1,5 @@
 import { memo, useCallback, useMemo, type Dispatch, type SetStateAction } from "react";
-import { Check, Copy, Minus, Plus, Trash2 } from "lucide-react";
+import { Check, Copy, Minus, Plus, Stamp, Trash2 } from "lucide-react";
 import { formatDimensions } from "@/lib/format-length";
 import { useLanguage } from "@/lib/i18n";
 import type { DesignItem } from "@/lib/types";
@@ -34,6 +34,7 @@ export interface LayerRowGroup {
 export interface LayerRowHandlers {
   handleSelectDesign: (id: string | null) => void;
   handleSetGroupCount: (row: { designs: DesignItem[] }, targetCount: number) => void;
+  handleTogglePrintName: (ids: string[]) => void;
   handleDeleteGroup: (ids: string[]) => void;
   handleAutoArrangeRef: React.MutableRefObject<
     (opts?: { skipSnapshot?: boolean; preserveSelection?: boolean; arrangeAll?: boolean; fullRepack?: boolean }) => void
@@ -213,6 +214,18 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
     (e: React.MouseEvent) => {
       e.stopPropagation();
       handlers.handleDeleteGroup(row.designs.map((d) => d.id));
+    },
+    [handlers, row.designs],
+  );
+
+  // One row is one design at one size, so the whole row shares a label state. Reading it off the
+  // first design keeps the button's appearance and its effect in step even if a restored draft
+  // arrives with the flag set on only some copies.
+  const printsName = Boolean(first.printFileName);
+  const handleTogglePrintName = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      handlers.handleTogglePrintName(row.designs.map((d) => d.id));
     },
     [handlers, row.designs],
   );
@@ -477,6 +490,22 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
               all three languages, and the icon can come back now that it is not
               competing for the space. */}
           <span className="truncate">{t("editor.apply")}</span>
+        </button>
+        {/* Icon only: the row has no width left for a caption, and the two states are
+            distinguishable by colour with the meaning spelled out in the tooltip. */}
+        <button
+          type="button"
+          onClick={handleTogglePrintName}
+          aria-pressed={printsName}
+          aria-label={t("editor.printName")}
+          title={printsName ? t("editor.printNameOn") : t("editor.printNameOff")}
+          className={`inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md border transition-colors layersheet:h-10 layersheet:w-10 ${
+            printsName
+              ? "border-cyan-400 bg-cyan-100 text-cyan-700 hover:bg-cyan-200"
+              : "border-gray-300 bg-white text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+          }`}
+        >
+          <Stamp className="h-3.5 w-3.5" />
         </button>
       </div>
       {/* Hit area and glyph are separate boxes on the phone, as everywhere else

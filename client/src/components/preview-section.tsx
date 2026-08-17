@@ -11,6 +11,12 @@ import { RotationBadge } from "./image-editor/rotation-badge";
 import { computeLayerRect } from "@/lib/types";
 import { inkInset } from "@/lib/nest-core";
 import { getDesignNestMask } from "@/lib/nest-mask";
+import {
+  drawPrintLabel,
+  labelReadsUpsideDown,
+  type PrintLabelLayout,
+} from "@/lib/print-label";
+import { getDesignLabel, getStampExtraAtSize } from "./image-editor/utils";
 
 const BASE_DPI_SCALE = 2;
 const HIGH_QUALITY_DETAIL_ZOOM = 3;
@@ -237,6 +243,13 @@ interface PreviewSectionProps {
   designTransform?: ImageTransform;
   onTransformChange?: (transform: ImageTransform) => void;
   designs?: DesignItem[];
+  /**
+   * Bumped by the editor each time an auto-arrange commits new positions, which is the cue to
+   * slide the designs into them instead of having them appear there. A counter rather than a
+   * flag because consecutive arranges have to be distinguishable, and because diffing the
+   * designs could not tell an arrange apart from a drag.
+   */
+  arrangeEpoch?: number;
   selectedDesignId?: string | null;
   selectedDesignIds?: Set<string>;
   onSelectDesign?: (id: string | null) => void;
@@ -278,7 +291,7 @@ interface PreviewSectionProps {
 }
 
 const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
-  ({ imageInfo, resizeSettings, artboardWidth = 24.5, artboardHeight = 12, designTransform, onTransformChange, designs = [], selectedDesignId, selectedDesignIds = new Set(), onSelectDesign, onMultiSelect, onMultiDragDelta, onMultiResizeDelta, onMultiRotateDelta, onDuplicateSelected, onInteractionEnd, onExpandArtboard, onDesignContextMenu, spotPreviewData, activeSpotChannel, onWandTap, panModeActive = false, onPanModeChange, selectionZoomActive: selectionZoomActiveProp, onSelectionZoomChange, bottomToolbarContainer, backdropSwatchContainer, wandDeleteActive = false, onWandDeleteTap, onWandDeactivate, onRegisterFocus }, ref) => {
+  ({ imageInfo, resizeSettings, artboardWidth = 24.5, artboardHeight = 12, designTransform, onTransformChange, designs = [], arrangeEpoch = 0, selectedDesignId, selectedDesignIds = new Set(), onSelectDesign, onMultiSelect, onMultiDragDelta, onMultiResizeDelta, onMultiRotateDelta, onDuplicateSelected, onInteractionEnd, onExpandArtboard, onDesignContextMenu, spotPreviewData, activeSpotChannel, onWandTap, panModeActive = false, onPanModeChange, selectionZoomActive: selectionZoomActiveProp, onSelectionZoomChange, bottomToolbarContainer, backdropSwatchContainer, wandDeleteActive = false, onWandDeleteTap, onWandDeactivate, onRegisterFocus }, ref) => {
     const { toast } = useToast();
     const { t, lang } = useLanguage();
     const isMobile = useIsMobile();
@@ -1356,12 +1369,26 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const rad = (t.rotation * Math.PI) / 180;
       const cos = Math.abs(Math.cos(rad));
       const sin = Math.abs(Math.sin(rad));
+      const selDesign = designs.find(d => d.id === selectedDesignId);
+
+      // The label rides below the artwork, so the rectangle being fitted is `wi × (hi + band)`.
+      // The band is already in film inches and does not scale with `s`, so it comes off the
+      // sheet before the division rather than being folded into the height. Without this a
+      // design scaled to the sheet edge prints its label off the film.
       const rotW = wi * cos + hi * sin;
       const rotH = wi * sin + hi * cos;
-      const maxSx = artboardWidth / rotW;
-      const maxSy = artboardHeight / rotH;
-      return Math.min(maxSx, maxSy);
-    }, [artboardWidth, artboardHeight, resizeSettings.widthInches, resizeSettings.heightInches]);
+      const solve = (band: number) => Math.max(0, Math.min(
+        (artboardWidth - band * sin) / rotW,
+        (artboardHeight - band * cos) / rotH,
+      ));
+
+      const first = solve(0);
+      if (!selDesign?.printFileName) return first;
+      // Sized at the scale the artwork alone allows. The band is a fraction of an inch against a
+      // sheet measured in feet, so one correction is the end of it.
+      const band = getStampExtraAtSize(selDesign, wi * first, hi * first);
+      return band > 0 ? solve(band) : first;
+    }, [artboardWidth, artboardHeight, resizeSettings.widthInches, resizeSettings.heightInches, designs, selectedDesignId]);
 
     const clampTransformToArtboard = useCallback((t: ImageTransform, opts?: { clampScale?: boolean; imgW?: number; imgH?: number; wInches?: number; hInches?: number }): ImageTransform => {
       const canvas = canvasRef.current;
@@ -1380,9 +1407,12 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       }
 
       const selDesign = designs.find(d => d.id === selectedDesignId);
-      const hasPrintStamp = selDesign?.printFileName ?? false;
-      const scaledH = hi * clamped.s;
-      const stampExtra = hasPrintStamp ? 0.1 + scaledH * 0.05 : 0;
+      // Whatever the label actually needs at this scale, which is nothing at all when it sits
+      // inside the artwork's own corner. Reading it from the design rather than recomputing the
+      // formula here is what keeps the draggable area and the drawn label in agreement.
+      const stampExtra = selDesign
+        ? getStampExtraAtSize(selDesign, wi * clamped.s, hi * clamped.s)
+        : 0;
       const stampExtraPx = (stampExtra / artboardHeight) * canvas.height;
 
       const rect = computeLayerRect(iw, ih, clamped, canvas.width, canvas.height, artboardWidth, artboardHeight, wi, hi);
@@ -1471,7 +1501,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const sw = Math.max(60, Math.round(canvas.width * scale));
       const sh = Math.max(30, Math.round(canvas.height * scale));
 
-      const designRects: Array<{id: string; left: number; top: number; right: number; bottom: number; design: DesignItem; rect: {x: number; y: number; width: number; height: number}}> = [];
+      const designRects: Array<{id: string; left: number; top: number; right: number; bottom: number; design: DesignItem; rect: {x: number; y: number; width: number; height: number}; label: PrintLabelLayout | null}> = [];
       for (const d of designs) {
         const rect = computeLayerRect(
           d.imageInfo.image.width, d.imageInfo.image.height,
@@ -1479,11 +1509,6 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           artboardWidth, artboardHeight,
           d.widthInches, d.heightInches,
         );
-        let stampPx = 0;
-        if (d.printFileName) {
-          const stampInches = 0.1 + d.heightInches * d.transform.s * 0.05;
-          stampPx = (stampInches / artboardHeight) * sh;
-        }
         const cx = rect.x + rect.width / 2;
         const cy = rect.y + rect.height / 2;
         const rad = d.transform.rotation * Math.PI / 180;
@@ -1495,18 +1520,20 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         // would mark correctly nested layouts as out of bounds and overlapping.
         const artW = d.widthInches * d.transform.s;
         const artH = d.heightInches * d.transform.s;
-        const stampInches = d.printFileName ? 0.1 + artH * 0.05 : 0;
-        const silhouette = getDesignNestMask({
+        const built = getDesignNestMask({
           image: d.imageInfo.image,
           artW,
           artH,
-          stampExtra: stampInches,
-          stampText: d.printFileName ? d.name : undefined,
+          labelName: d.printFileName ? d.name : undefined,
           flipX: d.transform.flipX,
           flipY: d.transform.flipY,
           sourceKey: d.imageInfo.image.src,
-        })?.mask;
-        const inset = inkInset(silhouette, artW, artH + stampInches, 0);
+        });
+        // The mask already covers the label wherever it ended up, so the band comes from the
+        // same decision that drew it rather than a formula that assumes it went below.
+        const stampInches = built?.label?.bandInches ?? 0;
+        const stampPx = (stampInches / artboardHeight) * sh;
+        const inset = inkInset(built?.mask, artW, artH + stampInches, 0);
         const pxPerInchX = artW > 0 ? rect.width / artW : 0;
         const pxPerInchY = artH > 0 ? rect.height / artH : 0;
         const left = -hw + inset.left * pxPerInchX;
@@ -1528,7 +1555,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           if (ry < minY) minY = ry;
           if (ry > maxY) maxY = ry;
         }
-        designRects.push({ id: d.id, left: cx + minX, top: cy + minY, right: cx + maxX, bottom: cy + maxY, design: d, rect });
+        designRects.push({
+          id: d.id, left: cx + minX, top: cy + minY, right: cx + maxX, bottom: cy + maxY,
+          design: d, rect, label: built?.label ?? null,
+        });
       }
 
       const outOfBounds = new Set<string>();
@@ -1622,11 +1652,17 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           resizeQuality: 'low',
         }))).then(bitmaps => {
           const workerDesigns = designRects.map((dr, idx) => {
-            let stampExtraH = 0;
-            if (dr.design.printFileName) {
-              const stampInches = 0.1 + dr.design.heightInches * dr.design.transform.s * 0.05;
-              stampExtraH = (stampInches / artboardHeight) * sh;
-            }
+            // Same rect the label is drawn from, converted into the pixels this pass works in.
+            // The artwork's own drawn height is the honest scale factor here: `rect.height` is
+            // the artwork, and the label's coordinates are relative to the artwork's centre.
+            const artH = dr.design.heightInches * dr.design.transform.s;
+            const pxPerInch = artH > 0 ? dr.rect.height / artH : 0;
+            const box = dr.label && pxPerInch > 0 ? {
+              x: dr.label.rect.x * pxPerInch,
+              y: dr.label.rect.y * pxPerInch,
+              w: dr.label.rect.width * pxPerInch,
+              h: dr.label.rect.height * pxPerInch,
+            } : undefined;
             return {
               id: dr.id,
               left: dr.left, top: dr.top, right: dr.right, bottom: dr.bottom,
@@ -1639,7 +1675,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
               rotation: dr.design.transform.rotation,
               cx: dr.rect.x + dr.rect.width / 2,
               cy: dr.rect.y + dr.rect.height / 2,
-              stampExtraH,
+              labelBox: box,
             };
           });
 
@@ -1745,11 +1781,15 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           octx.rotate((d.transform.rotation * Math.PI) / 180);
           try {
             octx.drawImage(d.imageInfo.image, -rect.width / 2, -rect.height / 2, rect.width, rect.height);
-            if (d.printFileName) {
-              const stampInches = 0.1 + d.heightInches * d.transform.s * 0.05;
-              const stampPx = (stampInches / artboardHeight) * mth;
+            const label = designRects[idx].label;
+            const artH = d.heightInches * d.transform.s;
+            if (label && artH > 0) {
+              const pxPerInch = rect.height / artH;
               octx.fillStyle = 'rgba(0,0,0,1)';
-              octx.fillRect(-rect.width / 2, rect.height / 2, rect.width, stampPx);
+              octx.fillRect(
+                label.rect.x * pxPerInch, label.rect.y * pxPerInch,
+                label.rect.width * pxPerInch, label.rect.height * pxPerInch,
+              );
             }
             octx.restore();
             alphaBuffers.set(idx, new Uint8ClampedArray(octx.getImageData(0, 0, mtw, mth).data));
@@ -2204,7 +2244,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           if (selDesign) {
             const wi = selDesign.widthInches * newTransform.s;
             const hi = selDesign.heightInches * newTransform.s;
-            const stampEx = selDesign.printFileName ? 0.1 + hi * 0.05 : 0;
+            const stampEx = getStampExtraAtSize(selDesign, wi, hi);
             const rad = (newTransform.rotation * Math.PI) / 180;
             const cosA = Math.cos(rad);
             const sinA = Math.sin(rad);
@@ -3494,10 +3534,18 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       return c;
     }, []);
 
-    const drawSingleDesign = useCallback((ctx: CanvasRenderingContext2D, design: DesignItem, cw: number, ch: number) => {
+    const drawSingleDesign = useCallback((
+      ctx: CanvasRenderingContext2D,
+      design: DesignItem,
+      cw: number,
+      ch: number,
+      /** Draw the design somewhere other than where it is, for the post-arrange slide. */
+      transformOverride?: ImageTransform,
+    ) => {
+      const transform = transformOverride ?? design.transform;
       const rect = computeLayerRect(
         design.imageInfo.image.width, design.imageInfo.image.height,
-        design.transform, cw, ch,
+        transform, cw, ch,
         artboardWidth, artboardHeight,
         design.widthInches, design.heightInches,
       );
@@ -3506,25 +3554,23 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       ctx.save();
       if (design.alphaThresholded) ctx.imageSmoothingEnabled = false;
       ctx.translate(cx, cy);
-      ctx.rotate((design.transform.rotation * Math.PI) / 180);
-      ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
+      ctx.rotate((transform.rotation * Math.PI) / 180);
+      ctx.scale(transform.flipX ? -1 : 1, transform.flipY ? -1 : 1);
       // Alpha-thresholded designs intentionally draw unsmoothed from source
       // to keep crisp sticker edges — skip the mipmap for them.
       const drawSrc = design.alphaThresholded
         ? design.imageInfo.image
         : getPreviewDrawSource(design.imageInfo.image, rect.width, rect.height);
       ctx.drawImage(drawSrc, -rect.width / 2, -rect.height / 2, rect.width, rect.height);
-      if (design.printFileName) {
-        ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
-        const pxPerInch = cw / artboardWidth;
-        const marginPx = 0.1 * pxPerInch;
-        const fontSize = Math.max(7, Math.round(rect.height * 0.045));
-        ctx.font = `bold ${fontSize}px sans-serif`;
-        const displayName = design.name.replace(/\.[^/.]+$/, '');
-        ctx.fillStyle = '#000000';
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'top';
-        ctx.fillText(displayName, rect.width / 2, rect.height / 2 + marginPx);
+      const label = getDesignLabel(design);
+      if (label) {
+        // Undo the flip so the name is never mirrored. The label's coordinates are defined in
+        // this unflipped space, which is also the space the nest mask reserved it in.
+        ctx.scale(transform.flipX ? -1 : 1, transform.flipY ? -1 : 1);
+        const artH = design.heightInches * transform.s;
+        if (artH > 0) {
+          drawPrintLabel(ctx, label, rect.height / artH, labelReadsUpsideDown(transform.rotation));
+        }
       }
       ctx.restore();
     }, [artboardWidth, artboardHeight, getPreviewDrawSource]);
@@ -3592,6 +3638,124 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       selectedDetailImage?.naturalHeight,
     ]);
 
+    /**
+     * Sliding designs into the places an auto-arrange chose for them.
+     *
+     * An arrange can move most of the sheet at once, and committing that in a single frame
+     * reads as the editor glitching rather than as it packing — which is the substance of the
+     * report that adding copies "feels buggy". Interpolating the positions for a fifth of a
+     * second turns exactly the same work into something the eye can follow.
+     *
+     * Designs mid-slide are handled the way a dragged group already is: kept out of the static
+     * composite so it stays cached, then drawn over it once per frame at their interpolated
+     * positions. Writing the interpolated values back into `designs` would instead change every
+     * entry of the composite signature on every frame and rebuild the whole sheet at 60 fps,
+     * which is considerably worse than the jump it set out to smooth.
+     */
+    const ARRANGE_SLIDE_MS = 200;
+    /**
+     * Above this many designs the slide is skipped and the layout snaps as it used to.
+     *
+     * A frame costs one draw per sliding design, so this bounds the very cost the composite
+     * cache exists to avoid. A sheet this full is also one where each design is small enough
+     * that the motion reads as noise rather than as movement.
+     */
+    const ARRANGE_SLIDE_MAX_DESIGNS = 120;
+    /** Movement smaller than this fraction of the sheet is not worth animating. */
+    const ARRANGE_SLIDE_MIN_DELTA = 0.002;
+
+    type ArrangeSlide = {
+      startedAt: number;
+      /** Where each design sat before the arrange. Missing for designs that are new. */
+      from: Map<string, ImageTransform>;
+      /** Designs that did not exist beforehand, which fade up rather than travel. */
+      fadeIn: Set<string>;
+      /** Eased 0..1, read by the draw pass. */
+      progress: number;
+    };
+    const arrangeSlideRef = useRef<ArrangeSlide | null>(null);
+    const prevTransformsRef = useRef<Map<string, ImageTransform>>(new Map());
+
+    /** Part-way between two transforms. Size and mirroring come from the destination. */
+    const lerpTransform = (from: ImageTransform, to: ImageTransform, p: number): ImageTransform => {
+      // Rotation takes the short way round. Without this a 350 degree design settling at 0
+      // spins most of a full turn to travel ten degrees.
+      const turn = ((((to.rotation - from.rotation) % 360) + 540) % 360) - 180;
+      return {
+        ...to,
+        nx: from.nx + (to.nx - from.nx) * p,
+        ny: from.ny + (to.ny - from.ny) * p,
+        s: from.s + (to.s - from.s) * p,
+        rotation: from.rotation + turn * p,
+      };
+    };
+
+    const slidHandledEpochRef = useRef(0);
+
+    useEffect(() => {
+      // Only an arrange arms a slide. This effect also re-runs whenever `designs` changes —
+      // a drag, a resize, a halftone — and every one of those would otherwise look like a
+      // move worth animating, because the snapshot below is by then one commit behind.
+      if (arrangeEpoch <= 0 || arrangeEpoch === slidHandledEpochRef.current) return;
+      slidHandledEpochRef.current = arrangeEpoch;
+      if (designs.length === 0 || designs.length > ARRANGE_SLIDE_MAX_DESIGNS) return;
+      // Someone mid-gesture is already watching their design move under the pointer; the
+      // arrange has no business animating the sheet out from under that.
+      if (isInteractionActive()) return;
+      if (typeof window !== 'undefined'
+        && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+
+      const previous = prevTransformsRef.current;
+      const running = arrangeSlideRef.current;
+      const from = new Map<string, ImageTransform>();
+      const fadeIn = new Set<string>();
+      let travelling = 0;
+      for (const d of designs) {
+        // A slide already in flight has designs part-way to their last destination, and
+        // `previous` holds that destination rather than where they are actually drawn. Starting
+        // the new slide from what is on screen is what keeps a held-down `+` reading as one
+        // continuous reflow instead of a series of twitches backwards.
+        const interrupted = running?.from.get(d.id);
+        const was = interrupted
+          ? lerpTransform(interrupted, previous.get(d.id) ?? d.transform, running!.progress)
+          : previous.get(d.id);
+        if (!was) { fadeIn.add(d.id); continue; }
+        from.set(d.id, was);
+        if (Math.abs(was.nx - d.transform.nx) > ARRANGE_SLIDE_MIN_DELTA
+          || Math.abs(was.ny - d.transform.ny) > ARRANGE_SLIDE_MIN_DELTA
+          || was.rotation !== d.transform.rotation) travelling++;
+      }
+      // An arrange that anchored everything it touched has nothing to show.
+      if (travelling === 0 && fadeIn.size === 0) return;
+
+      arrangeSlideRef.current = { startedAt: performance.now(), from, fadeIn, progress: 0 };
+      startAnimator('arrangeSlide', now => {
+        const slide = arrangeSlideRef.current;
+        if (!slide) { stopAnimator('arrangeSlide'); return false; }
+        const linear = Math.min(1, (now - slide.startedAt) / ARRANGE_SLIDE_MS);
+        // Quick off the mark and settling gently, which reads as the sheet coming to rest
+        // rather than as everything travelling at one speed.
+        slide.progress = 1 - Math.pow(1 - linear, 3);
+        if (linear >= 1) {
+          arrangeSlideRef.current = null;
+          stopAnimator('arrangeSlide');
+          // One clean pass, so the settled designs go back into the cached composite instead
+          // of being redrawn one by one for the rest of the session.
+          setInteractionEpoch(e => e + 1);
+        }
+        return true;
+      });
+    }, [arrangeEpoch, designs, isInteractionActive, startAnimator, stopAnimator]);
+
+    // Remembered after every change to the designs, so the next arrange knows where things
+    // were. Declared after the effect above on purpose: React runs effects in order within a
+    // commit, and this one overwrites precisely what that one reads.
+    useEffect(() => {
+      const snapshot = new Map<string, ImageTransform>();
+      for (const d of designs) snapshot.set(d.id, d.transform);
+      prevTransformsRef.current = snapshot;
+    }, [designs]);
+
     useEffect(() => {
       if (!canvasRef.current) return;
 
@@ -3619,10 +3783,21 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       const movingExcluded = (isDraggingRef.current || isMultiDragRef.current || groupTransforming) && selectedDesignIds.size > 1
         ? selectedDesignIds
         : null;
+      // Designs mid-slide leave the composite for the same reason a dragged group does: their
+      // positions change every frame, so baking them would rebuild the whole sheet 60 times a
+      // second. Taken from a ref rather than state so the arrange's very first paint already
+      // excludes them — the effect that arms the slide runs before this one in the same commit.
+      const slide = arrangeSlideRef.current;
+      const slidingIds = slide
+        ? new Set(designs.filter(d => slide.from.has(d.id) || slide.fadeIn.has(d.id)).map(d => d.id))
+        : null;
+      const compositeExcluded = movingExcluded && slidingIds
+        ? new Set([...movingExcluded, ...slidingIds])
+        : (movingExcluded ?? slidingIds);
       let staticSignatureBody = '';
       for (const d of designs) {
         if (d.id === selectedDesignId) continue;
-        if (movingExcluded?.has(d.id)) continue;
+        if (compositeExcluded?.has(d.id)) continue;
         const t = d.transform;
         staticSignatureBody += `${d.id}:${d.imageInfo.image.src ?? d.imageInfo.image.width}:${t.nx.toFixed(4)},${t.ny.toFixed(4)},${t.s.toFixed(4)},${t.rotation.toFixed(2)},${t.flipX?1:0},${t.flipY?1:0}:${d.widthInches.toFixed(4)}x${d.heightInches.toFixed(4)}:${d.printFileName?1:0}:${d.alphaThresholded?1:0}:${overlappingDesigns.has(d.id)?1:0};`;
       }
@@ -3664,7 +3839,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         || isMultiResizeRef.current || isMultiRotateRef.current
         || isPanningRef.current;
       ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = isInteracting ? 'low' : 'high';
+      // The slide borrows the drag path's economies for its two hundred milliseconds: nobody
+      // is judging edge quality on a sheet that is still moving, and the clean pass at the end
+      // restores it.
+      ctx.imageSmoothingQuality = isInteracting || slidingIds ? 'low' : 'high';
 
       // Build a fingerprint of the static-composite state (everything
       // except the currently-selected design, which is drawn separately
@@ -3675,7 +3853,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       // companions are baked in at all) and the multi-selection key all
       // participate in the signature, so starting or ending a group gesture
       // invalidates the cache and forces one clean rebuild.
-      const signature = `${canvasWidth}x${canvasHeight}|${previewBgColor}|${artboardWidth}x${artboardHeight}|sel:${selectedDesignId ?? '-'}|mv:${isMoving ? 1 : 0}|gx:${movingExcluded ? 1 : 0}|msel:${multiSelectionKey}|${staticSignatureBody}`;
+      const signature = `${canvasWidth}x${canvasHeight}|${previewBgColor}|${artboardWidth}x${artboardHeight}|sel:${selectedDesignId ?? '-'}|mv:${isMoving ? 1 : 0}|gx:${movingExcluded ? 1 : 0}|sl:${slidingIds ? 1 : 0}|msel:${multiSelectionKey}|${staticSignatureBody}`;
 
       const cached = staticCompositeRef.current;
       if (cached && cached.signature === signature) {
@@ -3694,7 +3872,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         // upscaled for the drag's duration; releasing the pointer flips mv
         // back, invalidating the signature and triggering one full-quality
         // rebuild. Preview-only — exports untouched.
-        const buildScale = isMoving ? 0.5 : 1;
+        const buildScale = isMoving || slidingIds ? 0.5 : 1;
         const compW = Math.max(1, Math.round(canvasWidth * buildScale));
         const compH = Math.max(1, Math.round(canvasHeight * buildScale));
         const composite = cached?.canvas ?? document.createElement('canvas');
@@ -3733,6 +3911,30 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         }
         ctx.globalAlpha = 1;
         ctx.imageSmoothingQuality = prevQuality;
+      }
+
+      // Designs on their way to the places the arrange chose. Drawn over the composite at
+      // interpolated positions rather than baked into it; the composite behind them holds only
+      // the parts of the sheet that are staying put.
+      if (slide && slidingIds) {
+        const p = slide.progress;
+        for (const design of designs) {
+          // The selected design has its own draw path below, fed by `transformRef`, and that
+          // ref belongs to the drag machinery. After a duplicate the selection is the new copy,
+          // which appears rather than travels, so leaving it out costs nothing there.
+          if (design.id === selectedDesignId) continue;
+          if (!slidingIds.has(design.id)) continue;
+          const was = slide.from.get(design.id);
+          if (!was) {
+            // Did not exist before the arrange, so it is a fresh copy. Travelling from nowhere
+            // means nothing; it fades up where it landed instead.
+            ctx.globalAlpha = p;
+            drawSingleDesign(ctx, design, canvasWidth, canvasHeight);
+            ctx.globalAlpha = 1;
+            continue;
+          }
+          drawSingleDesign(ctx, design, canvasWidth, canvasHeight, lerpTransform(was, design.transform, p));
+        }
       }
 
       /** Rotation-aware bounding box of a design, in destination pixels. */
@@ -3838,9 +4040,9 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         }
         for (const design of designs) {
           if (design.id === selectedDesignId) continue;
-          // Moving companions are drawn per-frame on top of the composite
-          // (see below), not baked into it.
-          if (movingExcluded?.has(design.id)) continue;
+          // Moving companions and designs mid-slide are drawn per-frame on top
+          // of the composite (see below), not baked into it.
+          if (compositeExcluded?.has(design.id)) continue;
           if (visibleRect && !designIntersects(design, cw, ch, visibleRect)) continue;
           drawSingleDesign(dctx, design, cw, ch);
           if (overlappingDesigns.has(design.id)) {
@@ -4096,18 +4298,13 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         ctx.drawImage(overlayCanvas, -rect.width / 2, -rect.height / 2, rect.width, rect.height);
         ctx.globalAlpha = 1;
       }
-      if (selDesign?.printFileName) {
+      const selLabel = selDesign ? getDesignLabel(selDesign) : null;
+      if (selDesign && selLabel) {
         ctx.scale(t.flipX ? -1 : 1, t.flipY ? -1 : 1);
-        const canvasW = canvasRef.current?.width || 1;
-        const pxPerInch = canvasW / artboardWidth;
-        const marginPx = 0.1 * pxPerInch;
-        const fontSize = Math.max(7, Math.round(rect.height * 0.045));
-        ctx.font = `bold ${fontSize}px sans-serif`;
-        const displayName = selDesign.name.replace(/\.[^/.]+$/, '');
-        ctx.fillStyle = '#000000';
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'top';
-        ctx.fillText(displayName, rect.width / 2, rect.height / 2 + marginPx);
+        const artH = selDesign.heightInches * t.s;
+        if (artH > 0) {
+          drawPrintLabel(ctx, selLabel, rect.height / artH, labelReadsUpsideDown(t.rotation));
+        }
       }
       ctx.restore();
 

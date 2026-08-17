@@ -9,6 +9,7 @@ import {
   importRasterForEditor,
   type PreparedRaster,
   PrepareNetworkError,
+  prepareErrorMessageKey,
 } from "@/lib/prepare-raster-upload";
 // From the module rather than the `image-editor` barrel: that barrel renders
 // the editor view, which imports this file, so a value import would be a cycle.
@@ -188,7 +189,7 @@ export default function UploadSection({ onImageUpload, onBatchStart, imageInfo, 
         title: t("toast.uploadFailed"),
         description:
           err instanceof PrepareNetworkError
-            ? t(err.kind === "file" ? "toast.uploadFileGoneDesc" : "toast.uploadNetworkDesc")
+            ? t(prepareErrorMessageKey(err))
             : err instanceof Error ? err.message : t("toast.uploadFailedDesc"),
         variant: "destructive",
       });

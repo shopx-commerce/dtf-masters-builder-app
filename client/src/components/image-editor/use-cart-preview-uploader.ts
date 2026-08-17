@@ -7,11 +7,13 @@ import {
   computeOutputPixelSize,
   computePreviewDpi,
 } from "@/lib/gangsheet-geometry";
+import { drawPrintLabel, labelReadsUpsideDown } from "@/lib/print-label";
 import {
   CART_PREVIEW_DEBOUNCE_MS,
   CART_PREVIEW_MAX_DIMENSION,
   CART_PREVIEW_WAIT_MS,
 } from "./constants";
+import { getDesignLabel } from "./utils";
 import type { DesignItem } from "@/lib/types";
 
 /**
@@ -125,6 +127,14 @@ export function useCartPreviewUploader({
       ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
       ctx.imageSmoothingEnabled = !design.alphaThresholded;
       ctx.drawImage(design.imageInfo.image, -drawW / 2, -drawH / 2, drawW, drawH);
+      const label = getDesignLabel(design);
+      const artH = design.heightInches * design.transform.s;
+      if (label && artH > 0) {
+        // Flip undone first: the layout's coordinates are in unflipped design space, and a
+        // mirrored name would be worse than no name at all.
+        ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
+        drawPrintLabel(ctx, label, drawH / artH, labelReadsUpsideDown(design.transform.rotation));
+      }
       ctx.restore();
     }
     const blob: Blob = await new Promise((res, rej) =>

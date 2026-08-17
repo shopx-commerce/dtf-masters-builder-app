@@ -216,12 +216,29 @@ export async function isSupportedRasterContainer(file: File): Promise<boolean> {
 export class PrepareNetworkError extends Error {
   /** "network": connection problem, retrying may help. "file": the picked
    *  File itself became unreadable (iOS reclaims picker files under memory
-   *  pressure or app switches) — only re-selecting it can fix that. */
+   *  pressure or app switches) — only re-selecting it can fix that.
+   *  "server": the request arrived and the service could not complete it —
+   *  out of memory, queue full, or rate limited. Telling that customer to
+   *  check their internet sends them to reset a router over our problem. */
   constructor(
     message: string,
-    readonly kind: "network" | "file" = "network",
+    readonly kind: "network" | "file" | "server" = "network",
   ) {
     super(message);
+  }
+}
+
+/**
+ * Which message a failed prepare earns.
+ *
+ * Three call sites show this error and each used to spell the mapping out itself, which is how
+ * a service failure came to be reported as a connection problem in all three at once.
+ */
+export function prepareErrorMessageKey(err: PrepareNetworkError): string {
+  switch (err.kind) {
+    case "file": return "toast.uploadFileGoneDesc";
+    case "server": return "toast.uploadServerBusyDesc";
+    default: return "toast.uploadNetworkDesc";
   }
 }
 
@@ -254,6 +271,10 @@ async function prepareRasterUploadInner(file: File): Promise<PreparedRaster> {
   // (budget rejections etc.) surface immediately.
   let res: Response | null = null;
   let lastNetworkDetail = "";
+  // Whether the last failure was the service answering badly rather than the request failing to
+  // arrive. Both exhaust the retries and both used to be reported as a dropped connection, which
+  // is a lie in one of the two cases and sends the customer to check a working router.
+  let lastFailureWasServer = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await new Promise((r) => setTimeout(r, attempt === 1 ? 600 : 1800));
     try {
@@ -263,6 +284,7 @@ async function prepareRasterUploadInner(file: File): Promise<PreparedRaster> {
     } catch (err) {
       if (!isNetworkFetchError(err)) throw err;
       lastNetworkDetail = err.message;
+      lastFailureWasServer = false;
       res = null;
       continue;
     }
@@ -273,6 +295,7 @@ async function prepareRasterUploadInner(file: File): Promise<PreparedRaster> {
     // are transient by definition (timeout / rate limit).
     if (res.status >= 500 || res.status === 408 || res.status === 429) {
       lastNetworkDetail = `HTTP ${res.status}`;
+      lastFailureWasServer = true;
       res = null;
       continue;
     }
@@ -287,11 +310,17 @@ async function prepareRasterUploadInner(file: File): Promise<PreparedRaster> {
     } catch {
       fileReadable = false;
     }
+    if (!fileReadable) {
+      throw new PrepareNetworkError(
+        `The selected file is no longer readable (${lastNetworkDetail})`,
+        "file",
+      );
+    }
     throw new PrepareNetworkError(
-      fileReadable
-        ? `Could not reach the image preparation service (${lastNetworkDetail})`
-        : `The selected file is no longer readable (${lastNetworkDetail})`,
-      fileReadable ? "network" : "file",
+      lastFailureWasServer
+        ? `The image preparation service could not complete this file (${lastNetworkDetail})`
+        : `Could not reach the image preparation service (${lastNetworkDetail})`,
+      lastFailureWasServer ? "server" : "network",
     );
   }
   if (!res.ok) {

@@ -8,10 +8,12 @@ import {
   assertExportCanvasNotBlank,
   assertPrintSourcesReadable,
   exportPngWithWorker,
+  getDesignLabel,
   getExportMemoryWarning,
   injectPngDpi,
   resolveExportDpi,
 } from "./utils";
+import { drawPrintLabelOnPdfPage } from "@/lib/print-label-pdf";
 import type { ImageEditorBagAfterExport } from "./image-editor-hook-bag.types";
 import type { InitialDesignState } from "./types";
 import type { SpotPreviewData } from "../controls-section";
@@ -440,6 +442,7 @@ export function useImageEditorModelCart(
               alphaThresholded: d.alphaThresholded,
               printFileName: d.printFileName,
               name: d.name,
+              label: getDesignLabel(d) ?? undefined,
             })),
             outW,
             outH,
@@ -638,18 +641,15 @@ export function useImageEditorModelCart(
             rotate: degrees(-rotation),
           });
 
-          if (design.printFileName) {
-            const label = design.name.replace(/\.[^/.]+$/, "");
-            const size = Math.max(4, Math.round(0.08 * 72));
-            const margin = 0.02 * 72;
-            const textWidth = font.widthOfTextAtSize(label, size);
-            page.drawText(label, {
-              x: centerX + (widthPt / 2) * cos - (heightPt / 2) * sin - textWidth - margin,
-              y: centerY - (widthPt / 2) * sin - (heightPt / 2) * cos + margin,
-              size,
-              font,
-              rotate: degrees(-rotation),
-            });
+          const pdfLabel = getDesignLabel(design);
+          if (pdfLabel) {
+            drawPrintLabelOnPdfPage(page, font, pdfLabel, {
+              centerXPt: centerX,
+              centerYPt: centerY,
+              rotationDeg: rotation,
+              artHeightInches: design.heightInches * design.transform.s,
+              artHeightPt: heightPt,
+            }, degrees);
           }
 
           const colors = (spotPreviewData as SpotPreviewData | undefined)?.colors;

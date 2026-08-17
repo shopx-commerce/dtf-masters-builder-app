@@ -3,7 +3,12 @@ import { IOS_SAFE_CANVAS_DIM, SAFARI_MAX_CANVAS_AREA } from "@/lib/image-budget"
 import { isMobileDevice } from "@/lib/upload-queue";
 import { inkInset, type NestMask } from "@/lib/nest-core";
 import { DEFAULT_SHEET_MARGIN, fitHeightForBand, type InkBand } from "@/lib/sheet-fit";
-import { getDesignNestMask } from "@/lib/nest-mask";
+import { getDesignNestMask, type DesignMask } from "@/lib/nest-mask";
+import {
+  layoutPrintLabel,
+  sharedLabelMeasure,
+  type PrintLabelLayout,
+} from "@/lib/print-label";
 import type { ImageTransform } from "@/lib/types";
 import ExportWorkerModule from "@/lib/export-worker?worker";
 import ArrangeWorkerModule from "@/lib/arrange-worker?worker";
@@ -145,8 +150,10 @@ export {
   getContentInkBandY,
   fitGangsheetHeight,
   getDesignNestSilhouette,
+  getDesignLabel,
   getEffectiveHeight,
   getStampExtra,
+  getStampExtraAtSize,
   getDesignSelectionUnits,
   getDesignSelectionBounds,
   rotateDesignSelection,
@@ -289,6 +296,13 @@ export type PngExportDesign = {
   alphaThresholded?: boolean;
   printFileName?: boolean;
   name?: string;
+  /**
+   * The printed filename's placement, from `getDesignLabel`.
+   *
+   * Passed in rather than derived here: it takes the design's ink silhouette to work out, and by
+   * this point a design has been flattened to geometry and a blob.
+   */
+  label?: PrintLabelLayout;
 };
 
 /**
@@ -522,6 +536,7 @@ export async function exportPngWithWorker(options: {
     alphaThresholded?: boolean;
     printFileName?: boolean;
     name?: string;
+    label?: PrintLabelLayout;
   }> = options.designs.map((design, i) => ({
     widthInches: design.widthInches,
     heightInches: design.heightInches,
@@ -536,6 +551,7 @@ export async function exportPngWithWorker(options: {
     alphaThresholded: design.alphaThresholded,
     printFileName: design.printFileName,
     name: design.name,
+    label: design.label,
   }));
 
   // Split the sheet across workers when the machine can afford it: several
@@ -1009,17 +1025,59 @@ function crc32(data: Uint8Array): number {
   return (c ^ 0xFFFFFFFF) >>> 0;
 }
 
-function getStampExtra(d: { heightInches: number; transform: ImageTransform; printFileName?: boolean }): number {
-  if (!d.printFileName) return 0;
-  return 0.1 + d.heightInches * d.transform.s * 0.05;
+/**
+ * The design's printed-filename label, or null when it has none.
+ *
+ * Answered from the nest mask wherever the artwork is available, because the mask is the only
+ * thing that knows whether the label can tuck into the artwork's own corner instead of costing a
+ * band of film. Without the artwork — a design whose image has not decoded yet, or a selection
+ * unit carrying only geometry — it falls back to the band, which over-reserves rather than
+ * under-reserves and so cannot cause an overlap.
+ */
+function getDesignLabel(d: DesignWithArtwork): PrintLabelLayout | null {
+  if (!d.printFileName || !d.name) return null;
+  const built = getDesignMask(d);
+  if (built) return built.label;
+  return layoutPrintLabel(
+    {
+      name: d.name,
+      artWidthInches: d.widthInches * d.transform.s,
+      artHeightInches: d.heightInches * d.transform.s,
+    },
+    sharedLabelMeasure(),
+  );
 }
 
-function getEffectiveHeight(d: { heightInches: number; transform: ImageTransform; printFileName?: boolean }): number {
+/** Film the label adds below the artwork. Zero when it sits inside the artwork, or is off. */
+function getStampExtra(d: DesignWithArtwork): number {
+  return getDesignLabel(d)?.bandInches ?? 0;
+}
+
+/**
+ * The band the label would need if the design were this size.
+ *
+ * Placement is taken from the design as it stands, because whether the artwork's corner is clear
+ * does not change with scale — only the band's height does. That lets the resize clamps ask
+ * "would the label still be on the sheet at this scale?" without rebuilding a silhouette for
+ * every candidate scale, which on a resize drag would mean one per frame.
+ */
+function getStampExtraAtSize(d: DesignWithArtwork, artW: number, artH: number): number {
+  const label = getDesignLabel(d);
+  if (!label || !d.name) return 0;
+  if (label.placement === 'inside') return 0;
+  const resized = layoutPrintLabel(
+    { name: d.name, artWidthInches: artW, artHeightInches: artH },
+    sharedLabelMeasure(),
+  );
+  return resized?.bandInches ?? 0;
+}
+
+function getEffectiveHeight(d: DesignWithArtwork): number {
   return d.heightInches * d.transform.s + getStampExtra(d);
 }
 
 function getRotatedBounds(
-  d: { widthInches: number; heightInches: number; transform: ImageTransform; printFileName?: boolean },
+  d: DesignWithArtwork,
 ): { minX: number; maxX: number; minY: number; maxY: number } {
   const t = d.transform;
   const w = d.widthInches * t.s;
@@ -1061,20 +1119,22 @@ type DesignWithArtwork = {
  * Shared by the packer (which nests with it) and the bounds helpers below (which validate
  * against it) so the two can never disagree about where a design's artwork is.
  */
-function getDesignNestSilhouette(d: DesignWithArtwork): NestMask | undefined {
+function getDesignMask(d: DesignWithArtwork): DesignMask | null {
   const img = d.imageInfo?.image;
-  if (!img) return undefined;
-  const built = getDesignNestMask({
+  if (!img) return null;
+  return getDesignNestMask({
     image: img,
     artW: d.widthInches * d.transform.s,
     artH: d.heightInches * d.transform.s,
-    stampExtra: getStampExtra(d),
-    stampText: d.printFileName ? d.name : undefined,
+    labelName: d.printFileName ? d.name : undefined,
     flipX: d.transform.flipX,
     flipY: d.transform.flipY,
     sourceKey: img.src,
   });
-  return built?.mask;
+}
+
+function getDesignNestSilhouette(d: DesignWithArtwork): NestMask | undefined {
+  return getDesignMask(d)?.mask ?? undefined;
 }
 
 /**

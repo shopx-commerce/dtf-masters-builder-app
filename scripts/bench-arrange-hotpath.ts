@@ -202,6 +202,115 @@ for (const n of [10, 50, 100]) {
 }
 
 // ---------------------------------------------------------------------------
+// Tidiness: what adding one copy settles for, against what the button would give.
+//
+// The bench above starts from `makeCurrent`, an un-arranged sheet laid out in rows. That is
+// the wrong starting point for this question: the reported complaint is about a sheet that
+// has *already* been arranged, which is then handed one more copy. So each case here packs
+// the sheet properly first, feeds the settled positions back in as `current`, and only then
+// adds the copy — which is exactly what the editor does on a `+` click.
+//
+// Two things are being watched. Film height says whether the duplicate path now lands on the
+// tidy layout instead of leaving visible slack, and billable height says whether that cost
+// the customer anything: it must never come out above what pressing the button would bill,
+// because a tidier sheet is not worth a penny more.
+// ---------------------------------------------------------------------------
+
+const billableOf = (h: number): number => LADDER.find(step => step >= h - 0.01) ?? h;
+
+/** Settled placements, back in the footprint form `current` takes. */
+function currentFromResult(
+  designs: Design[],
+  placed: Array<{ id: string; nx: number; ny: number; rotation: number }>,
+  sheetH: number,
+) {
+  const byId = new Map(designs.map(d => [d.id, d]));
+  return placed.flatMap(p => {
+    const d = byId.get(p.id);
+    if (!d) return [];
+    const w = p.rotation === 90 ? d.h : d.w;
+    const h = p.rotation === 90 ? d.w : d.h;
+    return [{
+      id: d.id,
+      x: p.nx * SHEET_W - w / 2,
+      y: p.ny * sheetH - h / 2,
+      w, h,
+      rotation: p.rotation,
+      mask: d.mask,
+    }];
+  });
+}
+
+/** Share of `before` that ends up somewhere else in `after`, by the same measure arrange uses. */
+function movedShare(
+  before: Array<{ id: string; nx: number; ny: number; rotation: number }>,
+  after: Array<{ id: string; nx: number; ny: number; rotation: number }>,
+  sheetH: number,
+): number {
+  if (after.length === 0) return 0;
+  const prev = new Map(before.map(p => [p.id, p]));
+  let moved = 0;
+  for (const p of after) {
+    const q = prev.get(p.id);
+    if (!q
+      || q.rotation !== p.rotation
+      || Math.abs(q.nx - p.nx) * SHEET_W > 0.05
+      || Math.abs(q.ny - p.ny) * sheetH > 0.05) moved++;
+  }
+  return moved / after.length;
+}
+
+console.log(`\n=== copies added one at a time, the way a customer builds a sheet ===`);
+for (const [startN, copies] of [[4, 12], [8, 24], [20, 20]] as Array<[number, number]>) {
+  const base = makeDesigns(startN);
+  const sheetH = 120;
+
+  // Settle the starting artwork, then add copies one at a time, feeding each layout forward
+  // as the next click's starting point. This is the part a single-copy measurement cannot
+  // see: every copy inherits the previous incremental layout, so any tendency to stack them
+  // down the film instead of across it compounds with every click.
+  let designs = [...base];
+  let placed = runArrange({
+    ...baseInput(designs, sheetH),
+    current: makeCurrent(designs, SHEET_W),
+    preferStable: false,
+  }).result;
+
+  const t0 = performance.now();
+  for (let i = 0; i < copies; i++) {
+    const copy = { ...base[i % base.length], id: `copy${i}` };
+    const current = currentFromResult(designs, placed, sheetH);
+    // A new copy has no settled position yet, so it is seeded below the artwork the way
+    // `seedCopyGrid` does rather than being handed to the packer already placed.
+    const lowest = current.reduce((m, r) => Math.max(m, r.y + r.h), 0);
+    current.push({ id: copy.id, x: 0, y: lowest + GAP, w: copy.w, h: copy.h, rotation: 0, mask: copy.mask });
+    designs = [...designs, copy];
+    placed = runArrange({ ...baseInput(designs, sheetH), current, preferStable: true }).result;
+  }
+  const incrementalMs = performance.now() - t0;
+
+  const incremental = runArrange({
+    ...baseInput(designs, sheetH),
+    current: currentFromResult(designs, placed, sheetH),
+    preferStable: true,
+  });
+  const button = runArrange({
+    ...baseInput(designs, sheetH),
+    current: currentFromResult(designs, placed, sheetH),
+    preferStable: false,
+  });
+  const floor = packingHeightLowerBound(designs, SHEET_W);
+
+  console.log(`\n  ${startN} designs, +${copies} copies one at a time (${designs.length} total), floor ${floor.toFixed(1)}"`);
+  console.log(`    after the clicks   film ${incremental.filmHeight.toFixed(1)}"  bills ${billableOf(incremental.filmHeight)}"`);
+  console.log(`    button afterwards  film ${button.filmHeight.toFixed(1)}"  bills ${billableOf(button.filmHeight)}"`);
+  const costsMore = billableOf(incremental.filmHeight) > billableOf(button.filmHeight) + 0.01;
+  console.log(`    the button would save the customer          ${costsMore ? `${billableOf(incremental.filmHeight) - billableOf(button.filmHeight)}" of film` : 'nothing'}`);
+  console.log(`    ${copies} clicks cost                             ${incrementalMs.toFixed(0)} ms total, ${(incrementalMs / copies).toFixed(0)} ms per click`);
+  if (costsMore) process.exitCode = 1;
+}
+
+// ---------------------------------------------------------------------------
 // The ladder: what an overflowing arrange costs when it has to grow and repack.
 // ---------------------------------------------------------------------------
 
