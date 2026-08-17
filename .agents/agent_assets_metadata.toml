@@ -28,3 +28,17 @@ uri = "file://recovered-print-files/gangsheet-e369268e-24.5x35in.png"
 type = "image"
 title = "Gangsheet 24.5\" × 35\" (order e369268e)"
 description = "Rebuilt production print file — 7350×10500 px at 300 DPI, transparent background. Verified against the cart preview."
+
+[[outputs]]
+id = "NCD1BnC9Kz00fMrPkdjgj"
+uri = "file://recovered-print-files/gangsheet-1c9c2e93-24.5x180in.png"
+type = "image"
+title = "Gangsheet 24.5\" × 180\" (1c9c2e93)"
+description = "Rebuilt production print file — 7350×54000 px at 300 DPI, 91 layers, verified against the cart preview."
+
+[[outputs]]
+id = "A1tu_O7o4-QenURtCrwji"
+uri = "file://recovered-print-files/gangsheet-4a815a84-24.5x250in.png"
+type = "image"
+title = "Gangsheet 24.5\" × 250\" (4a815a84)"
+description = "Rebuilt production print file — 7350×75000 px at 300 DPI, 54 layers, verified against the cart preview."
