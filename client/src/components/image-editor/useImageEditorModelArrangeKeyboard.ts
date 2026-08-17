@@ -181,6 +181,7 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     artboardHeightRef,
     contentFillCacheRef,
     handleAutoArrangeRef,
+    beginArrangeRef,
     designGap,
     setDesignTransform,
     designs,
@@ -301,6 +302,37 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
    * when the lock is already clear, which is what makes it usable from those guards without
    * each one having to know whether this call was the one that took it.
    */
+  /**
+   * How long the veil waits for an arrange to actually start before giving up on it.
+   *
+   * `beginArrange` is called by whoever is about to commit designs, a frame or two ahead of the
+   * pack itself, so for that gap nothing holds the arrange lock. If the pack then never arrives —
+   * a caller that bailed after committing, a throw between the two — the veil would stay over the
+   * preview for the rest of the session with no way for the customer to clear it.
+   */
+  const ARRANGE_START_GRACE_MS = 2000;
+  const arrangeStartWatchdogRef = useRef<number | null>(null);
+
+  /**
+   * Raise the busy veil now, for work whose designs are about to be committed.
+   *
+   * Separate from taking the arrange lock: the lock serialises packs, and taking it here would
+   * make the pack that follows look like a competing request and queue it behind itself.
+   */
+  const beginArrange = useCallback(() => {
+    setArrangeStage(stage => stage ?? 'nesting');
+    if (arrangeStartWatchdogRef.current != null) window.clearTimeout(arrangeStartWatchdogRef.current);
+    arrangeStartWatchdogRef.current = window.setTimeout(() => {
+      arrangeStartWatchdogRef.current = null;
+      if (!mountedRef.current) return;
+      if (arrangeInFlightRef.current || pendingArrangeRef.current) return;
+      setArrangeStage(null);
+    }, ARRANGE_START_GRACE_MS);
+  }, []);
+  useEffect(() => () => {
+    if (arrangeStartWatchdogRef.current != null) window.clearTimeout(arrangeStartWatchdogRef.current);
+  }, []);
+
   const settleArrange = () => {
     arrangeInFlightRef.current = false;
     const next = pendingArrangeRef.current;
@@ -1246,6 +1278,7 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
   const handleRedoRef = useRef(handleRedo);
   handleRedoRef.current = handleRedo;
   handleAutoArrangeRef.current = handleAutoArrange;
+  beginArrangeRef.current = beginArrange;
   const handleDuplicateDesignRef = useRef(handleDuplicateDesign);
   handleDuplicateDesignRef.current = handleDuplicateDesign;
   const handleDeleteDesignRef = useRef(handleDeleteDesign);
@@ -1329,9 +1362,16 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       if (ctrl && e.key === 'd') {
         e.preventDefault();
         if (selectedDesignIdsRef.current.size > 1) {
+          beginArrangeRef.current();
           const newIds = handleDuplicateSelectedRef.current();
           if (newIds.length > 0) {
-            setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true }), 0);
+            // Same pack the Auto-Arrange button gives — see COPY_ARRANGE_OPTS.
+            setTimeout(() => handleAutoArrangeRef.current({
+              skipSnapshot: true,
+              preserveSelection: true,
+              arrangeAll: true,
+              fullRepack: true,
+            }), 0);
           }
         } else {
           handleDuplicateDesignRef.current();

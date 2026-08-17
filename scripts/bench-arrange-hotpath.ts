@@ -260,15 +260,17 @@ function movedShare(
   return moved / after.length;
 }
 
-console.log(`\n=== copies added one at a time, the way a customer builds a sheet ===`);
-for (const [startN, copies] of [[4, 12], [8, 24], [20, 20]] as Array<[number, number]>) {
-  const base = makeDesigns(startN);
-  const sheetH = 120;
-
-  // Settle the starting artwork, then add copies one at a time, feeding each layout forward
-  // as the next click's starting point. This is the part a single-copy measurement cannot
-  // see: every copy inherits the previous incremental layout, so any tendency to stack them
-  // down the film instead of across it compounds with every click.
+/**
+ * Build a sheet a copy at a time, feeding each layout forward as the next click's starting point.
+ *
+ * This is the part a single-copy measurement cannot see: every copy inherits the previous layout,
+ * so any tendency to stack them down the film instead of across it compounds with every click.
+ *
+ * `preferStable` is the decision under test. The app used to add copies with it on, keeping
+ * settled designs where they were; it now adds them with it off, which is exactly what the
+ * Auto-Arrange button does, so that one click and the other cannot disagree about the layout.
+ */
+function buildOneAtATime(base: ReturnType<typeof makeDesigns>, copies: number, sheetH: number, preferStable: boolean) {
   let designs = [...base];
   let placed = runArrange({
     ...baseInput(designs, sheetH),
@@ -285,28 +287,36 @@ for (const [startN, copies] of [[4, 12], [8, 24], [20, 20]] as Array<[number, nu
     const lowest = current.reduce((m, r) => Math.max(m, r.y + r.h), 0);
     current.push({ id: copy.id, x: 0, y: lowest + GAP, w: copy.w, h: copy.h, rotation: 0, mask: copy.mask });
     designs = [...designs, copy];
-    placed = runArrange({ ...baseInput(designs, sheetH), current, preferStable: true }).result;
+    placed = runArrange({ ...baseInput(designs, sheetH), current, preferStable }).result;
   }
-  const incrementalMs = performance.now() - t0;
+  const ms = performance.now() - t0;
 
-  const incremental = runArrange({
+  const settled = runArrange({
     ...baseInput(designs, sheetH),
     current: currentFromResult(designs, placed, sheetH),
-    preferStable: true,
+    preferStable,
   });
-  const button = runArrange({
-    ...baseInput(designs, sheetH),
-    current: currentFromResult(designs, placed, sheetH),
-    preferStable: false,
-  });
-  const floor = packingHeightLowerBound(designs, SHEET_W);
+  return { designs, placed, ms, film: settled.filmHeight };
+}
 
-  console.log(`\n  ${startN} designs, +${copies} copies one at a time (${designs.length} total), floor ${floor.toFixed(1)}"`);
-  console.log(`    after the clicks   film ${incremental.filmHeight.toFixed(1)}"  bills ${billableOf(incremental.filmHeight)}"`);
-  console.log(`    button afterwards  film ${button.filmHeight.toFixed(1)}"  bills ${billableOf(button.filmHeight)}"`);
-  const costsMore = billableOf(incremental.filmHeight) > billableOf(button.filmHeight) + 0.01;
-  console.log(`    the button would save the customer          ${costsMore ? `${billableOf(incremental.filmHeight) - billableOf(button.filmHeight)}" of film` : 'nothing'}`);
-  console.log(`    ${copies} clicks cost                             ${incrementalMs.toFixed(0)} ms total, ${(incrementalMs / copies).toFixed(0)} ms per click`);
+console.log(`\n=== copies added one at a time, the way a customer builds a sheet ===`);
+for (const [startN, copies] of [[4, 12], [8, 24], [20, 20]] as Array<[number, number]>) {
+  const base = makeDesigns(startN);
+  const sheetH = 120;
+
+  const repack = buildOneAtATime(base, copies, sheetH, false);
+  const stable = buildOneAtATime(base, copies, sheetH, true);
+  const floor = packingHeightLowerBound(repack.designs, SHEET_W);
+
+  console.log(`\n  ${startN} designs, +${copies} copies one at a time (${repack.designs.length} total), floor ${floor.toFixed(1)}"`);
+  console.log(`    full repack (what a copy click does now)  film ${repack.film.toFixed(1)}"  bills ${billableOf(repack.film)}"  ${(repack.ms / copies).toFixed(0)} ms per click`);
+  console.log(`    prefer-stable (what it used to do)        film ${stable.film.toFixed(1)}"  bills ${billableOf(stable.film)}"  ${(stable.ms / copies).toFixed(0)} ms per click`);
+
+  // The reason for the change was film, so film is what it has to deliver. Packing from scratch
+  // on every click is slower and moves more designs, and neither is worth paying for if the
+  // sheet does not come out at least as cheap.
+  const costsMore = billableOf(repack.film) > billableOf(stable.film) + 0.01;
+  console.log(`    packing from scratch costs the customer   ${costsMore ? `${billableOf(repack.film) - billableOf(stable.film)}" of film` : 'nothing'}`);
   if (costsMore) process.exitCode = 1;
 }
 

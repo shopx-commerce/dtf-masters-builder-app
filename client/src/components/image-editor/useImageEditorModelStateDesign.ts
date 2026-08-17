@@ -89,6 +89,27 @@ const DRAFT_SAVE_IDLE_TIMEOUT_MS = 2000;
 const DRAFT_QUOTA_RETRY_COOLDOWN_MS = 60_000;
 
 /**
+ * How the sheet is packed after the copy count changes.
+ *
+ * Identical to what the Auto-Arrange button asks for, which is the point: adding a copy used to
+ * pack with the stable-layout pass, so it kept designs where they already were and left film on
+ * the sheet the button could then recover. Two ways to nest the same artwork meant the customer
+ * had to know to press the button afterwards to get the tighter result — so copies now get the
+ * same pack the button gives, and there is only one answer.
+ *
+ * `arrangeAll` because every copy path leaves the new copies selected for layer feedback, and
+ * selected-only mode would treat the rest of the sheet as fixed obstacles and stack the copies
+ * into a column. `skipSnapshot` because the caller already took the undo point that covers both
+ * the copies and their placement.
+ */
+const COPY_ARRANGE_OPTS = {
+  skipSnapshot: true,
+  preserveSelection: true,
+  arrangeAll: true,
+  fullRepack: true,
+} as const;
+
+/**
  * Rough size of what a draft save would write, from data already to hand.
  *
  * Only ever compared against another reading of itself, to answer "is there less
@@ -216,6 +237,16 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       continuation?: boolean;
     }
   ) => void>(() => {});
+  /**
+   * Say the sheet is about to be repacked, before the designs that need repacking are committed.
+   *
+   * Copies are seeded on a provisional grid so they never appear stacked on their original, and
+   * the pack that turns that grid into a real layout only starts a frame or two later. Both of
+   * those states get painted, so what the customer sees is a rough grid, then a jump. Raising the
+   * veil in the same commit as the copies hides the whole transition and shows them one settled
+   * result instead. Assigned by `useImageEditorModelArrangeKeyboard`.
+   */
+  const beginArrangeRef = useRef<() => void>(() => {});
   // Assigned by `useImageEditorModelArrangeKeyboard`, which owns the height list. Held here so
   // the delete handlers below can drop the sheet to the smallest size the remaining artwork
   // needs, the same way they already reach auto-arrange.
@@ -2255,9 +2286,10 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
 
   const handleDuplicateAndArrange = useCallback((count: number) => {
     if (selectedDesignIds.size > 1) {
+      beginArrangeRef.current();
       const newIds = handleDuplicateSelected();
       if (newIds.length > 0) {
-        setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true }), 0);
+        setTimeout(() => handleAutoArrangeRef.current(COPY_ARRANGE_OPTS), 0);
       }
       return;
     }
@@ -2281,12 +2313,13 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       });
     }
     saveSnapshot();
+    beginArrangeRef.current();
     setDesigns(prev => [...prev, ...newDesigns]);
     // See handleDuplicateDesign for the torn-state rationale.
     selectOneInStore(newDesigns[newDesigns.length - 1].id);
     setDuplicateCount(1);
     requestAnimationFrame(() => {
-      handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true });
+      handleAutoArrangeRef.current(COPY_ARRANGE_OPTS);
     });
   }, [selectedDesignId, designs, saveSnapshot, artboardWidth, artboardHeight, selectedDesignIds, handleDuplicateSelected, selectOneInStore]);
 
@@ -2324,7 +2357,8 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     const nextIds = new Set(selectedDesignIds);
     nextIds.delete(last.id);
     setSelectedDesignIds(nextIds);
-    setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true }), 0);
+    beginArrangeRef.current();
+    setTimeout(() => handleAutoArrangeRef.current(COPY_ARRANGE_OPTS), 0);
   }, [designs, saveSnapshot, selectedDesignId, selectedDesignIds]);
 
   const handleCopySelected = useCallback(() => {
@@ -2371,7 +2405,13 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   }, [saveSnapshot, artboardWidth, artboardHeight]);
 
   /**
-   * Turns the printed filename on or off for a whole layer row.
+   * Turns the printed filename on or off for every copy of an artwork.
+   *
+   * Scoped to the artwork rather than to the row the button lives in. The label identifies a file
+   * to whoever is pressing the garments, so wanting it on one copy and not another is not a real
+   * intention — and a row only covers copies at one size, so a resized copy would silently print
+   * without a name. Copies are matched by source image and base name, which is what makes a
+   * resized copy or one added later still count as the same design.
    *
    * Enabling it grows the design's footprint — by a band under the artwork, or by nothing at all
    * when the label fits in the artwork's own empty corner — so the designs are re-clamped
@@ -2385,7 +2425,18 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   const handleTogglePrintName = useCallback((ids: string[]) => {
     if (ids.length === 0) return;
     saveSnapshot();
-    const idSet = new Set(ids);
+    const asked = new Set(ids);
+    const baseNameOf = (name: string) => name.replace(/ copy( \d+)?$/, '');
+    const family = new Set(
+      designsRef.current
+        .filter(d => asked.has(d.id))
+        .map(d => `${d.imageInfo.image.src}\u0000${baseNameOf(d.name)}`),
+    );
+    const idSet = new Set(
+      designsRef.current
+        .filter(d => family.has(`${d.imageInfo.image.src}\u0000${baseNameOf(d.name)}`))
+        .map(d => d.id),
+    );
     const turningOn = !designsRef.current.some(d => idSet.has(d.id) && d.printFileName);
     setDesigns(prev => {
       const labelled = prev.map(d => (idSet.has(d.id) ? { ...d, printFileName: turningOn } : d));
@@ -2546,5 +2597,5 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
 
 
   // Base editor state; arrange/upload/export/cart hooks extend this bag in image-editor-provider.
-  return { onDesignUploaded, profile, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode, toast, t, lang, isMobile, isLgUp, imageInfo, setImageInfo, resizeSettings, setResizeSettings, isProcessing, setIsProcessing, isAddingToCart, setIsAddingToCart, isUpdateFlow, setIsUpdateFlow, addToCartProgressLabel, setAddToCartProgressLabel, exportProgressLabel, setExportProgressLabel, addToCartInFlightRef, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, shellShopKeyRef, shellConfigReady, designIdRef, refreshAddToCartStallTimeout, isUploading, setIsUploading, uploadProgress, setUploadProgress, artboardWidth, setArtboardWidth, artboardHeight, setArtboardHeight, artboardWidthRef, artboardHeightRef, contentFillCacheRef, handleAutoArrangeRef, shrinkSheetToFitRef, manualHeightFloorRef, clearManualHeightFloor, quantity, setQuantity, designGap, setDesignGap, duplicateCount, setDuplicateCount, clampDuplicateCount, parseDuplicateCount, handleDuplicateCountKeyDown, designTransform, setDesignTransform, designs, setDesigns, selectedDesignId, setSelectedDesignId, selectedDesignIds, setSelectedDesignIds, clipboardRef, proportionalLock, setProportionalLock, designInfoRef, sidebarFileRef, headerUploadInputRef, canvasRef, downloadContainer, setDownloadContainer, fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer, copySpotSelectionsRef, pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo, mountedRef, designsRef, nudgeSnapshotSavedRef, nudgeTimeoutRef, thumbnailCacheRef, assetDataUrlCacheRef, restoredLayerAssetRef, getLayerAssetRef, getLayerScreenedAssetRef, releaseLayerAssetOwnership, multiDragAccumRef, multiResizeStartRef, multiRotateStartRef, snapshotCacheRef, getSnapshot, saveSnapshot, applySnapshot, handleUndo, handleRedo, handleInteractionEnd, handleRemoveWhiteBackground, handleWandDelete, selectedDesign, activeImageInfo, activeDesignTransform, activeWidthInches, activeHeightInches, activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, draftRecoveryAvailable, isRecoveringDraft, recoverEditorDraft, discardEditorDraft, rehydrateDesignImage, ensureDesignImagesAvailable, handleSelectDesign, handleMultiSelect, handleGroupSelected, handleUngroupSelected, selectedHasGroup, getLayerThumbnail, handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta, handleEffectiveSizeChange, isArtboardFull, handleDuplicateDesign, handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleCopySelected, handlePaste, handleTogglePrintName, handleDeleteGroup, handleDeleteDesign, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleCanvasContextMenu };
+  return { onDesignUploaded, profile, initialWidth, initialHeight, initialGangsheetHeights, initialQuantity, shopifyVariants, initialVariantId, shopDomain, embedFromShopify, initialDesignState, initialDesignId, isEditMode, toast, t, lang, isMobile, isLgUp, imageInfo, setImageInfo, resizeSettings, setResizeSettings, isProcessing, setIsProcessing, isAddingToCart, setIsAddingToCart, isUpdateFlow, setIsUpdateFlow, addToCartProgressLabel, setAddToCartProgressLabel, exportProgressLabel, setExportProgressLabel, addToCartInFlightRef, addToCartStallTimeoutRef, lastAddToCartPngBytesRef, shellUploadUrlRef, shellShopKeyRef, shellConfigReady, designIdRef, refreshAddToCartStallTimeout, isUploading, setIsUploading, uploadProgress, setUploadProgress, artboardWidth, setArtboardWidth, artboardHeight, setArtboardHeight, artboardWidthRef, artboardHeightRef, contentFillCacheRef, handleAutoArrangeRef, beginArrangeRef, shrinkSheetToFitRef, manualHeightFloorRef, clearManualHeightFloor, quantity, setQuantity, designGap, setDesignGap, duplicateCount, setDuplicateCount, clampDuplicateCount, parseDuplicateCount, handleDuplicateCountKeyDown, designTransform, setDesignTransform, designs, setDesigns, selectedDesignId, setSelectedDesignId, selectedDesignIds, setSelectedDesignIds, clipboardRef, proportionalLock, setProportionalLock, designInfoRef, sidebarFileRef, headerUploadInputRef, canvasRef, downloadContainer, setDownloadContainer, fluorPanelContainer, setFluorPanelContainer, mobileToolbarContainer, setMobileToolbarContainer, copySpotSelectionsRef, pushSnapshot, undo, redo, clearIsUndoRedo, canUndo, canRedo, mountedRef, designsRef, nudgeSnapshotSavedRef, nudgeTimeoutRef, thumbnailCacheRef, assetDataUrlCacheRef, restoredLayerAssetRef, getLayerAssetRef, getLayerScreenedAssetRef, releaseLayerAssetOwnership, multiDragAccumRef, multiResizeStartRef, multiRotateStartRef, snapshotCacheRef, getSnapshot, saveSnapshot, applySnapshot, handleUndo, handleRedo, handleInteractionEnd, handleRemoveWhiteBackground, handleWandDelete, selectedDesign, activeImageInfo, activeDesignTransform, activeWidthInches, activeHeightInches, activeResizeSettings, selectedVariantPrice, effectiveDPI, layerRows, draftRecoveryAvailable, isRecoveringDraft, recoverEditorDraft, discardEditorDraft, rehydrateDesignImage, ensureDesignImagesAvailable, handleSelectDesign, handleMultiSelect, handleGroupSelected, handleUngroupSelected, selectedHasGroup, getLayerThumbnail, handleDesignTransformChange, handleMultiDragDelta, handleMultiResizeDelta, handleMultiRotateDelta, handleEffectiveSizeChange, isArtboardFull, handleDuplicateDesign, handleDuplicateAndArrange, handleDuplicateSelected, handleDuplicateById, handleRemoveOneCopy, handleCopySelected, handlePaste, handleTogglePrintName, handleDeleteGroup, handleDeleteDesign, handleDeleteMulti, handleRotate90, handleFlipX, handleFlipY, handleCanvasContextMenu };
 }

@@ -33,7 +33,7 @@ import {
   useUiActions,
   useUiStore,
 } from "@/state/ui-store";
-import { ArrangeBusyPill } from "./arrange-busy-pill";
+import { ArrangeOverlay } from "./arrange-overlay";
 
 /**
  * The tools in the phone's Design tools sheet, and the thing the bar offers to repeat.
@@ -978,7 +978,7 @@ export default function ImageEditorView() {
                    onWandDeactivate={handleWandDeactivate}
                    onRegisterFocus={registerCanvasFocus}
                 />
-                <ArrangeBusyPill stage={arrangeStage} />
+                <ArrangeOverlay stage={arrangeStage} />
 
                 {/* Contextual tools. Nothing selected means no sheet at all, so
                     the controls cost zero canvas for as long as they are of no
@@ -1600,7 +1600,7 @@ export default function ImageEditorView() {
               onWandDeleteTap={handleWandDelete}
               onWandDeactivate={handleWandDeactivate}
             />
-            <ArrangeBusyPill stage={arrangeStage} />
+            <ArrangeOverlay stage={arrangeStage} />
           </div>
         )}
       </div>
