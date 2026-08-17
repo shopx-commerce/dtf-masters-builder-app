@@ -1,4 +1,4 @@
-﻿@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Fredoka+One&display=swap');
 @import url('https://db.onlinewebfonts.com/c/598a2bdeaef4affee05367e9e3dd54c6?family=Nabana+Shadow');
 
@@ -104,4 +104,38 @@
 }
 .animate-dpi-alarm {
   animation: dpiAlarm 1s ease-in-out infinite;
+}
+
+/* Arrange-veil water. Transform/opacity only — the loop runs on the compositor thread, so it
+   stays smooth and free while the main thread and workers are packing the sheet. */
+.veil-wave-track {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 200%;
+  display: flex;
+  will-change: transform;
+  animation-name: veilWaveDrift;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+@keyframes veilWaveDrift {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.veil-droplet {
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: rgb(52, 211, 153);
+  animation: veilDropletBob 1.25s ease-in-out infinite;
+}
+@keyframes veilDropletBob {
+  0%, 100% { transform: translateY(0); opacity: 0.5; }
+  50% { transform: translateY(-4px); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .veil-wave-track { animation: none; }
+  .veil-droplet { animation: none; opacity: 0.9; }
 }
