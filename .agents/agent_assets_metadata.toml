@@ -42,3 +42,10 @@ uri = "file://recovered-print-files/gangsheet-4a815a84-24.5x250in.png"
 type = "image"
 title = "Gangsheet 24.5\" × 250\" (4a815a84)"
 description = "Rebuilt production print file — 7350×75000 px at 300 DPI, 54 layers, verified against the cart preview."
+
+[[outputs]]
+id = "AKqvmIfD-cO0Egh8i-XX1"
+uri = "file://recovered-print-files/gangsheet-24.5x250-4a815a84.zip"
+type = "unspecified"
+title = "Gangsheet 24.5\" × 250\" — zipped for download"
+description = "Same print file, wrapped in an archive so it downloads directly instead of opening a preview. Extract to get the 300 DPI PNG."
