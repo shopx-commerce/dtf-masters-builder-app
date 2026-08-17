@@ -1,0 +1,43 @@
+Pull the latest main from GitHub and sync the workspace to it. Do not merge your
+own local edits on top — the remote is the source of truth for these files.
+
+  git fetch origin
+  git status                     # tell me if anything is dirty before continuing
+  git checkout main
+  git reset --hard origin/main   # only if my workspace has no changes I want to keep
+  npm install                    # no new dependencies, but run it to be safe
+  npm run build                  # must succeed before restarting
+
+Target commit: e9e81dd "Label every copy, pack copies the way the button does,
+and hide the repack" (on top of b84c065).
+
+That commit touches 7 files. One is a DELETE — make sure it is actually gone from
+the workspace after the pull, and that nothing still imports it:
+
+  DELETED  client/src/components/image-editor/arrange-busy-pill.tsx
+  NEW      client/src/components/image-editor/arrange-overlay.tsx
+  MODIFIED client/src/components/image-editor/image-editor-view.tsx
+  MODIFIED client/src/components/image-editor/image-editor-provider.tsx
+  MODIFIED client/src/components/image-editor/useImageEditorModelStateDesign.ts
+  MODIFIED client/src/components/image-editor/useImageEditorModelArrangeKeyboard.ts
+  MODIFIED scripts/bench-arrange-hotpath.ts
+
+What changed, so you can sanity-check the running app rather than just the build:
+
+1. The printed name label now applies to every copy of a design. Copies made from
+   a layers row used to be created with the flag cleared, so copies added after
+   turning the label on printed without a name. The row toggle also now covers
+   copies at other sizes, not just the row it was pressed in.
+2. Adding or removing copies now packs the sheet with the same options the
+   Auto-Arrange button uses, so pressing the button after a copy click no longer
+   finds a tighter layout. Measured as costing no extra film and no extra time.
+3. The preview is covered by a fading veil while the sheet is being packed or
+   grown, so the customer no longer watches copies land in the wrong place and
+   jump. It takes no pointer events and sits under the mobile tool/layers sheets,
+   so repeated "+" clicks must still work while it is up.
+
+After the build, restart the app and verify: turn the name stamp on for a design,
+click "+" a few times, confirm every copy shows the label, that the veil appears
+over the preview while it nests and lifts on its own, and that the layers panel
+stays clickable the whole time. Report back if the build fails or if any file
+above did not come through.
