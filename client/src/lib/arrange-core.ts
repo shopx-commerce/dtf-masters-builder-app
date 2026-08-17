@@ -10,6 +10,7 @@ import {
   inkProfile,
   keepPositionsNest,
   nestPack,
+  reseatFilmBottom,
   type NestItem,
   type NestMask,
   type NestObstacle,
@@ -1043,7 +1044,42 @@ export function runArrange(input: ArrangeInput) {
     }
   }
 
-  const winner = candidates[0];
+  /**
+   * Second look at the designs sitting on the film's bottom edge, now that the layout is
+   * known: turn each one and keep the result only if the film gets shorter.
+   *
+   * Skipped when the sheet already bills at the cheapest rung it possibly could, both
+   * because there is nothing left to win and because moving designs for a saving the
+   * customer is not charged for is disruption for its own sake.
+   */
+  const repairBottom = (c: Candidate): Candidate | null => {
+    if (items.length > NEST_ITEM_LIMIT || c.overflows > 0 || billsAtFloor(c)) return null;
+    const fixed = reseatFilmBottom(
+      toNestItems(items), c.result, usableW, usableH, artboardWidth, artboardHeight, GAP,
+      fixedRects,
+    );
+    if (!fixed) return null;
+    // Re-measured with the same yardstick the ranking uses rather than trusting the pass's
+    // own cell-quantised height, so a repair can never be accepted on a rounding difference.
+    const cand = evaluate(fixed);
+    return cand.overflows === 0 && cand.filmHeight < c.filmHeight - EPS ? cand : null;
+  };
+
+  /**
+   * The chosen layout, with the bottom repair applied if it helps.
+   *
+   * Worth doing on a settled layout as well as a packed one: only designs that are free to
+   * move are candidates, so a newcomer standing up at the bottom of an otherwise untouched
+   * sheet is turned without disturbing anything the customer had already placed.
+   */
+  const finish = (c: Candidate) => describe(repairBottom(c) ?? c);
+
+  let winner = candidates[0];
+  const repaired = repairBottom(winner);
+  if (repaired) {
+    (repaired as any)._algo = `${(winner as any)._algo ?? 'obstacle_variant'}+bottomRepair`;
+    winner = repaired;
+  }
   if (DEBUG_OVERLAP && winner.result.some(r => r.rotation !== 0)) {
     console.debug('[arrange] winner with rotation', (winner as any)._algo, winner.result.length, winner.result.map(r => ({ id: r.id.slice(0, 8), nx: r.nx.toFixed(4), ny: r.ny.toFixed(4), rot: r.rotation })));
   }
@@ -1064,7 +1100,7 @@ export function runArrange(input: ArrangeInput) {
       && churn(stable, winner) <= MAX_TIDY_CHURN) {
       return describe(winner);
     }
-    return describe(stable);
+    return finish(stable);
   }
 
   // An explicit Auto-Arrange is a licence to move things, not a licence to make them worse.
@@ -1072,5 +1108,5 @@ export function runArrange(input: ArrangeInput) {
   // one import at a time can already be better than anything the from-scratch orderings
   // find, and this path used to overwrite it regardless. It still repacks whenever the new
   // layout ties, so pressing the button on an already-good sheet visibly does something.
-  return describe(billable(winner.filmHeight) > billable(stable.filmHeight) + EPS ? stable : winner);
+  return billable(winner.filmHeight) > billable(stable.filmHeight) + EPS ? finish(stable) : describe(winner);
 }

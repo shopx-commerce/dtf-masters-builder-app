@@ -69,7 +69,7 @@ export type EditorActionToolbarProps = {
   handleFillEmptySpace: () => void;
   designGap: number | undefined;
   setDesignGap: (v: number | undefined) => void;
-  handleAutoArrangeRef: React.MutableRefObject<(opts?: { skipSnapshot?: boolean; preserveSelection?: boolean; fullRepack?: boolean }) => void>;
+  handleAutoArrangeRef: React.MutableRefObject<(opts?: { skipSnapshot?: boolean; preserveSelection?: boolean; arrangeAll?: boolean; fullRepack?: boolean }) => void>;
   artboardWidth: number;
   artboardHeight: number;
   setArtboardWidth: (v: number) => void;
@@ -700,7 +700,9 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
                   const newGap = v === "auto" ? undefined : parseFloat(v);
                   setDesignGap(newGap);
                   if (designs.length >= 2) {
-                    setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true, fullRepack: true }), 0);
+                    // `arrangeAll` because spacing is a property of the sheet, not of the
+                    // selection — see the note on the same control in image-editor-view.tsx.
+                    setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true, arrangeAll: true, fullRepack: true }), 0);
                   }
                 }}
                 className="h-7 coarse:h-11 px-1.5 coarse:px-2 bg-gray-100 border border-gray-300 rounded text-[11px] coarse:text-[16px] font-medium text-gray-800 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"

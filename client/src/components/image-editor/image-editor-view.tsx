@@ -1149,7 +1149,13 @@ export default function ImageEditorView() {
                               const v = e.target.value;
                               const newGap = v === "auto" ? undefined : parseFloat(v);
                               setDesignGap(newGap);
-                              setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true, fullRepack: true }), 0);
+                              // `arrangeAll`, or the margin only reaches the selection. Auto-arrange
+                              // reads "two or more designs selected" as "arrange just those" and
+                              // freezes the rest, so without this a spacing change made with a row
+                              // still selected leaves most of the sheet at the old spacing — and,
+                              // because the frozen designs cannot move, growing the film does not
+                              // help the ones that no longer fit.
+                              setTimeout(() => handleAutoArrangeRef.current({ skipSnapshot: false, preserveSelection: true, arrangeAll: true, fullRepack: true }), 0);
                             }}
                              className="h-8 flex-shrink-0 px-1.5 bg-gray-100 border border-gray-300 rounded text-[12px] coarse:text-[16px] coarse:h-11 font-medium text-gray-800 outline-none cursor-pointer hover:border-gray-400 focus:border-cyan-500 transition-colors"
                             title={useMetric(lang) ? t("editor.marginGapCm") : t("editor.marginGap")}

@@ -801,12 +801,53 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         nx: number;
         ny: number;
         rotation: number | null; // null → keep the design's current rotation
-        overflows: boolean;
         /** The packer kept this where it was; leave the design object alone entirely. */
         anchored?: boolean;
       };
+      /**
+       * Is this design already sitting somewhere the customer can see and reach?
+       *
+       * Copies are seeded on a provisional grid *below* the artwork, so a copy that has not
+       * been packed yet is normally off the sheet — the difference between "leave it alone"
+       * and "abandon it out of sight".
+       */
+      const onSheetNow = (id: string): boolean => {
+        const d = designsRef.current.find(x => x.id === id);
+        if (!d) return false;
+        const b = getRotatedBounds(d);
+        const cx = d.transform.nx * abW;
+        const cy = d.transform.ny * abH;
+        return cx + b.minX >= -0.01 && cy + b.minY >= -0.01
+          && cx + b.maxX <= abW + 0.01 && cy + b.maxY <= abH + 0.01;
+      };
+      /** A group moves as a block, so it is only settled if every member is. */
+      const placementIsSettled = (placed: PlacedItem): boolean => {
+        if (!placed.id.startsWith(GROUP_PREFIX)) return onSheetNow(placed.id);
+        const g = groups.get(placed.id.slice(GROUP_PREFIX.length));
+        return !!g && g.members.every(m => onSheetNow(m.id));
+      };
       const deltas = new Map<string, DesignDelta>();
       for (const placed of bestResult) {
+        if (placed.overflows && placementIsSettled(placed)) {
+          // Nowhere on the film for this one, and by this point the sheet is either at the
+          // longest length sold or has already climbed as far as one arrange may take it —
+          // the toast above has said so.
+          //
+          // The position the packer reports for a design it could not place is a row of its
+          // own below the artwork, folded back onto the sheet's bottom edge because
+          // placements are normalised against the sheet. Applying it drops the design on top
+          // of whatever was legitimately packed there, and several leftovers land on the same
+          // spot: that is the heap of overlapping artwork with red outlines that shows up on a
+          // full sheet, and it reads as a nesting bug rather than as "the film is full".
+          // Leaving the design where the customer put it says the same thing without
+          // vandalising the layout, and it stays visible and draggable so they can decide what
+          // to remove. Parking it below the film instead is not an option: the preview canvas
+          // *is* the sheet, so anything past the bottom edge is simply not drawn.
+          //
+          // A design that is not on the sheet right now is the exception and takes the
+          // packer's position, heap and all: somewhere overlapping beats nowhere visible.
+          continue;
+        }
         if (placed.anchored) {
           // Deliberately not re-deriving nx/ny from the packer's rounded normalised
           // values, and not applying the stamp offset below: an anchored design must come
@@ -835,7 +876,6 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
               nx: m.transform.nx + dnx,
               ny: m.transform.ny + dny,
               rotation: null,
-              overflows: placed.overflows,
             });
           }
         } else {
@@ -843,7 +883,6 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
             nx: placed.nx,
             ny: placed.ny,
             rotation: placed.rotation,
-            overflows: placed.overflows,
           });
         }
       }

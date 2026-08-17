@@ -191,8 +191,14 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
       if (targetCount !== count) {
         handlers.handleSetGroupCount(row, targetCount);
       } else if (Number.isInteger(targetCount)) {
+        // The same pack the Auto-Arrange button gives, which is what pressing Apply on an
+        // unchanged count is asking for. `arrangeAll` because the row was selected just above
+        // and the packer reads a selection as "arrange only these", freezing the rest of the
+        // sheet into obstacles; `fullRepack` because otherwise settled designs are kept where
+        // they are and a sheet that is merely untidy comes back unchanged, which reads as the
+        // button doing nothing.
         setTimeout(
-          () => handlers.handleAutoArrangeRef.current({ preserveSelection: true }),
+          () => handlers.handleAutoArrangeRef.current({ preserveSelection: true, arrangeAll: true, fullRepack: true }),
           0,
         );
       }

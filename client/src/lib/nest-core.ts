@@ -701,6 +701,13 @@ function nestInto(
         ctx.rows - orient.sil.mask.rows,
       );
       if (!spot) continue;
+      // Topmost, then leftmost. Note what this does *not* do: it does not ask which
+      // orientation ends higher up the film, so a design that can squeeze into a notch
+      // standing up is placed there even when lying below the work above it would have cost
+      // the sheet less. Judging by the bottom edge here was measured to be worse overall — it
+      // lays everything down and spends the sheet's width — because a greedy pass cannot know
+      // whether this design will turn out to be the one setting the length. That case is
+      // repaired once the layout is known instead; see `reseatFilmBottom`.
       if (!best || spot.y < best.y || (spot.y === best.y && spot.x < best.x)) {
         best = { x: spot.x, y: spot.y, orient: orient };
       }
@@ -838,6 +845,159 @@ export function keepPositionsNest(
     result,
     maxHeight,
     wastedArea: Math.max(0, usableW * maxHeight - inkArea(items, ctx.cell)),
+  };
+}
+
+/**
+ * Most designs allowed to change orientation before the film bottom is reconsidered.
+ *
+ * When more than a handful of designs are all sitting on the bottom edge, the bottom is a
+ * full row of work rather than one design hanging below the rest, and re-seating a whole row
+ * is a repack — which the candidate sweep has already done, better. Keeping this small is
+ * also what keeps the pass cheap: each design costs one grid scan.
+ */
+const MAX_RESEAT = 4;
+
+/** How close to the bottom edge a design's ink has to reach to count as setting the film. */
+const RESEAT_BAND_INCHES = 0.1;
+
+/**
+ * Re-seats the designs whose ink sets the film's bottom edge, trying both ways up, and
+ * returns the layout only when the film gets shorter.
+ *
+ * This exists because the packers place designs one at a time and cannot know which one will
+ * end up last. Each takes the topmost slot that fits, so a tall design that can just squeeze
+ * into a notch is stood up there even when lying it below the work above would have finished
+ * higher. Judging orientation by the bottom edge *during* packing was measured to be worse,
+ * not better: it lays everything down, spends the sheet's width and pushes later designs
+ * down, costing more than an inch of film per sheet. Once the layout is finished there is no
+ * guesswork left — the designs at the bottom are known, and so is what moving them costs — so
+ * the choice is made here and only kept when it pays.
+ *
+ * Worth calibrating expectations: across the 432 layouts in
+ * `scripts/verify-arrange-integrity.ts` this fires 127 times and recovers between 0.03" and
+ * 2.5" of film, averaging 0.3", and none of those crossed a purchasable length. So it is a
+ * tidiness pass, not a discount — which still matters, because the next copy the customer
+ * adds is packed into whatever slack this leaves behind. The cases where orientation would
+ * have cost a whole rung are caught earlier, by the candidate sweep trying every design
+ * landscape and portrait.
+ *
+ * Returns null when there is nothing to gain, which is the common case; the caller keeps its
+ * existing layout untouched.
+ */
+export function reseatFilmBottom(
+  items: NestItem[],
+  placed: NestPlacement[],
+  usableW: number,
+  usableH: number,
+  abW: number,
+  abH: number,
+  gap: number,
+  obstacles?: NestObstacle[],
+  allowRotation = true,
+): NestResult | null {
+  if (!allowRotation) return null;
+  // Something has to hold the film for a re-seat to be measured against: either designs that
+  // are staying put, or fixed obstacles. A design being placed on a sheet whose other designs
+  // were handed over as obstacles is the ordinary case for an import or a duplicate, and it is
+  // exactly the one the "13x18 landed standing up at the bottom" report describes.
+  const hasFloor = placed.length > 1 || (obstacles?.length ?? 0) > 0;
+  if (!hasFloor) return null;
+  const cell = NEST_CELL_INCHES;
+  const itemById = new Map(items.map(i => [i.id, i]));
+
+  interface Seat {
+    placement: NestPlacement;
+    item: NestItem;
+    sil: Silhouette;
+    col: number;
+    row: number;
+  }
+  const seats: Seat[] = [];
+  for (const p of placed) {
+    const item = itemById.get(p.id);
+    // An overflowing layout has designs piled outside the sheet, and a free rotation would
+    // need the mask resampled rather than turned. Neither is this pass's problem.
+    if (!item || p.overflows) return null;
+    const quarters = ((Math.round(p.rotation / 90) % 4) + 4) % 4;
+    if (Math.abs(p.rotation - quarters * 90) > 1) return null;
+    const upright = quarters % 2 === 0;
+    const footW = upright ? item.w : item.h;
+    const footH = upright ? item.h : item.w;
+    const sil = orientedSilhouette(item.mask, footW, footH, p.rotation, cell);
+    seats.push({
+      placement: p,
+      item,
+      sil,
+      col: Math.round((p.nx * abW - footW / 2) / cell) + sil.offCol,
+      row: Math.round((p.ny * abH - footH / 2) / cell) + sil.offRow,
+    });
+  }
+
+  const inkBottom = (s: Seat): number => s.row + s.sil.mask.rows;
+  const filmRows = seats.reduce((m, s) => Math.max(m, inkBottom(s)), 0);
+  const band = Math.max(1, Math.round(RESEAT_BAND_INCHES / cell));
+  // Anchored designs are ones the caller promised not to disturb, so they hold the bottom
+  // rather than being asked to move off it.
+  const movers = seats.filter(s => !s.placement.anchored && inkBottom(s) >= filmRows - band);
+  if (movers.length === 0 || movers.length > MAX_RESEAT) return null;
+  if (movers.length === seats.length && (obstacles?.length ?? 0) === 0) return null;
+  // Nothing standing up has anything to gain from being turned, and neither has a square.
+  if (!movers.some(m => Math.abs(m.item.w - m.item.h) > 0.1 && !m.item.noRotate)) return null;
+
+  const ctx = makeContext(usableW, usableH, gap);
+  seedObstacles(ctx, obstacles);
+  const moverIds = new Set(movers.map(m => m.placement.id));
+  let floorRows = 0;
+  for (const s of seats) {
+    if (moverIds.has(s.placement.id)) continue;
+    writeDilated(ctx.grid, s.sil.mask, s.col, s.row, ctx.pad);
+    floorRows = Math.max(floorRows, inkBottom(s));
+  }
+
+  // Largest first, for the same reason the nester seats newcomers that way: the room left
+  // over is fragmented, and the big one left until last has nowhere to go but down.
+  const order = [...movers].sort((a, b) =>
+    Math.max(b.item.w, b.item.h) - Math.max(a.item.w, a.item.h)
+    || (b.item.w * b.item.h) - (a.item.w * a.item.h));
+
+  const reseated: NestPlacement[] = [];
+  let newBottom = floorRows;
+  for (const mover of order) {
+    let best: { x: number; y: number; bottom: number; orient: Orientation } | null = null;
+    for (const orient of orientationsFor(mover.item, cell, allowRotation)) {
+      const spot = findSpot(
+        ctx.grid, orient.sil.test,
+        ctx.cols - orient.sil.mask.cols,
+        ctx.rows - orient.sil.mask.rows,
+      );
+      if (!spot) continue;
+      // Lowest finishing edge wins here, unlike during packing: this design is one of the
+      // ones setting the film length, so where its ink ends is exactly what it costs.
+      const bottom = spot.y + orient.sil.mask.rows;
+      if (!best
+        || bottom < best.bottom
+        || (bottom === best.bottom && (spot.y < best.y || (spot.y === best.y && spot.x < best.x)))) {
+        best = { x: spot.x, y: spot.y, bottom, orient };
+      }
+    }
+    // No seat for something that was placed a moment ago means the grid is telling us this
+    // layout cannot be rebuilt piecemeal. Leave it alone.
+    if (!best) return null;
+    writeDilated(ctx.grid, best.orient.sil.mask, best.x, best.y, ctx.pad);
+    if (best.bottom > newBottom) newBottom = best.bottom;
+    const { nx, ny } = placementToCentre(best.x, best.y, best.orient, cell, abW, abH);
+    reseated.push({ id: mover.placement.id, nx, ny, rotation: best.orient.rotation, overflows: false });
+  }
+
+  if (newBottom >= filmRows) return null;
+
+  const byId = new Map(reseated.map(p => [p.id, p]));
+  const maxHeight = newBottom * cell;
+  return {
+    result: placed.map(p => byId.get(p.id) ?? p),
+    maxHeight,
+    wastedArea: Math.max(0, usableW * maxHeight - inkArea(items, cell)),
   };
 }
 
