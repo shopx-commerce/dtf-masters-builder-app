@@ -221,6 +221,19 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
   const ladderStepRef = useRef(0);
   /** Armed by an expansion so the next arrange knows it is a continuation, not a new one. */
   const ladderChainRef = useRef(false);
+  /**
+   * The design list as it stood before a `noGrow` batch was appended, or null.
+   *
+   * A run that may not grow the sheet has no way to make room for an overflow it cannot
+   * delete, so its last resort is to undo itself. Restoring the array wholesale — rather
+   * than reversing the individual edits — is what makes that exact: the customer's designs
+   * come back with the positions, rotations and scales they had before the click, even
+   * though the pack in between relocated every one of them.
+   *
+   * Read once and cleared by the run that consumes it, so a fill that never reaches its
+   * result cannot leave a restore point armed for an unrelated arrange later on.
+   */
+  const noGrowRestoreRef = useRef<DesignItem[] | null>(null);
 
   /**
    * Arrange runs one at a time.
@@ -271,8 +284,21 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     trimOverflow?: boolean;
     /** Ids of expendable Fill Sheet copies — the only designs `trimOverflow` may delete. */
     fillIds?: Set<string>;
+    /**
+     * Forbid the height ladder outright: the sheet the customer is looking at is the sheet
+     * they get, whatever the pack comes back with.
+     *
+     * `trimOverflow` is not this. That one says "do not grow *for these copies*", which
+     * leaves the ladder free to fire for anything else that overflows — and after a full
+     * repack that is easily one of the customer's own designs, relocated into a spot it no
+     * longer fits. Fill Sheet is asked to fill the sheet, not to sell a bigger one, so it
+     * needs the categorical version.
+     */
+    noGrow?: boolean;
     /** Internal: a ladder step continuing the run that is already in flight. */
     continuation?: boolean;
+    /** Internal: this run is the full-repack retry that precedes a growth step. */
+    repacked?: boolean;
   };
   const pendingArrangeRef = useRef<ArrangeOpts | null>(null);
   /**
@@ -286,6 +312,11 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     arrangeAll: (a?.arrangeAll ?? false) || (b?.arrangeAll ?? false),
     fullRepack: (a?.fullRepack ?? false) || (b?.fullRepack ?? false),
     trimOverflow: (a?.trimOverflow ?? false) || (b?.trimOverflow ?? false),
+    // Unioned in the safe direction: if either request was forbidden from growing, the run
+    // that stands in for both is too. The alternative loses the guarantee entirely — a fill
+    // coalesced with any ordinary arrange would quietly regain permission to buy film.
+    // Erring this way only ever defers a growth the next arrange will perform.
+    noGrow: (a?.noGrow ?? false) || (b?.noGrow ?? false),
     // Unioned like the work flags: every copy both requests marked as
     // expendable stays expendable, or a coalesced fill would leak
     // untrimmable overflow copies onto the sheet.
@@ -436,8 +467,15 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     trimOverflow?: boolean;
     /** Ids of expendable Fill Sheet copies — the only designs `trimOverflow` may delete. */
     fillIds?: Set<string>;
+    /**
+     * Forbid the height ladder outright. See the `ArrangeOpts` declaration for why this is
+     * a separate flag from `trimOverflow` rather than a stronger reading of it.
+     */
+    noGrow?: boolean;
     /** Internal: a ladder step continuing the run that is already in flight. */
     continuation?: boolean;
+    /** Internal: this run is the full-repack retry that precedes a growth step. */
+    repacked?: boolean;
   }) => {
     const currentDesigns = designsRef.current;
     if (currentDesigns.length === 0) {
@@ -703,6 +741,10 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     const maxLadderSteps = GANGSHEET_HEIGHTS.length + 2;
 
     const applyResult = (bestResult: PlacedItem[], anyRotated: boolean, hasOverflow: boolean, sizing?: PackSizing) => {
+      // Taken once, so an arrange that dies before it gets here cannot leave the restore
+      // point armed for whatever runs next.
+      const noGrowRestore = noGrowRestoreRef.current;
+      noGrowRestoreRef.current = null;
       // Fill Sheet deliberately overshoots its copy count and lets this trim
       // settle the difference: copies the packer could not fit are deleted
       // here, before overflow can grow the sheet or raise the "no space"
@@ -712,9 +754,13 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       // super-items never match: fill copies are always created groupless.
       if (opts?.trimOverflow && opts.fillIds && opts.fillIds.size > 0 && hasOverflow) {
         const fillIds = opts.fillIds;
+        // Anchored copies are normally spared, because the packer leaving one where it
+        // already sat means the customer has been looking at it. A no-grow run cannot
+        // afford that courtesy: copies are the only thing it is allowed to spend against an
+        // overflow, and every id in `fillIds` was created moments ago by the fill itself.
         const removeIds = new Set(
           bestResult
-            .filter(p => p.overflows && !p.anchored && fillIds.has(p.id))
+            .filter(p => p.overflows && (opts.noGrow || !p.anchored) && fillIds.has(p.id))
             .map(p => p.id),
         );
         if (removeIds.size > 0) {
@@ -723,7 +769,51 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
           hasOverflow = bestResult.some(p => p.overflows);
         }
       }
-      if (hasOverflow && artboardHeightRef.current < MAX_ARTBOARD_HEIGHT && ladderStep < maxLadderSteps) {
+      // Pack properly before concluding the sheet is full.
+      //
+      // A stable-biased pack is asked to leave settled designs where they are, which is what
+      // keeps an import from shuffling work the customer arranged by hand. The cost is that
+      // its overflows are not trustworthy: the space may well exist, just not without moving
+      // something. Acting on that directly is how a sheet ends up two sizes larger than the
+      // artwork needs. One honest repack answers the question, and only an overflow that
+      // survives it is a real shortage of film.
+      //
+      // Costs one extra pack, once. The retry carries `fullRepack`, and the ladder forwards
+      // that flag to every rung above it, so this gate cannot open a second time however far
+      // the sheet ends up climbing.
+      if (hasOverflow && !opts?.fullRepack && !opts?.repacked) {
+        noGrowRestoreRef.current = noGrowRestore;
+        // Not a rung, so the step count stands; the flag only keeps the lock held.
+        ladderChainRef.current = true;
+        setTimeout(() => handleAutoArrangeRef.current({
+          ...opts,
+          skipSnapshot: true,
+          fullRepack: true,
+          repacked: true,
+          continuation: true,
+        }), 0);
+        return;
+      }
+      // Every copy is spent and something still hangs off the sheet, so what is left over
+      // belongs to the customer. Deleting further copies cannot save it: the pack decided
+      // all of these placements in one pass, and a design does not move because its
+      // neighbour was removed afterwards. Growing is forbidden. That leaves undoing the
+      // whole operation, which is the one outcome that costs the customer nothing — the
+      // sheet goes back to the arrangement they were looking at before they clicked.
+      if (hasOverflow && opts?.noGrow) {
+        if (noGrowRestore) {
+          setDesigns(noGrowRestore);
+          setArrangeEpoch(e => e + 1);
+        }
+        if (!opts?.preserveSelection) {
+          setSelectedDesignId(null);
+          setSelectedDesignIds(new Set());
+        }
+        toast({ title: t("toast.noSpace"), description: t("toast.noSpaceDesc"), variant: "destructive" });
+        settleArrange();
+        return;
+      }
+      if (!opts?.noGrow && hasOverflow && artboardHeightRef.current < MAX_ARTBOARD_HEIGHT && ladderStep < maxLadderSteps) {
         // Jump to the shortest rung the artwork could possibly fit on rather than the next
         // one up. `planLadderJump` only skips rungs a lower bound rules out, so it lands on
         // the same rung the one-at-a-time walk would have reached — and when the bound says
@@ -1054,7 +1144,14 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
    * delete whichever of those clones do not fit (`trimOverflow` +
    * `fillIds`). Snapshots once before mutating, so a single undo removes
    * every copy the fill added. Copies follow the duplicate conventions:
-   * fresh id, stripped groupId, no filename stamp, " copy" suffix trimmed.
+   * fresh id, stripped groupId, " copy" suffix trimmed. They inherit the
+   * source's `printFileName`, and the capacity arithmetic agrees with that:
+   * `getEffectiveHeight` counts the stamp band for copy and original alike.
+   *
+   * The sheet size is fixed for the whole operation. Filling empty film is
+   * not a reason to sell the customer more of it, so the arrange runs with
+   * `noGrow` and this records the layout to fall back to if the pack cannot
+   * honour that — see `noGrowRestoreRef`.
    */
   const handleFillEmptySpace = useCallback(() => {
     // One fill at a time — see `fillPendingRef`. Ignoring the click is safe:
@@ -1083,6 +1180,10 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     }));
     fillPendingRef.current = true;
     saveSnapshot();
+    // Captured before the copies land, and deliberately the array itself rather than a
+    // count or a set of ids: the pack about to run may relocate every original, so putting
+    // the sheet back means restoring their transforms, not just deleting what was added.
+    noGrowRestoreRef.current = currentDesigns;
     setDesigns(prev => [...prev, ...copies]);
     requestAnimationFrame(() => {
       // Cleared before the hand-off: from here `arrangeInFlightRef` takes
@@ -1098,6 +1199,7 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         arrangeAll: true,
         fullRepack: true,
         trimOverflow: true,
+        noGrow: true,
         fillIds: new Set(copies.map(c => c.id)),
       });
     });
@@ -1283,15 +1385,30 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
   reseatSheetBandRef.current = reseatSheetBand;
 
   const importReseatTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * Set by an import that could not find room for itself on the current sheet.
+   *
+   * Placement is done per file against the designs already down, which is what makes a drop
+   * feel immediate, but it means the last file in a batch is offered whatever the earlier
+   * ones left behind rather than the layout all of them together could have had. This flag
+   * is how that file tells the end of the batch that the sheet needs packing properly.
+   */
+  const importNeedsArrangeRef = useRef(false);
 
   /**
-   * Ask for one re-seat once the current import has settled.
+   * Put the sheet in order once the current import has finished.
    *
    * Called per file, but coalesced to one run per batch: each call cancels the pending
-   * timer, and the timer parks itself while `isUploadBatchActive()` is true. Re-seating per
-   * file would be both churn and wrong — every re-seat slides the whole sheet down, and the
-   * next file then lands flush in the strip that opened up at the top, so twenty files would
-   * walk the customer's existing work five inches down the sheet.
+   * timer, and the timer parks itself while `isUploadBatchActive()` is true.
+   *
+   * Coalescing is what keeps a bulk drop from ratcheting the sheet. Doing this per file
+   * would pack, grow and re-seat once for every design, and each of those decisions would be
+   * made from a partial sheet — ten designs that between them fit on 80" would climb a rung
+   * at a time as they arrived, each rung looking justified from where the previous file left
+   * things. Deciding once, from the whole batch, is what lets `packingHeightLowerBound` size
+   * the jump from the total ink area and land on the rung the artwork actually needs. It was
+   * also already wrong for re-seating alone: every re-seat slides the sheet down, and the
+   * next file then lands flush in the strip that opened at the top.
    */
   const scheduleImportReseat = useCallback(() => {
     if (importReseatTimerRef.current) clearTimeout(importReseatTimerRef.current);
@@ -1302,10 +1419,49 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       }
       importReseatTimerRef.current = null;
       if (!mountedRef.current) return;
-      reseatSheetBandRef.current();
+      settleImportRef.current();
     };
     importReseatTimerRef.current = setTimeout(tick, 0);
   }, [mountedRef]);
+
+  /**
+   * The end of an import: give the batch one pack if it needs one, then take back any film
+   * it turned out not to need.
+   *
+   * The two halves are exclusive. An arrange already ends in `shrinkSheetToFit`, so running
+   * the sizing here as well would measure a layout that is about to be replaced.
+   *
+   * Shrinking matters as much as growing. Multi-file drops bump the sheet to 48" up front so
+   * the files have somewhere to land while the batch is still decoding, and nothing used to
+   * give that back — two small designs left the customer on a 48" sheet. `planSheetShrink`
+   * honours a height the customer picked by hand, so this can only reclaim what the builder
+   * itself took.
+   */
+  const settleImport = useCallback(() => {
+    const currentDesigns = designsRef.current;
+    if (currentDesigns.length === 0) {
+      importNeedsArrangeRef.current = false;
+      return;
+    }
+    const needsArrange = importNeedsArrangeRef.current;
+    importNeedsArrangeRef.current = false;
+    if (needsArrange && currentDesigns.length >= 2) {
+      beginArrangeRef.current();
+      handleAutoArrangeRef.current({
+        // The import already snapshotted, so the pack and the import undo together.
+        skipSnapshot: true,
+        preserveSelection: true,
+        arrangeAll: true,
+      });
+      return;
+    }
+    // Height is locked to a purchased variant in edit mode, so only the rigid slide that
+    // keeps ink off the sheet edge is available there.
+    if (isEditMode) reseatSheetBandRef.current();
+    else shrinkSheetToFitRef.current();
+  }, [isEditMode, designsRef, beginArrangeRef, handleAutoArrangeRef]);
+  const settleImportRef = useRef(settleImport);
+  settleImportRef.current = settleImport;
 
   useEffect(() => () => {
     if (importReseatTimerRef.current) clearTimeout(importReseatTimerRef.current);
@@ -1625,9 +1781,15 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         baseNy = spot.ny;
         placed = true;
       } else {
+        // Nowhere to sit among the work already down. The design still has to appear
+        // somewhere for the customer to see it arrive, so it is stacked below everything
+        // else — but the sheet is now wrong, and only the end of the batch is in a position
+        // to put it right. Deciding here, per file, is what used to grow a sheet a rung at a
+        // time as the files landed.
         const maxBottom = Math.max(...currentRects.map(r => r.y + r.h));
         baseNx = (scaledW / 2) / currentAbW;
         baseNy = (maxBottom + gap + scaledH / 2) / effectiveAbH;
+        importNeedsArrangeRef.current = true;
       }
     }
 
@@ -1636,11 +1798,19 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     // sheet edge, so re-clamping it to its bounding box here would drag it out of the very
     // slot that was just found for it. Only the fallback path, which guessed a position,
     // gets clamped.
+    //
+    // The fallback is clamped at the bottom as well as the top. Its guess is a stack below
+    // whatever is already there, which on a full sheet is off the film entirely — a design
+    // the customer uploaded and then cannot find. Keeping it on the sheet means it may
+    // overlap for the moment, which is visible and self-evidently temporary, and the settle
+    // pass this import just flagged repacks it properly.
     const halfNx = (scaledW / 2) / currentAbW;
     const halfNy = (scaledH / 2) / effectiveAbH;
     const newTransform = {
       nx: placed ? baseNx : Math.min(Math.max(baseNx, halfNx), Math.max(halfNx, 1 - halfNx)),
-      ny: placed ? baseNy : Math.max(baseNy, halfNy),
+      ny: placed
+        ? baseNy
+        : Math.min(Math.max(baseNy, halfNy), Math.max(halfNy, 1 - halfNy)),
       s: initialS,
       rotation: 0,
     };
@@ -1678,8 +1848,8 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     // transaction so downstream reads always see a consistent pair.
     selectOne(newDesignId);
     // The packer had the whole sheet, so this design may well have landed flush against the
-    // top edge. Coalesced, so a twenty-file drop re-seats once at the end rather than
-    // twenty times on the way through.
+    // top edge, and if it found no room at all the sheet needs packing again. Coalesced, so
+    // a twenty-file drop settles once at the end rather than twenty times on the way through.
     scheduleImportReseat();
   }, [saveSnapshot, toast, designGap, scheduleImportReseat]);
 

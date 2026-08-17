@@ -19,8 +19,9 @@
  *      decided once by the mask builder and carried to the worker.
  *
  *   2. **The label never exceeds the design's footprint.** A label wider than the artwork would
- *      reserve space the nester does not own, and print over whatever got seated beside it. The
- *      font shrinks to fit, and only if that is not enough is the text shortened.
+ *      reserve space the nester does not own, and print over whatever got seated beside it. A
+ *      name too long for one line wraps onto a second, the font shrinks to fit, and only if
+ *      neither is enough is the text shortened.
  *
  * Coordinates are inches in design-local space: the origin is the centre of the artwork, x runs
  * right and y runs down, flips already undone. That is exactly the space every drawing path is
@@ -48,7 +49,20 @@ export const LABEL_MIN_FONT_INCHES = 0.12;
 export const LABEL_MAX_FONT_INCHES = 0.3;
 
 /** White margin around the text inside its background box, in ems. */
-const LABEL_PAD_EMS = 0.3;
+export const LABEL_PAD_EMS = 0.3;
+
+/**
+ * Most lines a name may wrap onto.
+ *
+ * Two, because the label is an identifier and not a caption: the presser needs to match it
+ * against a packing slip at a glance, and a paragraph under every design costs film on every
+ * copy. A name that will not fit in two lines at the smallest legible size is shortened
+ * instead, which is what the single-line label did to every long name before wrapping existed.
+ */
+export const LABEL_MAX_LINES = 2;
+
+/** Space between wrapped lines, in ems. Enough to separate the rows without doubling the box. */
+const LABEL_LINE_GAP_EMS = 0.2;
 
 /** How far inside the artwork's edges the label sits when it is placed inside. */
 const LABEL_INSET_INCHES = 0.05;
@@ -84,8 +98,22 @@ export interface PrintLabelLayout {
   rect: LabelRect;
   /** Em size to draw the text at, inches. */
   fontInches: number;
-  /** The name as printed — extension stripped, shortened if it had to be. */
-  text: string;
+  /**
+   * The name as printed — extension stripped, wrapped onto at most `LABEL_MAX_LINES` rows,
+   * and shortened only if it would not fit even then. Never empty.
+   */
+  lines: string[];
+}
+
+/** Baseline-to-baseline distance for a wrapped label, inches. */
+export function labelLineStep(fontInches: number): number {
+  return fontInches * (1 + LABEL_LINE_GAP_EMS);
+}
+
+/** Height of the background box holding `lineCount` rows at `fontInches`. */
+export function labelBoxHeight(lineCount: number, fontInches: number): number {
+  const rows = Math.max(1, lineCount);
+  return rows * fontInches + (rows - 1) * LABEL_LINE_GAP_EMS * fontInches + 2 * LABEL_PAD_EMS * fontInches;
 }
 
 /** Width of a string at one em, so callers can convert to whatever unit they draw in. */
@@ -199,6 +227,99 @@ function fitText(measure: LabelMeasure, text: string, fontInches: number, maxWid
   return '…';
 }
 
+/**
+ * Greedy word wrap, or null when the name has nothing usable to break on.
+ *
+ * Null rather than a best effort, because the two failure modes want different treatment: a
+ * name of one long token has to be cut mid-word, and a name whose *individual* words are
+ * each too wide would wrap into lines that overflow anyway. Both are the caller's cue to
+ * fall back to breaking on characters.
+ *
+ * Whatever has not been placed by the time the last line is reached is folded into it and
+ * shortened, so the result never runs past `maxLines`.
+ */
+function wrapByWords(
+  measure: LabelMeasure,
+  text: string,
+  fontInches: number,
+  maxWidthInches: number,
+  maxLines: number,
+): string[] | null {
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length < 2) return null;
+  const fits = (s: string) => measure(s) * fontInches <= maxWidthInches;
+  if (words.some(w => !fits(w))) return null;
+
+  const lines: string[] = [];
+  let current = words[0];
+  for (let i = 1; i < words.length; i++) {
+    const candidate = `${current} ${words[i]}`;
+    if (fits(candidate)) {
+      current = candidate;
+      continue;
+    }
+    lines.push(current);
+    if (lines.length === maxLines - 1) {
+      lines.push(fitText(measure, words.slice(i).join(' '), fontInches, maxWidthInches));
+      return lines;
+    }
+    current = words[i];
+  }
+  lines.push(current);
+  return lines;
+}
+
+/**
+ * Wrap on character boundaries, for names with no space to break at.
+ *
+ * `IMG_20260814_183245_final_v2.png` is one word to any word-wrapper and the overwhelmingly
+ * common shape of a real filename, so this is the path most long names actually take.
+ */
+function wrapByChars(
+  measure: LabelMeasure,
+  text: string,
+  fontInches: number,
+  maxWidthInches: number,
+  maxLines: number,
+): string[] {
+  const fits = (s: string) => measure(s) * fontInches <= maxWidthInches;
+  const lines: string[] = [];
+  let rest = text;
+  while (rest.length > 0) {
+    if (lines.length === maxLines - 1 || fits(rest)) {
+      lines.push(fits(rest) ? rest : fitText(measure, rest, fontInches, maxWidthInches));
+      return lines;
+    }
+    // At least one character always goes, so this cannot spin on a box too narrow for even
+    // a single glyph — that case walks to the last line and gets an ellipsis instead.
+    let keep = rest.length - 1;
+    while (keep > 1 && !fits(rest.slice(0, keep))) keep--;
+    lines.push(rest.slice(0, keep));
+    rest = rest.slice(keep);
+  }
+  return lines.length > 0 ? lines : [text];
+}
+
+/**
+ * Break `text` into at most `maxLines` rows that each fit `maxWidthInches`.
+ *
+ * Always returns at least one line, and never more than `maxLines`.
+ */
+export function wrapToLines(
+  measure: LabelMeasure,
+  text: string,
+  fontInches: number,
+  maxWidthInches: number,
+  maxLines: number = LABEL_MAX_LINES,
+): string[] {
+  if (measure(text) * fontInches <= maxWidthInches) return [text];
+  if (maxLines <= 1 || !(maxWidthInches > 0)) {
+    return [fitText(measure, text, fontInches, maxWidthInches)];
+  }
+  return wrapByWords(measure, text, fontInches, maxWidthInches, maxLines)
+    ?? wrapByChars(measure, text, fontInches, maxWidthInches, maxLines);
+}
+
 export interface PrintLabelInput {
   /** The design's file name, extension and all. */
   name: string;
@@ -240,18 +361,28 @@ export function layoutPrintLabel(
     Math.max(LABEL_MIN_FONT_INCHES, artH * LABEL_HEIGHT_FRACTION),
   );
 
-  // Shrink to fit before resorting to cutting the name, down to the point where the ink stops
-  // surviving the press.
-  const boxWidthAt = (size: number) => measure(full) * size + 2 * LABEL_PAD_EMS * size;
-  if (boxWidthAt(fontInches) > maxBoxWidth) {
-    const needed = maxBoxWidth / (measure(full) + 2 * LABEL_PAD_EMS);
-    fontInches = Math.max(LABEL_MIN_FONT_INCHES, needed);
+  // Wrapping is tried at the natural size before the font is touched, so a long name on a
+  // roomy design keeps legible letters and takes a second row instead of shrinking towards
+  // the point where DTF powder stops adhering. Only when two rows at this size still cannot
+  // hold the name does the font come down.
+  //
+  // The size that fits is solved rather than searched. At em size s the name needs
+  // `measure(full) * s` of advance and each of L rows offers `maxBoxWidth - 2 * PAD * s`, so
+  // the largest s that could work is `L * maxBoxWidth / (measure(full) + 2 * L * PAD)`. Word
+  // breaks waste some of that, which is why the wrap below still gets to shorten the last
+  // line — the same division of labour the single-line label used, just with L rows.
+  const advance = measure(full);
+  const budget = LABEL_MAX_LINES * Math.max(0, maxBoxWidth - 2 * LABEL_PAD_EMS * fontInches);
+  if (advance * fontInches > budget) {
+    const needed = (LABEL_MAX_LINES * maxBoxWidth) / (advance + 2 * LABEL_MAX_LINES * LABEL_PAD_EMS);
+    fontInches = Math.max(LABEL_MIN_FONT_INCHES, Math.min(fontInches, needed));
   }
 
   const pad = LABEL_PAD_EMS * fontInches;
-  const text = fitText(measure, full, fontInches, Math.max(0, maxBoxWidth - 2 * pad));
-  const boxW = Math.min(maxBoxWidth, measure(text) * fontInches + 2 * pad);
-  const boxH = fontInches + 2 * pad;
+  const lines = wrapToLines(measure, full, fontInches, Math.max(0, maxBoxWidth - 2 * pad));
+  const widest = lines.reduce((w, line) => Math.max(w, measure(line)), 0);
+  const boxW = Math.min(maxBoxWidth, widest * fontInches + 2 * pad);
+  const boxH = labelBoxHeight(lines.length, fontInches);
 
   // Inside the artwork's own corner, if the corner is empty. Checked with a moat around the box
   // so the label sits in open space rather than up against a stroke.
@@ -269,7 +400,7 @@ export function layoutPrintLabel(
       height: rect.height + 2 * LABEL_CLEARANCE_INCHES,
     };
     if (input.isClearOfInk(moat)) {
-      return { placement: 'inside', bandInches: 0, rect, fontInches, text };
+      return { placement: 'inside', bandInches: 0, rect, fontInches, lines };
     }
   }
 
@@ -283,7 +414,7 @@ export function layoutPrintLabel(
       height: boxH,
     },
     fontInches,
-    text,
+    lines,
   };
 }
 
@@ -325,6 +456,15 @@ export function drawPrintLabel(
   ctx.fillStyle = '#000000';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(layout.text, 0, 0);
+  // Rows are laid out about the centre of the block, for the same reason a single line is:
+  // it needs no ascent or descent, which are the metrics that disagree between contexts.
+  // Turning the label over reverses the reading order too, or a two-row name would come out
+  // with its second row on top.
+  const step = labelLineStep(layout.fontInches) * pxPerInch;
+  const rows = upsideDown ? [...layout.lines].reverse() : layout.lines;
+  const first = -((rows.length - 1) / 2) * step;
+  for (let i = 0; i < rows.length; i++) {
+    ctx.fillText(rows[i], 0, first + i * step);
+  }
   ctx.restore();
 }

@@ -34,7 +34,10 @@
 import {
   LABEL_GAP_INCHES,
   LABEL_MAX_FONT_INCHES,
+  LABEL_MAX_LINES,
   LABEL_MIN_FONT_INCHES,
+  LABEL_PAD_EMS,
+  labelBoxHeight,
   labelReadsUpsideDown,
   labelTextFor,
   layoutPrintLabel,
@@ -368,17 +371,46 @@ async function main(): Promise<void> {
         `${where}: font ${layout.fontInches.toFixed(3)}" is over the ceiling`,
       );
       check(rect.width <= art.artW + EPS, `${where}: box is wider than the design`);
-      check(layout.text.length > 0, `${where}: nothing left to print after fitting`);
-      const full = labelTextFor(art.name);
+
+      // 5. Wrapping. Two rows is the ceiling, the box has to be tall enough for however many
+      //    rows there are, and the reader has to be told when the name was cut short.
       check(
-        layout.text === full || layout.text.endsWith('…'),
-        `${where}: name was shortened without saying so`,
+        layout.lines.length >= 1 && layout.lines.length <= LABEL_MAX_LINES,
+        `${where}: wrapped onto ${layout.lines.length} rows, outside 1..${LABEL_MAX_LINES}`,
       );
+      check(
+        layout.lines.every(line => line.length > 0),
+        `${where}: produced an empty row`,
+      );
+      check(
+        Math.abs(rect.height - labelBoxHeight(layout.lines.length, layout.fontInches)) < EPS,
+        `${where}: box height ${rect.height.toFixed(4)}" does not match ${layout.lines.length} rows at ${layout.fontInches.toFixed(4)}"`,
+      );
+      // Reading the rows back has to give the name, or a prefix of it ending in an ellipsis.
+      // Both joins are accepted because the two wrap modes break in different places: word
+      // wrap consumes the space it broke at, character wrap does not introduce one.
+      const full = labelTextFor(art.name).replace(/\s+/g, ' ');
+      const strip = (s: string) => (s.endsWith('…') ? s.slice(0, -1) : s);
+      const rebuilt = strip(layout.lines.join(''));
+      const rebuiltSpaced = strip(layout.lines.join(' '));
+      check(
+        full.startsWith(rebuilt) || full.startsWith(rebuiltSpaced),
+        `${where}: printed rows "${layout.lines.join(' / ')}" do not read back as the name`,
+      );
+      // Each row has to fit the box it is drawn in, or wrapping has merely moved the overhang
+      // from the end of one line to the end of two.
+      const textWidth = Math.max(0, rect.width - 2 * LABEL_PAD_EMS * layout.fontInches);
+      for (const line of layout.lines) {
+        check(
+          measure(line) * layout.fontInches <= textWidth + EPS,
+          `${where}: row "${line}" is wider than the box it is drawn in`,
+        );
+      }
 
       if (!flipX && !flipY) {
         console.log(
           `${art.label.padEnd(41)} ${(flipX ? 'x' : '-') + (flipY ? 'y' : '-')}      ` +
-          `${layout.placement.padEnd(10)} ${band.toFixed(3)}"  ${layout.fontInches.toFixed(3)}"  ${layout.text}`,
+          `${layout.placement.padEnd(10)} ${band.toFixed(3)}"  ${layout.fontInches.toFixed(3)}"  ${layout.lines.join(' / ')}`,
         );
       }
     }
@@ -422,6 +454,77 @@ async function main(): Promise<void> {
   check(
     gapless.rect.y + gapless.rect.height > control.artH / 2 + gapless.bandInches + EPS,
     'negative control: dropping the gap from the band still fit inside the footprint, so the containment check is slack',
+  );
+
+  // The reservation must not depend on how long the name is.
+  //
+  // This is the invariant the overlap bug came down to. Renaming a design does not re-pack the
+  // sheet — it must not, or correcting a typo would move work the customer placed by hand — so
+  // the space the nester set aside has to already cover every name the design might end up
+  // with. When the reservation tracked the width of the text, a short name left free film
+  // beside it, a neighbour was legitimately seated there, and the rename printed over it.
+  //
+  // Same design, same row count, wildly different names: the marked cells have to be identical
+  // byte for byte.
+  let comparedNames = 0;
+  for (const art of CORPUS) {
+    const names = ['a.png', 'mid-length-name.png', art.name, `${'x'.repeat(90)}.png`];
+    const layouts = names
+      .map(name => layoutPrintLabel(
+        { name, artWidthInches: art.artW, artHeightInches: art.artH },
+        measure,
+      ))
+      .filter((l): l is PrintLabelLayout => l != null);
+
+    const reservationFor = (layout: PrintLabelLayout) => {
+      const cols = internals.cellsFor(art.artW);
+      const rows = internals.cellsFor(art.artH + layout.bandInches);
+      const bits = new Uint8Array(cols * rows);
+      internals.markLabel(bits, cols, rows, art.artW, art.artH, layout);
+      return bits;
+    };
+
+    for (const a of layouts) {
+      for (const b of layouts) {
+        if (a === b) continue;
+        if (a.lines.length !== b.lines.length || a.placement !== b.placement) continue;
+        if (Math.abs(a.fontInches - b.fontInches) > EPS) continue;
+        const bitsA = reservationFor(a);
+        const bitsB = reservationFor(b);
+        comparedNames++;
+        check(
+          bitsA.length === bitsB.length && bitsA.every((v, i) => v === bitsB[i]),
+          `${art.label}: "${a.lines.join(' ')}" and "${b.lines.join(' ')}" reserve different cells ` +
+          `despite the same ${a.lines.length}-row ${a.placement} placement — a rename between them would overlap a neighbour`,
+        );
+        check(
+          Math.abs(a.bandInches - b.bandInches) < EPS,
+          `${art.label}: same row count and placement, different band (${a.bandInches.toFixed(4)}" vs ${b.bandInches.toFixed(4)}")`,
+        );
+      }
+    }
+  }
+  check(comparedNames > 0, 'no two names shared a row count, so the reservation was never compared across names');
+
+  // Negative control for that comparison: the marker this replaced reserved only the box, which
+  // is exactly the behaviour that let a rename widen a label over its neighbour.
+  const boxOnly: MaskInternals['markLabel'] = (bits, cols, rows, artW, artH, label) => {
+    const { col0, col1, row0, row1 } = internals.cellRange(label.rect, artW, artH, cols, rows);
+    for (let r = row0; r < row1; r++) if (col1 > col0) bits.fill(1, r * cols + col0, r * cols + col1);
+  };
+  const wide = CORPUS.find(a => a.label === 'wide banner, ink along the top')!;
+  const shortName = layoutPrintLabel({ name: 'a.png', artWidthInches: wide.artW, artHeightInches: wide.artH }, measure)!;
+  const longName = layoutPrintLabel({ name: 'a-considerably-longer-name.png', artWidthInches: wide.artW, artHeightInches: wide.artH }, measure)!;
+  const boxOnlyCells = (layout: PrintLabelLayout) => {
+    const cols = internals.cellsFor(wide.artW);
+    const rows = internals.cellsFor(wide.artH + layout.bandInches);
+    const bits = new Uint8Array(cols * rows);
+    boxOnly(bits, cols, rows, wide.artW, wide.artH, layout);
+    return bits.reduce((n, v) => n + v, 0);
+  };
+  check(
+    shortName.lines.length === longName.lines.length && boxOnlyCells(shortName) !== boxOnlyCells(longName),
+    'negative control: marking only the label box reserved the same cells for a short and a long name, so the comparison above proves nothing',
   );
 
   // A corpus that had drifted to all-solid or all-sparse would still pass every check above

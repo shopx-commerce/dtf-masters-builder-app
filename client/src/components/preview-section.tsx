@@ -3799,7 +3799,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         if (d.id === selectedDesignId) continue;
         if (compositeExcluded?.has(d.id)) continue;
         const t = d.transform;
-        staticSignatureBody += `${d.id}:${d.imageInfo.image.src ?? d.imageInfo.image.width}:${t.nx.toFixed(4)},${t.ny.toFixed(4)},${t.s.toFixed(4)},${t.rotation.toFixed(2)},${t.flipX?1:0},${t.flipY?1:0}:${d.widthInches.toFixed(4)}x${d.heightInches.toFixed(4)}:${d.printFileName?1:0}:${d.alphaThresholded?1:0}:${overlappingDesigns.has(d.id)?1:0};`;
+        // The name is in here because it is drawn: with the stamp on, renaming a design
+        // changes its pixels and nothing else about it does. Left out, the composite kept
+        // the old label until some unrelated change happened to invalidate the same cache.
+        // Only spent on designs that actually print it.
+        staticSignatureBody += `${d.id}:${d.imageInfo.image.src ?? d.imageInfo.image.width}:${t.nx.toFixed(4)},${t.ny.toFixed(4)},${t.s.toFixed(4)},${t.rotation.toFixed(2)},${t.flipX?1:0},${t.flipY?1:0}:${d.widthInches.toFixed(4)}x${d.heightInches.toFixed(4)}:${d.printFileName?`1${d.name}`:0}:${d.alphaThresholded?1:0}:${overlappingDesigns.has(d.id)?1:0};`;
       }
 
       const doRender = () => {

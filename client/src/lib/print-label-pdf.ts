@@ -12,7 +12,7 @@
  */
 
 import type { PrintLabelLayout } from './print-label';
-import { labelReadsUpsideDown } from './print-label';
+import { labelLineStep, labelReadsUpsideDown } from './print-label';
 
 const POINTS_PER_INCH = 72;
 
@@ -92,25 +92,35 @@ export function drawPrintLabelOnPdfPage(
   });
 
   const sizePt = layout.fontInches * scalePt;
-  const textWidthPt = font.widthOfTextAtSize(layout.text, sizePt);
-  const textWidthInches = textWidthPt / scalePt;
-  const startX = rect.x + (rect.width - textWidthInches) / 2;
   // Baselines sit below the visual centre by roughly a third of the em for Helvetica's cap height;
   // exact metrics are not worth an extra font query for a production label.
   const baselineOffset = layout.fontInches * 0.35;
   const centreY = rect.y + rect.height / 2;
-  const textAnchor = upsideDown
-    ? toPage(startX + textWidthInches, centreY - baselineOffset, place, scalePt)
-    : toPage(startX, centreY + baselineOffset, place, scalePt);
+  // Rows are centred about the box as they are on the canvas, and reversed through a half turn
+  // for the same reason: the anchor corner swaps, so drawing them in order would print the
+  // second row above the first.
+  const stepInches = labelLineStep(layout.fontInches);
+  const rows = upsideDown ? [...layout.lines].reverse() : layout.lines;
+  const firstRowOffset = -((rows.length - 1) / 2) * stepInches;
 
-  page.drawText(layout.text, {
-    x: textAnchor.x,
-    y: textAnchor.y,
-    size: sizePt,
-    font,
-    rotate,
-    color: { type: 'RGB', red: 0, green: 0, blue: 0 },
-  });
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const textWidthInches = font.widthOfTextAtSize(row, sizePt) / scalePt;
+    const startX = rect.x + (rect.width - textWidthInches) / 2;
+    const rowCentreY = centreY + firstRowOffset + i * stepInches;
+    const textAnchor = upsideDown
+      ? toPage(startX + textWidthInches, rowCentreY - baselineOffset, place, scalePt)
+      : toPage(startX, rowCentreY + baselineOffset, place, scalePt);
+
+    page.drawText(row, {
+      x: textAnchor.x,
+      y: textAnchor.y,
+      size: sizePt,
+      font,
+      rotate,
+      color: { type: 'RGB', red: 0, green: 0, blue: 0 },
+    });
+  }
 }
 
 export { POINTS_PER_INCH };

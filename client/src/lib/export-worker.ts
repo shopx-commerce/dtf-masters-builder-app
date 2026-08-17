@@ -79,9 +79,11 @@ const STAMP_CACHE_TOTAL_MAX_BYTES = 256 * 1024 * 1024; // 256 MB across all stam
 
 function makeStampKey(d: DesignExportData, drawW: number, drawH: number): string {
   // The label's own text and placement, not just the flag: a name that had to be shortened to fit
-  // and a name that did not are different pixels, and a label in the corner is a different canvas
-  // from one in a band. Two copies of a design may only share a pre-render if both match.
-  const labelKey = d.label ? `|n${d.label.text}|p${d.label.placement}` : '';
+  // and a name that did not are different pixels, a name that wrapped onto two rows is different
+  // again, and a label in the corner is a different canvas from one in a band. Two copies of a
+  // design may only share a pre-render if all of that matches, so the rows are joined with a
+  // separator that cannot occur inside one.
+  const labelKey = d.label ? `|n${d.label.lines.join('\u0000')}|p${d.label.placement}` : '';
   return [
     designSourceKey(d),
     drawW,

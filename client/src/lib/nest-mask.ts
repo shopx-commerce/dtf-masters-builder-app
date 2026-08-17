@@ -127,11 +127,23 @@ function cellRange(rect: LabelRect, artW: number, artH: number, cols: number, ro
 }
 
 /**
- * Paints the label's background box into the mask as ink.
+ * Reserves the label's rows across the full width of the design.
  *
  * The box is opaque white, so as far as the film is concerned it is as solid as artwork — a
- * neighbour packed underneath it would be erased. Marking the box rather than a full-width band
- * is what lets a wide design with a short name keep the film either side of its label.
+ * neighbour packed underneath it would be erased.
+ *
+ * This used to mark only the box, which let a wide design with a short name keep the film
+ * either side of its label. That saving is what made renaming dangerous. The box is
+ * right-aligned and only as wide as the text, so a short name left a pocket of free cells
+ * beside it, the nester quite legitimately seated a neighbour there, and then editing the
+ * name to something longer widened the box straight over the top of it — the design was
+ * never re-packed, because nothing about renaming looked like a layout change.
+ *
+ * Reserving the whole row instead makes the footprint a function of the design's width and
+ * the label's row count, neither of which the text length can move. Renaming inside the same
+ * number of rows is now free: the reservation is byte-identical, so no arrangement that was
+ * valid before the rename can be invalid after it. The cost is the film beside a short
+ * label, which is the price of the guarantee.
  */
 function markLabel(
   bits: Uint8Array,
@@ -141,9 +153,9 @@ function markLabel(
   artH: number,
   label: PrintLabelLayout,
 ): void {
-  const { col0, col1, row0, row1 } = cellRange(label.rect, artW, artH, cols, rows);
+  const { row0, row1 } = cellRange(label.rect, artW, artH, cols, rows);
   for (let r = row0; r < row1; r++) {
-    if (col1 > col0) bits.fill(1, r * cols + col0, r * cols + col1);
+    bits.fill(1, r * cols, r * cols + cols);
   }
 }
 

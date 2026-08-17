@@ -154,6 +154,7 @@ export {
   getEffectiveHeight,
   getStampExtra,
   getStampExtraAtSize,
+  labelFootprintKey,
   getDesignSelectionUnits,
   getDesignSelectionBounds,
   rotateDesignSelection,
@@ -1051,6 +1052,27 @@ function getDesignLabel(d: DesignWithArtwork): PrintLabelLayout | null {
 /** Film the label adds below the artwork. Zero when it sits inside the artwork, or is off. */
 function getStampExtra(d: DesignWithArtwork): number {
   return getDesignLabel(d)?.bandInches ?? 0;
+}
+
+/**
+ * Everything about a design's label that the nester reserved space for, as a comparable
+ * string. Null when the design carries no label.
+ *
+ * The point of this is what it leaves out: the text. `markLabel` reserves the label's rows
+ * across the design's whole width, so two names that wrap onto the same number of rows in the
+ * same placement occupy exactly the same cells. Renaming between them cannot invalidate a
+ * layout, and so must not trigger one — re-nesting the sheet every time somebody corrects a
+ * typo would move work they placed deliberately.
+ *
+ * What does change the footprint is the row count and the placement: a name that grows onto a
+ * second row makes the band taller, and one that outgrows the artwork's corner turns a
+ * free label into a band that pushes into the design below. Those are real layout changes and
+ * the caller has to re-arrange for them.
+ */
+function labelFootprintKey(d: DesignWithArtwork): string | null {
+  const label = getDesignLabel(d);
+  if (!label) return null;
+  return `${label.placement}:${label.lines.length}`;
 }
 
 /**

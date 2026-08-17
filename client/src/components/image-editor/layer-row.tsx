@@ -3,6 +3,7 @@ import { Check, Copy, Minus, Plus, Stamp, Trash2 } from "lucide-react";
 import { formatDimensions } from "@/lib/format-length";
 import { useLanguage } from "@/lib/i18n";
 import type { DesignItem } from "@/lib/types";
+import { labelFootprintKey } from "./utils";
 import {
   getSelectionSnapshot,
   useIsRowSelected,
@@ -39,6 +40,8 @@ export interface LayerRowHandlers {
   handleAutoArrangeRef: React.MutableRefObject<
     (opts?: { skipSnapshot?: boolean; preserveSelection?: boolean; arrangeAll?: boolean; fullRepack?: boolean }) => void
   >;
+  /** Raises the busy veil ahead of an arrange this row is about to request. */
+  beginArrangeRef: React.MutableRefObject<() => void>;
   setDesigns: Dispatch<SetStateAction<DesignItem[]>>;
   getLayerThumbnail: (design: DesignItem) => string;
 }
@@ -162,11 +165,31 @@ function LayerRowComponent({ rowKey, row, handlers }: LayerRowProps) {
     const { editingNameValue: draft } = getEditingSnapshot();
     const trimmed = draft.trim();
     if (trimmed) {
+      const ids = new Set(row.designs.map((d) => d.id));
+      // A printed name is ink, so a rename can change how much film the design needs. Most
+      // do not: the nester reserves the label's rows across the design's full width, so any
+      // name that still wraps onto the same number of rows lands in exactly the space the
+      // old one had. Those renames must leave the layout alone. The ones that add a row, or
+      // push a label out of the artwork's corner into a band below it, genuinely need more
+      // film than the sheet was packed for, and the neighbour underneath has to move.
+      const grew = row.designs.some((d) => {
+        if (!d.printFileName) return false;
+        const before = labelFootprintKey(d);
+        const after = labelFootprintKey({ ...d, name: trimmed });
+        return before !== after;
+      });
       handlers.setDesigns((prev) =>
-        prev.map((d) =>
-          row.designs.some((rd) => rd.id === d.id) ? { ...d, name: trimmed } : d,
-        ),
+        prev.map((d) => (ids.has(d.id) ? { ...d, name: trimmed } : d)),
       );
+      if (grew) {
+        handlers.beginArrangeRef.current();
+        requestAnimationFrame(() => {
+          handlers.handleAutoArrangeRef.current({
+            preserveSelection: true,
+            arrangeAll: true,
+          });
+        });
+      }
     }
     endNameEdit();
   }, [handlers, row.designs, endNameEdit]);

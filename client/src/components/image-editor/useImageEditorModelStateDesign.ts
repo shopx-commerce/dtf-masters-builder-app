@@ -24,6 +24,7 @@ import {
 import {
   clampDesignToArtboard,
   getDesignSelectionUnits,
+  getStampExtra,
   rotateDesignSelection,
   getRotatedBounds,
 } from "./utils";
@@ -233,8 +234,16 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       trimOverflow?: boolean;
       /** Ids of expendable Fill Sheet copies — the only designs `trimOverflow` may delete. */
       fillIds?: Set<string>;
+      /**
+       * Forbid the height ladder for this run. Stronger than `trimOverflow`, which only
+       * withholds growth on behalf of the listed copies; this withholds it outright, and a
+       * run that cannot honour it undoes itself rather than buying film.
+       */
+      noGrow?: boolean;
       /** Internal to the arrange hook: a height-ladder step continuing the run in flight. */
       continuation?: boolean;
+      /** Internal to the arrange hook: the full-repack retry that precedes a growth step. */
+      repacked?: boolean;
     }
   ) => void>(() => {});
   /**
@@ -2419,8 +2428,13 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
    * bottom edge would put its label off the film, which is the one failure the customer cannot
    * see in the preview until it comes back from the printer.
    *
-   * Positions are otherwise left alone. Re-nesting the sheet because someone ticked a label would
-   * move work they had placed deliberately; auto-arrange is still one click away.
+   * Clamping alone is not enough when the label costs a band. This used to leave positions
+   * otherwise untouched, on the grounds that re-nesting moves work the customer placed
+   * deliberately — but the sheet was packed with these designs at their unlabelled height, so
+   * the band has nowhere to go except over the neighbour beneath. Sliding the design back onto
+   * the film only relocates the collision. So a toggle that changes the footprint re-arranges;
+   * one that does not (a label that fits in the artwork's own corner, or the label being
+   * switched off) still leaves every position alone.
    */
   const handleTogglePrintName = useCallback((ids: string[]) => {
     if (ids.length === 0) return;
@@ -2438,6 +2452,11 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
         .map(d => d.id),
     );
     const turningOn = !designsRef.current.some(d => idSet.has(d.id) && d.printFileName);
+    // Only a label that lands in a band below the artwork asks for film the pack did not
+    // reserve. Measured before the flag is written, on the design as it will be.
+    const needsRoom = turningOn && designsRef.current.some(d =>
+      idSet.has(d.id) && getStampExtra({ ...d, printFileName: true }) > 0,
+    );
     setDesigns(prev => {
       const labelled = prev.map(d => (idSet.has(d.id) ? { ...d, printFileName: turningOn } : d));
       if (!turningOn) return labelled;
@@ -2447,6 +2466,12 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
         return { ...d, transform: { ...d.transform, nx, ny } };
       });
     });
+    if (needsRoom && designsRef.current.length >= 2) {
+      beginArrangeRef.current();
+      requestAnimationFrame(() => {
+        handleAutoArrangeRef.current({ skipSnapshot: true, preserveSelection: true, arrangeAll: true });
+      });
+    }
   }, [saveSnapshot]);
 
   const handleDeleteGroup = useCallback((ids: string[]) => {

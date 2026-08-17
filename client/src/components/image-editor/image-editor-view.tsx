@@ -97,7 +97,7 @@ export default function ImageEditorView() {
     handleRemoveWhiteBackground, handleWandDelete,
     handleCanvasContextMenu, handleInteractionEnd, handleUndo, handleRedo, canUndo, canRedo,
     handleIncreaseQuality, isUpscaling, upscaleProgress, canIncreaseQuality,
-    handleAutoArrangeRef, actionToolbarProps, getLayerThumbnail, setDesignGap, setDuplicateCount,
+    handleAutoArrangeRef, beginArrangeRef, actionToolbarProps, getLayerThumbnail, setDesignGap, setDuplicateCount,
     parseDuplicateCount, handleDuplicateCountKeyDown, clampDuplicateCount, setArtboardWidth,
     setArtboardHeight, setQuantity, draftRecoveryAvailable, isRecoveringDraft,
     recoverEditorDraft, discardEditorDraft,
@@ -337,10 +337,11 @@ export default function ImageEditorView() {
       handleTogglePrintName: (ids) => layerHandlersLiveRef.current.handleTogglePrintName(ids),
       handleDeleteGroup: (ids) => layerHandlersLiveRef.current.handleDeleteGroup(ids),
       handleAutoArrangeRef,
+      beginArrangeRef,
       setDesigns: (updater) => layerHandlersLiveRef.current.setDesigns(updater),
       getLayerThumbnail: (design) => layerHandlersLiveRef.current.getLayerThumbnail(design),
     }),
-    [handleAutoArrangeRef],
+    [handleAutoArrangeRef, beginArrangeRef],
   );
 
   /**
