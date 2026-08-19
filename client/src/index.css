@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Oswald:wght@500;600;700&family=Montserrat:wght@500;600;700;800&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Fredoka+One&display=swap');
 @import url('https://db.onlinewebfonts.com/c/598a2bdeaef4affee05367e9e3dd54c6?family=Nabana+Shadow');
 
@@ -69,9 +69,37 @@
   }
 }
 
+.font-heading {
+  font-family: 'Oswald', 'Montserrat', sans-serif;
+}
+
+.font-body {
+  font-family: 'Inter', 'Montserrat', sans-serif;
+}
+
 @keyframes gradientShift {
   0% { background-position: 0% center; }
   100% { background-position: 200% center; }
+}
+
+@keyframes shimmer-gradient {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes gentle-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+.preview-coming-text {
+  background: linear-gradient(270deg, #F97316, #EF4444, #EC4899, #8B5CF6, #3B82F6, #EF4444, #F97316);
+  background-size: 300% 300%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: shimmer-gradient 4s ease infinite, gentle-bounce 2s ease-in-out infinite;
 }
 
 .checkerboard {

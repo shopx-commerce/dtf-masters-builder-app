@@ -33,6 +33,12 @@ export const en: Record<string, string> = {
   "landing.specialty.bullet3": "Not recommended for canvas",
   "landing.specialty.press": "325°F • 15s • peel completely cold",
 
+  "landing.dieCut.subline": "Custom die-cut stickers with precise cutlines and checkout-ready pricing.",
+  "landing.dieCut.bullet1": "Contour or shape cut paths for print & cut",
+  "landing.dieCut.bullet2": "Size, quantity, finish, and live pricing",
+  "landing.dieCut.bullet3": "Shopify checkout with production PDFs on R2",
+  "landing.dieCut.press": "Upload art → style cutline → add to cart",
+
   "editor.back": "Back",
   "editor.noProductSelected": "No product selected",
   "editor.tips": "Have tips and app improvement suggestions? Send it over!",

@@ -4,6 +4,7 @@ import multer from "multer";
 import sharp from "sharp";
 import express from "express";
 import { nanoid } from "nanoid";
+import crypto from "crypto";
 import Replicate from "replicate";
 
 import { fetchStorefrontVariantList } from "./lib/storefront-variant-config";
@@ -20,11 +21,20 @@ import {
   assertSafeExternalUrl,
   fetchSafeExternalUrl,
   isAllowedDesignObjectKey,
+  isAllowedDieCutObjectKey,
   isAllowedDesignStateKey,
   parseExternalUrl,
 } from "./lib/safe-external-url";
+import {
+  deleteR2Object,
+  publicUrlForKey,
+  uploadR2Object,
+  isR2Configured,
+} from "./lib/r2-storage";
+import { storage } from "./storage";
 
 import sgMail from "@sendgrid/mail";
+
 
 // ─── Shopify helpers ────────────────────────────────────────────────────────
 
@@ -333,6 +343,173 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
 
+  // ─── Die-cut sticker shop settings ─────────────────────────────────────────
+  function buildStickerSettings(query: Record<string, string | string[] | undefined>) {
+    const defaultSettings = {
+      version: 1,
+      sizes: {
+        minWidth: 0.5,
+        minHeight: 0.5,
+        maxWidth: 12,
+        maxHeight: 12,
+        enableCustomSize: true,
+        presets: [
+          { label: '2×2"', width: 2, height: 2 },
+          { label: '3×3"', width: 3, height: 3 },
+          { label: '4×4"', width: 4, height: 4 },
+          { label: '2×3"', width: 2, height: 3 },
+          { label: '3×4"', width: 3, height: 4 },
+        ],
+      },
+      pricing: {
+        tiers: [
+          { qtyMin: 1000, base: 0.06, rate: 0.0092, minPer: 0.1 },
+          { qtyMin: 500, base: 0.09, rate: 0.0086, minPer: 0.12 },
+          { qtyMin: 300, base: 0.11, rate: 0.0074, minPer: 0.15 },
+          { qtyMin: 200, base: 0.12, rate: 0.01, minPer: 0.175 },
+          { qtyMin: 100, base: 0.15, rate: 0.018, minPer: 0.26 },
+          { qtyMin: 50, base: 0.23, rate: 0.028, minPer: 0.38 },
+          { qtyMin: 25, base: 0.52, rate: 0.027, minPer: 0.6 },
+        ],
+        quantityOptions: [25, 50, 100, 150, 200, 250, 300, 350, 500, 750, 1000],
+        minOrderPrice: 0,
+        extraFeeFlat: 0,
+      },
+      finish: {
+        glossy: { enabled: true, adjustment: 0 },
+        matte: { enabled: true, adjustment: 0 },
+      },
+      lamination: {
+        none: { enabled: true, adjustment: 0 },
+        gloss: { enabled: true, adjustment: 2 },
+        matte: { enabled: true, adjustment: 2 },
+      },
+      defaults: {
+        finish: "glossy",
+        lamination: "none",
+        quantity: 25,
+        widthIn: 3,
+        heightIn: 3,
+      },
+      currencyCode: "USD",
+    };
+
+    const shopParam = String(query.shop || "").toLowerCase().trim();
+    const shopSlug = shopParam.replace(/[\.\-]/g, "_").toUpperCase();
+    type Settings = typeof defaultSettings;
+    let settings: Settings = defaultSettings;
+
+    const tryParseEnv = (key: string): Settings | null => {
+      const raw = process.env[key];
+      if (!raw) return null;
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object" && typeof parsed.version === "number") {
+          return parsed as Settings;
+        }
+      } catch {
+        console.warn(`${key} is not valid JSON — skipping`);
+      }
+      return null;
+    };
+
+    if (shopSlug) {
+      const perShop = tryParseEnv(`SHOP_STICKER_SETTINGS_JSON_${shopSlug}`);
+      if (perShop) settings = perShop;
+    }
+    if (settings === defaultSettings) {
+      const global_ = tryParseEnv("SHOP_STICKER_SETTINGS_JSON");
+      if (global_) settings = global_;
+    }
+
+    const isOff = (value: string | undefined) =>
+      value != null && value !== "" && /^(0|false|no|off)$/i.test(value.trim());
+
+    // Omitting these keys hides the finish/lamination pickers client-side while
+    // leaving size presets and pricing tiers intact.
+    if (isOff(process.env.DIE_CUT_ENABLE_FINISH_LAMINATION)) {
+      const { finish: _finish, lamination: _lamination, ...rest } = settings;
+      settings = rest as Settings;
+    }
+
+    const variantPriceCentsRaw = String(query.variantPrice || "").trim();
+    if (variantPriceCentsRaw) {
+      const variantPriceCents = parseInt(variantPriceCentsRaw, 10);
+      if (Number.isFinite(variantPriceCents) && variantPriceCents > 0) {
+        const variantPriceDollars = variantPriceCents / 100;
+        const { widthIn, heightIn, quantity } = settings.defaults;
+        const tiers = [...settings.pricing.tiers].sort((a, b) => b.qtyMin - a.qtyMin);
+        const tier = tiers.find((t) => quantity >= t.qtyMin) || tiers[tiers.length - 1];
+        const area = widthIn * heightIn;
+        const perSticker = Math.max(tier.minPer, tier.base + tier.rate * area);
+        const baseTotal = Math.round(perSticker * quantity * 100) / 100;
+        const extraFeeFlat = Math.round((variantPriceDollars - baseTotal) * 100) / 100;
+        settings = {
+          ...settings,
+          pricing: { ...settings.pricing, extraFeeFlat, minOrderPrice: 0 },
+        };
+      }
+    }
+    return settings;
+  }
+
+  function stickerSettingsCorsHeaders(req: Request, res: ExpressResponse) {
+    const origin = req.headers.origin;
+    if (origin) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+    } else {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+    }
+    res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Accept, Content-Type");
+    res.setHeader("Cache-Control", "public, max-age=60, s-maxage=60");
+  }
+
+  app.get("/api/sticker-settings", (req, res) => {
+    stickerSettingsCorsHeaders(req, res);
+    res.json(buildStickerSettings(req.query as Record<string, string | undefined>));
+  });
+  app.options("/api/sticker-settings", (req, res) => {
+    stickerSettingsCorsHeaders(req, res);
+    res.sendStatus(204);
+  });
+
+  app.get("/apps/sticker-settings", (req, res) => {
+    const apiSecret = process.env.SHOPIFY_API_SECRET;
+    const signature = (req.query.signature as string | undefined) || "";
+    if (apiSecret && signature) {
+      const params = req.query as Record<string, string>;
+      const message = Object.keys(params)
+        .filter((k) => k !== "signature")
+        .sort()
+        .map((k) => `${k}=${params[k]}`)
+        .join("");
+      const expected = crypto
+        .createHmac("sha256", apiSecret)
+        .update(message, "utf8")
+        .digest("hex");
+      try {
+        if (
+          signature.length !== expected.length ||
+          !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
+        ) {
+          return res.status(401).json({ error: "Invalid app proxy signature" });
+        }
+      } catch {
+        return res.status(401).json({ error: "Invalid app proxy signature" });
+      }
+    } else if (apiSecret && !signature) {
+      return res.status(401).json({ error: "Missing app proxy signature" });
+    }
+    stickerSettingsCorsHeaders(req, res);
+    res.json(buildStickerSettings(req.query as Record<string, string | undefined>));
+  });
+  app.options("/apps/sticker-settings", (req, res) => {
+    stickerSettingsCorsHeaders(req, res);
+    res.sendStatus(204);
+  });
+
   async function fetchViaR2ApiIfPossible(target: URL): Promise<Response | null> {
     assertSafeExternalUrl(target.toString());
     const accountId = String(process.env.R2_ACCOUNT_ID || "").trim();
@@ -468,6 +645,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   /**
+   * Standalone die-cut upload: writes the production PDF / preview PNG to the
+   * same R2 keys the Shopify shell uses, so the orders/paid email can find them.
+   * Used only when the builder runs outside the Shopify app-proxy shell (the
+   * shell path uploads through the Shopify app instead). Same-origin POST.
+   */
+  const dieCutUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 50 * 1024 * 1024 },
+  }).single("file");
+
+  app.post("/api/die-cut/upload", dieCutUpload, async (req, res) => {
+    try {
+      if (!isR2Configured()) {
+        return res
+          .status(500)
+          .json({ error: "R2 credentials are not configured on builder app" });
+      }
+      const file = (req as Request & { file?: Express.Multer.File }).file;
+      const objectKey = String((req.body?.objectKey as string) || "").trim();
+      if (!file || !file.buffer?.length) {
+        return res.status(400).json({ error: "file is required" });
+      }
+      if (!isAllowedDieCutObjectKey(objectKey)) {
+        return res.status(403).json({ error: "objectKey not allowed" });
+      }
+      const isPdf = /\.pdf$/i.test(objectKey);
+      const contentType =
+        String((req.body?.contentType as string) || "").trim() ||
+        (isPdf ? "application/pdf" : "image/png");
+      await uploadR2Object(objectKey, file.buffer, contentType);
+      const productionUrl = publicUrlForKey(objectKey);
+      return res.status(200).json({
+        ok: true,
+        key: objectKey,
+        productionUrl,
+        cartPreviewUrl: productionUrl,
+      });
+    } catch (err) {
+      console.error("[die-cut upload] error:", err);
+      return res
+        .status(500)
+        .json({ error: err instanceof Error ? err.message : "Upload failed" });
+    }
+  });
+
+  /**
    * Shopify proxy JSON entrypoint.
    * Body: variant, quantity, shop (optional), builder_path, builder_context (object | JSON string).
    * Success: always includes redirectPath (required for proxy — open this URL in the browser).
@@ -524,7 +747,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }
 
   /** Shopify proxy: POST builder_context to /uv-dtf (etc.) — 302 to GET ?ctx=… (SPA reads context) */
-  const BUILDER_POST_PATHS = ['/uv-dtf', '/hot-peel', '/fluorescent', '/specialty-dtf', '/embed'] as const;
+  const BUILDER_POST_PATHS = ['/uv-dtf', '/hot-peel', '/fluorescent', '/specialty-dtf', '/die-cut-stickers', '/embed'] as const;
   for (const path of BUILDER_POST_PATHS) {
     app.post(path, multipartFormIfNeeded, (req, res) => {
       try {
@@ -907,33 +1130,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  /**
+   * Legacy immediate-email path (name + email).
+   * Die-cut ATC + paid-order email now lives on the Shopify app
+   * (shell R2 upload → cart → orders/paid webhook → SendGrid).
+   */
   app.post("/api/send-design", upload.none(), async (req, res) => {
     try {
-      const { customerName, customerEmail, customerNotes, pdfData, fileName } = req.body;
+      const body = req.body || {};
+      const {
+        customerName,
+        customerEmail,
+        customerNotes,
+        pdfData,
+        fileName,
+        stickerSize,
+      } = body;
+
+      const isDieCutPendingFlow =
+        !!pdfData && (!customerName || !!stickerSize || body.builder === "die-cut-stickers");
+
+      if (isDieCutPendingFlow) {
+        return res.status(410).json({
+          error:
+            "Die-cut designs are saved via the Shopify app R2 pipeline. Open the builder from the store product page and use Add to Cart.",
+          code: "DIE_CUT_USE_SHELL_CHECKOUT",
+        });
+      }
 
       if (!customerName || !customerEmail) {
         return res.status(400).json({ error: "Name and email are required" });
       }
-
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!emailRegex.test(customerEmail)) {
         return res.status(400).json({ error: "Invalid email format" });
       }
-
       const sendGridApiKey = process.env.SENDGRID_API_KEY;
-      
       if (!sendGridApiKey) {
-        console.error("SendGrid API key not configured");
         return res.status(500).json({ error: "Email service not configured" });
       }
-
       sgMail.setApiKey(sendGridApiKey);
 
       const safeName = escapeHtml(customerName);
       const safeEmail = escapeHtml(customerEmail);
       const safeFileName = escapeHtml(fileName || "Not provided");
       const safeNotes = customerNotes ? escapeHtml(customerNotes) : "";
-
       const notesSection = customerNotes ? `\nCustomer Notes:\n${customerNotes}\n` : "";
       const emailContent = `
 New Design Submission
@@ -946,28 +1187,21 @@ Customer Details:
 ${notesSection}
 The customer has confirmed that the cutline looks good and is ready to proceed with this design.
 `;
-
-      const htmlNotesSection = safeNotes 
-        ? `<h3>Customer Notes:</h3><p style="background-color: #f3f4f6; padding: 12px; border-radius: 6px; white-space: pre-wrap;">${safeNotes}</p>` 
+      const htmlNotesSection = safeNotes
+        ? `<h3>Customer Notes:</h3><p style="background-color: #f3f4f6; padding: 12px; border-radius: 6px; white-space: pre-wrap;">${safeNotes}</p>`
         : "";
       const htmlContent = `
 <h2>New Design Submission</h2>
-
-<h3>Customer Details:</h3>
 <ul>
   <li><strong>Full Name:</strong> ${safeName}</li>
   <li><strong>Email:</strong> <a href="mailto:${safeEmail}">${safeEmail}</a></li>
   <li><strong>File Name:</strong> ${safeFileName}</li>
   <li><strong>Submission Time:</strong> ${new Date().toLocaleString()}</li>
 </ul>
-
 ${htmlNotesSection}
-
 <p>The customer has confirmed that the cutline looks good and is ready to proceed with this design.</p>
-
-${pdfData ? '<p><strong>PDF design with CutContour is attached.</strong></p>' : '<p><em>No design file was attached.</em></p>'}
+${pdfData ? "<p><strong>PDF design with CutContour is attached.</strong></p>" : "<p><em>No design file was attached.</em></p>"}
 `;
-
       const msg: sgMail.MailDataRequired = {
         to: "support@anynestapp.com",
         from: "support@anynestapp.com",
@@ -975,7 +1209,6 @@ ${pdfData ? '<p><strong>PDF design with CutContour is attached.</strong></p>' : 
         text: emailContent,
         html: htmlContent,
       };
-
       if (pdfData) {
         msg.attachments = [
           {
@@ -986,25 +1219,75 @@ ${pdfData ? '<p><strong>PDF design with CutContour is attached.</strong></p>' : 
           },
         ];
       }
-
       await sgMail.send(msg);
-
       res.json({ success: true, message: "Design sent successfully" });
     } catch (error) {
-      console.error("Email sending error:", error);
-      
-      let errorMessage = "Failed to send design";
-      if (error instanceof Error) {
-        errorMessage = error.message;
-      }
-      
+      console.error("Design save / email error:", error);
       res.status(500).json({
         error: "Failed to send design",
-        details: errorMessage,
+        details: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  });
+
+  /** Public URL helper for die-cut REF (no DB). Email delivery is handled by the Shopify app. */
+  app.get("/api/design/:referenceCode/url", async (req, res) => {
+    try {
+      const referenceCode = String(req.params.referenceCode || "").toUpperCase();
+      if (!referenceCode) {
+        return res.status(400).json({ error: "Reference code is required" });
+      }
+      const objectKey = `designs/die-cut/${referenceCode}/production.pdf`;
+      const publicUrl = publicUrlForKey(objectKey);
+      if (!publicUrl) {
+        return res.status(404).json({
+          error: "R2 public base URL is not configured",
+          referenceCode,
+          key: objectKey,
+        });
+      }
+      res.json({
+        success: true,
+        designUrl: publicUrl,
+        referenceCode,
+      });
+    } catch (error) {
+      console.error("Error getting design URL:", error);
+      res.status(500).json({
+        error: "Failed to get design URL",
+        details: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  });
+
+  app.post("/api/cleanup-designs", async (_req, res) => {
+    try {
+      const { deletedCount } = await runCleanup();
+      res.json({ success: true, deletedCount });
+    } catch (error) {
+      console.error("Cleanup error:", error);
+      res.status(500).json({
+        error: "Cleanup failed",
+        details: error instanceof Error ? error.message : "Unknown error",
       });
     }
   });
 
   const httpServer = createServer(app);
   return httpServer;
+}
+
+/** Deletes designs older than 2 months from DB and Cloudflare R2 */
+export async function runCleanup(): Promise<{ deletedCount: number }> {
+  const twoMonthsAgo = new Date();
+  twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
+  const { count, filePaths } = await storage.deleteExpiredDesigns(twoMonthsAgo);
+  for (const filePath of filePaths) {
+    try {
+      await deleteR2Object(filePath);
+    } catch (err) {
+      console.warn("Failed to delete R2 object during cleanup:", filePath, err);
+    }
+  }
+  return { deletedCount: count };
 }

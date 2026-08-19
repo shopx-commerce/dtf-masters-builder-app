@@ -72,8 +72,18 @@ export function isAllowedDesignStateKey(key: string): boolean {
   return /^designs\/[^/]+\/[^/]+\/state\/design-state\.json$/i.test(k);
 }
 
+/** Die-cut production/preview keys written by the standalone AnyNest upload path. */
+export function isAllowedDieCutObjectKey(key: string): boolean {
+  const k = String(key || "").trim().replace(/^\/+/, "");
+  if (!k || k.includes("..")) return false;
+  return /^designs\/die-cut\/[A-Z0-9]+\/(production\.pdf|preview\.png)$/i.test(k);
+}
+
 export function isAllowedDesignObjectKey(key: string): boolean {
   const k = String(key || "").trim().replace(/^\/+/, "");
   if (!k || k.includes("..")) return false;
-  return /^designs\/[^/]+\/[^/]+\/.+/i.test(k);
+  return (
+    /^designs\/[^/]+\/[^/]+\/.+/i.test(k) ||
+    isAllowedDieCutObjectKey(k)
+  );
 }
