@@ -634,34 +634,89 @@ export async function exportPngWithWorker(options: {
   });
 }
 
+/** Shared wording for a sheet that rendered nothing, so every export path fails identically. */
+export const BLANK_EXPORT_MESSAGE =
+  "The exported sheet came out blank — the browser rendered no pixels " +
+  "(this usually means the device ran out of memory). Close other apps or " +
+  "tabs and try again, or reduce the sheet size.";
+
 /**
- * Throws when a sheet that contains designs rendered as 100% transparent.
- * iOS silently no-ops canvas work past the tab's graphics-memory budget, so a
- * "successful" export can be a blank file; catching it before encode/upload
- * turns a silent blank production file into a visible, retryable error.
+ * True when any pixel of the canvas is not fully transparent.
  *
  * Scans the alpha channel at native resolution in horizontal bands with an
  * early exit on the first opaque pixel — a downsampled probe could average a
- * tiny valid design below one alpha step and wrongly reject a good sheet.
+ * tiny valid design below one alpha step and wrongly report a blank canvas.
+ *
+ * Returns true when the canvas cannot be read at all (no 2D context, zero
+ * dimensions), so a probe failure never blocks an otherwise healthy export.
  */
-export function assertExportCanvasNotBlank(canvas: HTMLCanvasElement, designCount: number): void {
-  if (designCount <= 0) return;
+export function canvasHasInk(canvas: HTMLCanvasElement): boolean {
   const ctx = canvas.getContext("2d");
-  if (!ctx) return; // cannot verify — never block a healthy export on probe failure
+  if (!ctx) return true;
   const { width, height } = canvas;
-  if (!width || !height) return;
+  if (!width || !height) return true;
   const bandRows = Math.max(1, Math.floor(4_000_000 / width));
   for (let y = 0; y < height; y += bandRows) {
     const h = Math.min(bandRows, height - y);
     const alpha = ctx.getImageData(0, y, width, h).data;
     for (let i = 3; i < alpha.length; i += 4) {
-      if (alpha[i] !== 0) return;
+      if (alpha[i] !== 0) return true;
     }
   }
+  return false;
+}
+
+/**
+ * Throws when a sheet that contains designs rendered as 100% transparent.
+ * iOS silently no-ops canvas work past the tab's graphics-memory budget, so a
+ * "successful" export can be a blank file; catching it before encode/upload
+ * turns a silent blank production file into a visible, retryable error.
+ */
+export function assertExportCanvasNotBlank(canvas: HTMLCanvasElement, designCount: number): void {
+  if (designCount <= 0) return;
+  if (canvasHasInk(canvas)) return;
+  throw new Error(BLANK_EXPORT_MESSAGE);
+}
+
+const PDF_HEADER = [0x25, 0x50, 0x44, 0x46, 0x2d]; // "%PDF-"
+const PDF_TRAILER = [0x25, 0x25, 0x45, 0x4f, 0x46]; // "%%EOF"
+/** No real single-page pdf-lib document is this small; only a truncated buffer is. */
+const MIN_PLAUSIBLE_PDF_BYTES = 64;
+
+function matchesAt(bytes: Uint8Array, offset: number, expected: number[]): boolean {
+  if (offset < 0 || offset + expected.length > bytes.length) return false;
+  for (let i = 0; i < expected.length; i++) {
+    if (bytes[offset + i] !== expected[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Structural check on generated PDF bytes: a real `%PDF-` header, a `%%EOF` trailer (trailing
+ * whitespace tolerated, as PDF writers emit it), and a length no truncated buffer could reach.
+ * Catches a corrupted or cut-short `pdfDoc.save()` before those bytes become a customer's order.
+ *
+ * This validates the container only. A well-formed PDF of a blank page passes cleanly — pair it
+ * with `canvasHasInk` for that, exactly as the PNG paths pair encoding with a blank-sheet guard.
+ */
+export function assertValidPdfBytes(bytes: Uint8Array): void {
+  const looksValid =
+    bytes.length >= MIN_PLAUSIBLE_PDF_BYTES &&
+    matchesAt(bytes, 0, PDF_HEADER) &&
+    (() => {
+      let end = bytes.length;
+      while (end > 0) {
+        const b = bytes[end - 1];
+        if (b !== 0x0a && b !== 0x0d && b !== 0x20 && b !== 0x09 && b !== 0x00) break;
+        end--;
+      }
+      return matchesAt(bytes, end - PDF_TRAILER.length, PDF_TRAILER);
+    })();
+  if (looksValid) return;
   throw new Error(
-    "The exported sheet came out blank — the browser rendered no pixels " +
-    "(this usually means the device ran out of memory). Close other apps or " +
-    "tabs and try again, or reduce the sheet size.",
+    "The exported PDF came out incomplete — the browser could not finish writing it " +
+    "(this usually means the device ran out of memory). Close other apps or tabs and try again, " +
+    "or reduce the sheet size.",
   );
 }
 
