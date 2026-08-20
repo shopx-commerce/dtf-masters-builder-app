@@ -27,6 +27,7 @@ export type PlacedItem = {
   /** Set when the item kept its existing position, so the caller can leave it untouched. */
   anchored?: boolean;
 };
+type CandidateKind = 'rect' | 'grid' | 'mask';
 type Candidate = {
   result: PlacedItem[];
   maxHeight: number;
@@ -38,6 +39,8 @@ type Candidate = {
    * are supplied.
    */
   filmHeight: number;
+  /** Which existing packing family produced this candidate. Used only for safe tie-breaking. */
+  kind: CandidateKind;
 };
 
 export interface FixedRect {
@@ -72,6 +75,11 @@ export interface ArrangeInput {
      */
     mask?: NestMask;
     /**
+     * Stable identity shared by physical copies of the same artwork at the same size and
+     * orientation. It is optimization metadata only: every copy remains a separate item.
+     */
+    duplicateKey?: string;
+    /**
      * Item that must be placed at rotation 0. Used for a user-defined group, which is packed
      * as one super-item and can only be translated back onto its members.
      */
@@ -97,6 +105,50 @@ export interface ArrangeInput {
   preferStable?: boolean;
   /** Purchasable sheet heights. A repack only counts as an improvement if it reaches a shorter one. */
   heightSteps?: number[];
+  /**
+   * Optional caller classification. Omit to derive it from `duplicateKey`.
+   *
+   * Duplicate-heavy mode adds one family-contiguous ordering and prefers existing grid/mask
+   * candidates only when all safety and film-height comparisons already tie.
+   */
+  layoutPreference?: ArrangeLayoutPreference;
+}
+
+export type ArrangeLayoutPreference = 'default' | 'duplicate-heavy';
+
+/**
+ * Classify the physical packing items, not layer names or group ids.
+ *
+ * Mirrors the useful part of BixNest's strategy selection: a sheet is duplicate-heavy when
+ * one family dominates, most items repeat, or there are far fewer families than items. Items
+ * without a duplicate key are deliberately unique, so user groups and unrelated uploads can
+ * never trigger this mode accidentally.
+ */
+export function classifyArrangeLayout(
+  items: Array<{ id: string; duplicateKey?: string }>,
+): ArrangeLayoutPreference {
+  const total = items.length;
+  if (total < 5) return 'default';
+
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const key = item.duplicateKey ? `copy:${item.duplicateKey}` : `unique:${item.id}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const sizes = [...counts.values()];
+  const largest = Math.max(0, ...sizes);
+  const repeatedPieces = sizes.filter(count => count > 1).reduce((sum, count) => sum + count, 0);
+  const repetitionRatio = 1 - counts.size / total;
+  const dominantRatio = largest / total;
+  const repeatedPieceRatio = repeatedPieces / total;
+
+  // A single repeated pair on a small mixed sheet is ordinary, not a packing strategy.
+  // Require at least three repeated pieces, then a genuinely dominant family or broad
+  // repetition across the sheet.
+  if (repeatedPieces < 3) return 'default';
+  return dominantRatio >= 0.5 || repetitionRatio >= 0.5 || repeatedPieceRatio >= 0.7
+    ? 'duplicate-heavy'
+    : 'default';
 }
 
 const EPS = 0.01;
@@ -733,6 +785,8 @@ function shelfPack(
 export function runArrange(input: ArrangeInput) {
   const { items, usableW, usableH, artboardWidth, artboardHeight, customGap, fixedRects,
           current, preferStable, heightSteps } = input;
+  const layoutPreference = input.layoutPreference ?? classifyArrangeLayout(items);
+  const duplicateHeavy = layoutPreference === 'duplicate-heavy';
   const hasCustomGap = customGap !== undefined && customGap >= 0;
   const GAP = hasCustomGap ? customGap : 0.25;
 
@@ -783,10 +837,14 @@ export function runArrange(input: ArrangeInput) {
     return weight > 0 ? moment / weight : 0;
   };
 
-  const evaluate = (pack: { result: PlacedItem[]; maxHeight: number; wastedArea: number }): Candidate => ({
+  const evaluate = (
+    pack: { result: PlacedItem[]; maxHeight: number; wastedArea: number },
+    kind: CandidateKind = 'rect',
+  ): Candidate => ({
     ...pack,
     overflows: pack.result.filter(r => r.overflows).length,
     filmHeight: filmBottom(pack.result),
+    kind,
   });
 
   const makePackItems = (order: typeof items, orient: 'normal' | 'landscape' | 'portrait', gapOverride?: number): PackItem[] =>
@@ -814,7 +872,29 @@ export function runArrange(input: ArrangeInput) {
     if (lo <= hi) alternating.push(byArea[hi--]);
   }
 
-  const sortOrders = [byWidth, byHeight, byArea, byPerimeter, byEmptySpace, byAspectRatio, byLongestSide, alternating, byAreaAsc];
+  const familyStats = new Map<string, { count: number; maxArea: number; first: number }>();
+  const familyKey = (item: typeof items[number]): string =>
+    item.duplicateKey ? `copy:${item.duplicateKey}` : `unique:${item.id}`;
+  items.forEach((item, index) => {
+    const key = familyKey(item);
+    const area = item.w * item.h;
+    const current = familyStats.get(key);
+    if (current) {
+      current.count++;
+      current.maxArea = Math.max(current.maxArea, area);
+    } else {
+      familyStats.set(key, { count: 1, maxArea: area, first: index });
+    }
+  });
+  // Duplicate families stay contiguous, largest families first. The existing packers then
+  // get one BixNest-style duplicate-aware seed without any randomized/genetic machinery.
+  const byDuplicateFamily = [...items].sort((a, b) => {
+    const af = familyStats.get(familyKey(a))!;
+    const bf = familyStats.get(familyKey(b))!;
+    return bf.count - af.count || bf.maxArea - af.maxArea || af.first - bf.first;
+  });
+  const baseSortOrders = [byWidth, byHeight, byArea, byPerimeter, byEmptySpace, byAspectRatio, byLongestSide, alternating, byAreaAsc];
+  const sortOrders = duplicateHeavy ? [byDuplicateFamily, ...baseSortOrders] : baseSortOrders;
 
   /**
    * Above this many designs the nester is skipped. It scales roughly with sheet area times
@@ -875,9 +955,18 @@ export function runArrange(input: ArrangeInput) {
     const obstacles: NestObstacle[] | undefined = fixedRects;
     // Three orderings is the point of diminishing returns: longest-side-first wins most
     // sheets, and area/perimeter occasionally beat it when a few big pieces dominate.
-    const orders: Array<[string, typeof items]> = [
-      ['longestSide', byLongestSide], ['area', byArea], ['perimeter', byPerimeter],
-    ];
+    const orders: Array<[string, typeof items]> = duplicateHeavy
+      ? [
+          ['duplicateFamily', byDuplicateFamily],
+          ['longestSide', byLongestSide],
+          ['area', byArea],
+          ['perimeter', byPerimeter],
+        ]
+      : [
+          ['longestSide', byLongestSide],
+          ['area', byArea],
+          ['perimeter', byPerimeter],
+        ];
     // Run them one at a time and stop early, rather than mapping the lot. Each ordering is
     // a full grid-scanning nest and they cost the same as each other — measured at roughly
     // 210ms apiece for 100 designs on a 160" sheet, which is 86% of the whole arrange. The
@@ -887,7 +976,7 @@ export function runArrange(input: ArrangeInput) {
     for (const [name, order] of orders) {
       const c = evaluate(nestPack(
         toNestItems(order), usableW, usableH, artboardWidth, artboardHeight, GAP, obstacles,
-      ));
+      ), 'mask');
       (c as any)._algo = `nest_${name}`;
       out.push(c);
       if (billsAtFloor(c)) break;
@@ -935,7 +1024,7 @@ export function runArrange(input: ArrangeInput) {
     }
 
     const gridResult = gridPack(items, g, usableW, usableH, artboardWidth, artboardHeight);
-    if (gridResult) { const gr = evaluate(gridResult); (gr as any)._algo = 'grid'; cands.push(gr); }
+    if (gridResult) { const gr = evaluate(gridResult, 'grid'); (gr as any)._algo = 'grid'; cands.push(gr); }
 
     return cands;
   };
@@ -1027,7 +1116,23 @@ export function runArrange(input: ArrangeInput) {
     const aFits = a.filmHeight <= usableH ? 0 : 1;
     const bFits = b.filmHeight <= usableH ? 0 : 1;
     if (aFits !== bFits) return aFits - bFits;
-    if (Math.abs(a.filmHeight - b.filmHeight) > EPS) return a.filmHeight - b.filmHeight;
+    if (duplicateHeavy) {
+      // EPS is deliberately 0.01" for placement arithmetic, but two heights within that
+      // tolerance can straddle a purchasable-sheet boundary. Price is never a geometric tie.
+      const billableDelta = billable(a.filmHeight) - billable(b.filmHeight);
+      if (Math.abs(billableDelta) > 1e-9) return billableDelta;
+    }
+    // Candidate-kind preference is only for a true numeric tie. Even within one Shopify rung,
+    // retain the honestly shorter layout instead of moving art for a cosmetic source choice.
+    const rawTieTolerance = duplicateHeavy ? 1e-6 : EPS;
+    if (Math.abs(a.filmHeight - b.filmHeight) > rawTieTolerance) return a.filmHeight - b.filmHeight;
+    if (duplicateHeavy && a.kind !== b.kind) {
+      // This cannot charge more film: billable and raw film height already tied. A regular grid
+      // gives identical copies the most predictable rows; a silhouette nest gets the next
+      // preference when transparent shapes can interlock.
+      const rank: Record<CandidateKind, number> = { grid: 0, mask: 1, rect: 2 };
+      if (rank[a.kind] !== rank[b.kind]) return rank[a.kind] - rank[b.kind];
+    }
     return inkCentroidY(a.result) - inkCentroidY(b.result);
   });
 

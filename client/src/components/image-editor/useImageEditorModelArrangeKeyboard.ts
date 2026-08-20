@@ -16,7 +16,7 @@ import {
   sanitizeDesignInches,
 } from "./utils";
 import { DEFAULT_LAYER_CENTER_NX, DEFAULT_LAYER_CENTER_NY } from "./constants";
-import { runArrange } from "@/lib/arrange-core";
+import { classifyArrangeLayout, runArrange } from "@/lib/arrange-core";
 import { DEFAULT_SHEET_MARGIN, planBandReseat, planLadderJump, planSheetShrink } from "@/lib/sheet-fit";
 import { isUploadBatchActive } from "@/lib/upload-queue";
 import { keepPositionsNest, type NestMask } from "@/lib/nest-core";
@@ -657,16 +657,44 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       }
     }
 
+    // Assign compact source identities without copying potentially huge data-URL strings
+    // into every item key. Copies created by the editor share an image source and therefore
+    // share this id; separately edited or re-screened artwork naturally splits away.
+    const sourceIds = new Map<string, number>();
+    const duplicateKeyFor = (d: DesignItem, w: number, h: number): string => {
+      const image = d.imageInfo.image;
+      const source = image.currentSrc || image.src ||
+        `${d.imageInfo.file.name}:${d.imageInfo.file.size}:${d.imageInfo.file.lastModified}`;
+      let sourceId = sourceIds.get(source);
+      if (sourceId === undefined) {
+        sourceId = sourceIds.size;
+        sourceIds.set(source, sourceId);
+      }
+      return [
+        sourceId,
+        w.toFixed(3),
+        h.toFixed(3),
+        d.transform.flipX ? 1 : 0,
+        d.transform.flipY ? 1 : 0,
+        d.printFileName ? d.name : '',
+      ].join('|');
+    };
+
     const items = [
-      ...nonGrouped.map(d => ({
-        id: d.id,
-        w: d.widthInches * d.transform.s,
-        h: getEffectiveHeight(d),
-        fill: getContentFill(d),
-        // Lets the bitmap nester compete with the rectangle packers for this design. A
-        // group has no single silhouette, so super-items below stay rectangles.
-        mask: getDesignNestSilhouette(d),
-      })),
+      ...nonGrouped.map(d => {
+        const w = d.widthInches * d.transform.s;
+        const h = getEffectiveHeight(d);
+        return {
+          id: d.id,
+          w,
+          h,
+          fill: getContentFill(d),
+          duplicateKey: duplicateKeyFor(d, w, h),
+          // Lets the bitmap nester compete with the rectangle packers for this design. A
+          // group has no single silhouette, so super-items below stay rectangles.
+          mask: getDesignNestSilhouette(d),
+        };
+      }),
       ...Array.from(groups.entries()).map(([gid, g]) => ({
         id: `${GROUP_PREFIX}${gid}`,
         w: g.maxX - g.minX,
@@ -680,6 +708,7 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         noRotate: true,
       })),
     ];
+    const layoutPreference = classifyArrangeLayout(items);
 
     const fixedRects = arrangeSelection
       ? currentDesigns.filter(d => !selectedDesignIds.has(d.id)).map(d => {
@@ -1079,6 +1108,7 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         current: currentRects,
         preferStable,
         heightSteps: GANGSHEET_HEIGHTS,
+        layoutPreference,
       });
     } else {
       runFallbackArrange();
@@ -1101,6 +1131,7 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         current: currentRects,
         preferStable,
         heightSteps: GANGSHEET_HEIGHTS,
+        layoutPreference,
       });
       applyResult(
         result,

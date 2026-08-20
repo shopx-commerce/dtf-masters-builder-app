@@ -23,7 +23,12 @@
  * `useImageEditorModelArrangeKeyboard.ts`.
  */
 
-import { runArrange, type ArrangeInput, type PlacedItem } from '../client/src/lib/arrange-core';
+import {
+  classifyArrangeLayout,
+  runArrange,
+  type ArrangeInput,
+  type PlacedItem,
+} from '../client/src/lib/arrange-core';
 import { NEST_CELL_INCHES, nestPack, rotateMask90, type NestMask, type NestObstacle } from '../client/src/lib/nest-core';
 
 const CELL = NEST_CELL_INCHES;
@@ -86,7 +91,7 @@ function rng(seed: number) {
   return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
 }
 
-type Design = { id: string; w: number; h: number; fill: number; mask: NestMask };
+type Design = { id: string; w: number; h: number; fill: number; mask: NestMask; duplicateKey?: string; noRotate?: boolean };
 
 function makeDesigns(n: number, seed = 7): Design[] {
   const rand = rng(seed);
@@ -431,6 +436,94 @@ console.log('\nthe detector notices ink on ink when there is some');
   const stacked: PlacedItem[] = d.map(x => ({ id: x.id, nx: 0.5, ny: 0.5, rotation: 0, overflows: false }));
   const { cells } = overlapOf(d, stacked, 36);
   check(cells > 0, 'two designs at the same spot are reported as colliding');
+}
+
+// ---------------------------------------------------------------------------
+// 6. Duplicate-heavy mode expands the existing candidate search without changing price,
+// overlap, item identity, or no-rotate guarantees.
+// ---------------------------------------------------------------------------
+
+console.log('\nduplicate-heavy sheets get a safe duplicate-aware search');
+{
+  const source = makeDesigns(1, 31)[0];
+  const copies: Design[] = Array.from({ length: 18 }, (_, index) => ({
+    ...source,
+    id: `copy-${index}`,
+    duplicateKey: 'same-artwork',
+  }));
+  const mixed = makeDesigns(8, 47).map((design, index) => ({
+    ...design,
+    id: `unique-${index}`,
+    duplicateKey: `unique-artwork-${index}`,
+  }));
+  const repeated = [...copies, ...mixed];
+  check(classifyArrangeLayout(repeated) === 'duplicate-heavy',
+    'duplicate-heavy classification detects a dominant copy family');
+  check(classifyArrangeLayout(mixed) === 'default',
+    'mixed unique artwork stays on the legacy search');
+  const keys = (values: string[]) => values.map((duplicateKey, index) => ({
+    id: `classification-${index}`,
+    duplicateKey,
+  }));
+  check(classifyArrangeLayout(keys(['a', 'a', 'b', 'c'])) === 'default',
+    'one repeated pair on a four-item mixed sheet stays default');
+  check(classifyArrangeLayout(keys(['a', 'a', 'a', 'b', 'c'])) === 'duplicate-heavy',
+    'a family owning most of a five-item sheet is duplicate-heavy');
+  check(classifyArrangeLayout(keys(['a', 'a', 'b', 'b', 'c', 'd', 'e', 'f'])) === 'default',
+    'two isolated pairs on an eight-item mixed sheet stay default');
+  check(classifyArrangeLayout(keys(['a', 'a', 'b', 'b', 'c', 'c', 'd', 'd'])) === 'duplicate-heavy',
+    'an eight-item sheet made entirely of repeated families is duplicate-heavy');
+
+  const input = baseInput(repeated, 120, 0.25);
+  const legacy = runArrange({ ...input, layoutPreference: 'default', preferStable: false });
+  const duplicateAware = runArrange({
+    ...input,
+    layoutPreference: 'duplicate-heavy',
+    preferStable: false,
+  });
+  check(billable(duplicateAware.filmHeight) <= billable(legacy.filmHeight),
+    'duplicate-aware search never costs a taller sheet',
+    `${duplicateAware.filmHeight.toFixed(2)}" versus ${legacy.filmHeight.toFixed(2)}"`);
+  const ids = new Set(duplicateAware.result.map(item => item.id));
+  check(ids.size === repeated.length && duplicateAware.result.length === repeated.length,
+    'duplicate-aware search keeps every physical copy separate');
+  const overlap = overlapOf(repeated, duplicateAware.result, 120);
+  check(overlap.cells === 0, 'duplicate-aware search leaves no ink overlap', `${overlap.cells} cells`);
+
+  // Browser workers use structured clone, which preserves Uint8Array mask bits. JSON would
+  // turn them into plain objects and test a transport the editor never uses.
+  const workerRoundTrip = runArrange(structuredClone({
+    ...input,
+    layoutPreference: 'duplicate-heavy',
+    preferStable: false,
+  }) as ArrangeInput);
+  check(
+    JSON.stringify(workerRoundTrip.result) === JSON.stringify(duplicateAware.result)
+      && Math.abs(workerRoundTrip.filmHeight - duplicateAware.filmHeight) < 1e-9
+      && Math.abs(workerRoundTrip.packedExtent - duplicateAware.packedExtent) < 1e-9
+      && Math.abs(workerRoundTrip.minRequiredHeight - duplicateAware.minRequiredHeight) < 1e-9,
+    'duplicate-aware worker serialization matches the synchronous fallback');
+
+  const byId = new Map(repeated.map(design => [design.id, design]));
+  const stable = runArrange({
+    ...input,
+    current: duplicateAware.result.map(item => rectFor(byId)(item, 120)),
+    layoutPreference: 'duplicate-heavy',
+    preferStable: true,
+  });
+  check(billable(stable.filmHeight) <= billable(duplicateAware.filmHeight),
+    'duplicate-aware stable arrange never costs a taller sheet');
+  check(overlapOf(repeated, stable.result, 120).cells === 0,
+    'duplicate-aware stable arrange leaves no ink overlap');
+
+  const locked: Design[] = copies.slice(0, 6).map(copy => ({ ...copy, noRotate: true }));
+  const lockedOut = runArrange({
+    ...baseInput(locked, 60, 0.25),
+    layoutPreference: 'duplicate-heavy',
+    preferStable: false,
+  });
+  check(lockedOut.result.every(item => item.rotation === 0),
+    'duplicate-aware search respects no-rotate items');
 }
 
 console.log(failures === 0
