@@ -3,7 +3,41 @@ import type { ImageInfo, HalftoneSettings, HalftoneStrength } from "@/lib/types"
 import { applyHalftoneScreen } from "@/lib/halftone-core";
 import { runHalftone } from "@/lib/halftone";
 import { stampEditSplit } from "@/lib/edit-split";
+import { measureContentBox } from "@/lib/content-bounds";
+import {
+  cropSourceToBox,
+  geometryAfterTrim,
+  mapContentBox,
+  type TrimResult,
+} from "@/lib/trim-after-edit";
 import type { ImageEditorBagAfterUploadCrop } from "./image-editor-hook-bag.types";
+
+interface CanvasPngAsset {
+  blob: Blob;
+  image: HTMLImageElement;
+}
+
+function canvasToPngAsset(canvas: HTMLCanvasElement): Promise<CanvasPngAsset | null> {
+  return new Promise(resolve => {
+    canvas.toBlob(blob => {
+      if (!blob) {
+        resolve(null);
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const image = new Image();
+      image.onload = () => {
+        URL.revokeObjectURL(url);
+        resolve({ blob, image });
+      };
+      image.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve(null);
+      };
+      image.src = url;
+    }, "image/png");
+  });
+}
 
 /** Apply 1-bit alpha threshold to an ImageInfo, returning a cleaned copy.
  *  Used by handleApplyHalftone to eliminate semi-transparent pixels that can
@@ -46,7 +80,10 @@ export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) 
     selectedDesignIds,
     setDesigns,
     setImageInfo,
+    setResizeSettings,
     saveSnapshot,
+    artboardWidthRef,
+    artboardHeightRef,
   } = bag;
 
   const [halftoneStrength, setHalftoneStrength] = useState<HalftoneStrength>('balanced');
@@ -196,67 +233,153 @@ export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) 
         ctx.putImageData(verify, 0, 0);
       }
 
-      await new Promise<void>((resolve) => {
-        cvs.toBlob(blob => {
-          if (!blob) { resolve(); return; }
-          const url = URL.createObjectURL(blob);
-          const img = new Image();
-          img.onload = () => {
-            URL.revokeObjectURL(url);
-            if (halftoneJobRef.current.get(designId) === job) {
-              const halftoneSettings: HalftoneSettings = {
-                color: { r: tr, g: tg, b: tb },
-                strength,
-              };
-              // The design is read live rather than from the `design` this call
-              // closed over. A screen takes long enough for the artwork to change
-              // underneath it — a crop, most obviously — and committing the stale
-              // `imageInfo` put the pre-crop pixels and print source back, so the
-              // crop silently reverted and the sheet printed uncropped.
-              const current = designsRef.current.find(d => d.id === designId);
-              // Screened from artwork this design no longer has. Whatever
-              // replaced it triggers its own rebuild, so drop this result rather
-              // than screen the sheet from stale pixels.
-              if (!current || (current.halftoneSourceImage ?? current.imageInfo.image) !== src) {
-                resolve();
-                return;
-              }
-              const newInfo: ImageInfo = { ...current.imageInfo, image: img };
-              // halftoned: true  → export pipeline pre-cleans before drawing
-              // alphaThresholded → nearest-neighbour scaling in export so
-              //   bilinear interpolation cannot reintroduce semi-transparent
-              //   edge pixels
-              setDesigns(prev => {
-                const next = prev.map(d => {
-                  if (d.id !== designId) return d;
-                  if ((d.halftoneSourceImage ?? d.imageInfo.image) !== src) return d;
-                  return {
-                    ...d,
-                    imageInfo: { ...d.imageInfo, image: img },
-                    halftoned: true,
-                    halftoneSettings,
-                    halftoneSourceImage: src,
-                    alphaThresholded: true,
-                  };
-                });
-                // A rebuild (`skipSnapshot`) re-screens a look this design already has —
-                // only a customer-initiated screen splits a copy away from its row of
-                // identical siblings. Without that guard, resizing a row of duplicated
-                // halftoned copies would shatter it into one row per copy.
-                return options?.skipSnapshot ? next : stampEditSplit(next, new Set([designId]), "halftone");
-              });
-              if (selectedDesignId === designId) setImageInfo(newInfo);
-            }
-            resolve();
+      let screenedCanvas = cvs;
+      let croppedSourceCanvas: HTMLCanvasElement | null = null;
+      let trim: TrimResult | null = null;
+
+      // A user-triggered halftone can remove the last opaque pixels from the
+      // outside of a frame. Re-run the same exact alpha-bounds scan used after
+      // other destructive pixel edits so the size fields describe the visible
+      // dots, not transparent padding. Resize-driven rebuilds deliberately skip
+      // this: they are maintenance work, not a new crop/undo gesture.
+      if (!options?.skipSnapshot) {
+        const box = await measureContentBox(cvs, { minContentFraction: 0 }).catch(error => {
+          console.warn("[halftone] could not measure screened content bounds", error);
+          return null;
+        });
+        if (halftoneJobRef.current.get(designId) !== job) return;
+
+        if (box) {
+          const sourceBox = mapContentBox(box, procW, procH, w, h);
+          const croppedScreen = cropSourceToBox(cvs, box);
+          const croppedSource = sourceBox ? cropSourceToBox(src, sourceBox) : null;
+          if (croppedScreen && croppedSource) {
+            screenedCanvas = croppedScreen;
+            croppedSourceCanvas = croppedSource;
+            trim = { sourceWidth: procW, sourceHeight: procH, box };
+          }
+        }
+      }
+
+      let [img, croppedSourceImage] = await Promise.all([
+        canvasToPngAsset(screenedCanvas),
+        croppedSourceCanvas ? canvasToPngAsset(croppedSourceCanvas) : Promise.resolve(null),
+      ]);
+      if (halftoneJobRef.current.get(designId) !== job) return;
+
+      // A matching un-screened crop is required for future 300-DPI rebuilds.
+      // If either crop failed to encode, keep the successful halftone but leave
+      // its frame untouched rather than pairing mismatched source/result bounds.
+      if (!img || (trim && !croppedSourceImage)) {
+        trim = null;
+        croppedSourceImage = null;
+        img = await canvasToPngAsset(cvs);
+      }
+      if (!img || halftoneJobRef.current.get(designId) !== job) return;
+
+      const halftoneSettings: HalftoneSettings = {
+        color: { r: tr, g: tg, b: tb },
+        strength,
+      };
+      // The design is read live rather than from the `design` this call closed
+      // over. A screen takes long enough for the artwork to change underneath
+      // it — a crop, most obviously — and committing stale imageInfo would put
+      // the pre-crop pixels and print source back.
+      const current = designsRef.current.find(d => d.id === designId);
+      if (!current || (current.halftoneSourceImage ?? current.imageInfo.image) !== src) return;
+
+      const geometry = trim
+        ? geometryAfterTrim(current, trim, artboardWidthRef.current, artboardHeightRef.current)
+        : null;
+      const committedWidth = geometry?.widthInches ?? current.widthInches;
+      const committedHeight = geometry?.heightInches ?? current.heightInches;
+      const committedScale = Math.max(0.0001, Math.abs(geometry?.transform.s ?? current.transform.s));
+      const actualDpi = Math.max(1, Math.round(Math.min(
+        img.image.naturalWidth / Math.max(0.01, committedWidth * committedScale),
+        img.image.naturalHeight / Math.max(0.01, committedHeight * committedScale),
+      )));
+
+      // Draft recovery persists `imageInfo.file`, not the in-memory
+      // `halftoneSourceImage`. Once the frame is trimmed, promote that matching
+      // un-screened crop to the durable print source. A reload can then decode
+      // it and run the normal restored-halftone rebuild without stretching the
+      // old full frame into the new tight geometry.
+      let sourceFields: Partial<ImageInfo> = {};
+      if (trim && croppedSourceImage) {
+        const originalName = current.imageInfo.file.name || current.name || "design.png";
+        const sourceName = `${originalName.replace(/\.[^/.]+$/, "") || "design"}-halftone-source.png`;
+        const sourceFile = new File([croppedSourceImage.blob], sourceName, {
+          type: "image/png",
+          lastModified: Date.now(),
+        });
+        sourceFields = {
+          file: sourceFile,
+          exportBlob: croppedSourceImage.blob,
+          exportCrop: undefined,
+          svgSource: undefined,
+          originalPdfData: undefined,
+          vectorInkBox: undefined,
+          isPDF: false,
+          originalWidth: croppedSourceImage.image.naturalWidth,
+          originalHeight: croppedSourceImage.image.naturalHeight,
+        };
+      }
+      const newInfo: ImageInfo = {
+        ...current.imageInfo,
+        ...sourceFields,
+        image: img.image,
+        dpi: actualDpi,
+      };
+
+      setDesigns(prev => {
+        const next = prev.map(d => {
+          if (d.id !== designId) return d;
+          if ((d.halftoneSourceImage ?? d.imageInfo.image) !== src) return d;
+          return {
+            ...d,
+            ...(geometry ? {
+              widthInches: geometry.widthInches,
+              heightInches: geometry.heightInches,
+              transform: geometry.transform,
+            } : {}),
+            imageInfo: { ...d.imageInfo, ...sourceFields, image: img.image, dpi: actualDpi },
+            originalDPI: actualDpi,
+            halftoned: true,
+            halftoneSettings,
+            halftoneSourceImage: croppedSourceImage?.image ?? src,
+            alphaThresholded: true,
           };
-          img.onerror = () => { URL.revokeObjectURL(url); resolve(); };
-          img.src = url;
-        }, 'image/png');
+        });
+        // A rebuild (`skipSnapshot`) re-screens a look this design already has —
+        // only a customer-initiated screen splits a copy away from its row of
+        // identical siblings. Without that guard, resizing a row of duplicated
+        // halftoned copies would shatter it into one row per copy.
+        return options?.skipSnapshot ? next : stampEditSplit(next, new Set([designId]), "halftone");
       });
+      if (selectedDesignId === designId) {
+        setImageInfo(newInfo);
+        if (geometry) {
+          setResizeSettings(previous => ({
+            ...previous,
+            widthInches: geometry.widthInches,
+            heightInches: geometry.heightInches,
+          }));
+        }
+      }
     };
 
     void finish();
-  }, [designs, designsRef, selectedDesignId, saveSnapshot, setDesigns, setImageInfo]);
+  }, [
+    designs,
+    designsRef,
+    selectedDesignId,
+    saveSnapshot,
+    setDesigns,
+    setImageInfo,
+    setResizeSettings,
+    artboardWidthRef,
+    artboardHeightRef,
+  ]);
 
   // The editor stores physical size separately from the pixels. Rebuild the
   // screen after a resize so the dot pitch remains 35 LPI at the new printed

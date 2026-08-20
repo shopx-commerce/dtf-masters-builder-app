@@ -29,9 +29,10 @@ async function loadTrimGeometry() {
   return compileDeclarations({
     pieces: [
       extract(source, "MIN_DESIGN_INCHES", "trim-after-edit.ts"),
+      extract(source, "mapContentBox", "trim-after-edit.ts"),
       extract(source, "geometryAfterTrim", "trim-after-edit.ts"),
     ],
-    exports: ["geometryAfterTrim", "MIN_DESIGN_INCHES"],
+    exports: ["geometryAfterTrim", "mapContentBox", "MIN_DESIGN_INCHES"],
   });
 }
 
@@ -106,7 +107,7 @@ function check(name, detail, ok) {
 }
 
 async function main() {
-  const { geometryAfterTrim, MIN_DESIGN_INCHES } = await loadTrimGeometry();
+  const { geometryAfterTrim, mapContentBox, MIN_DESIGN_INCHES } = await loadTrimGeometry();
 
   // A margin taken unevenly on every side, on a canvas that is not square, so
   // no symmetry can hide a mixed-up axis.
@@ -177,6 +178,36 @@ async function main() {
     const dpiBefore = trim.sourceWidth / before.widthInches;
     const dpiAfter = trim.box.width / after.widthInches;
     check("reported DPI unchanged", `${dpiBefore.toFixed(2)} -> ${dpiAfter.toFixed(2)}`, Math.abs(dpiBefore - dpiAfter) < 1e-9);
+  }
+
+  // Halftone can run on a 300-DPI working raster that is smaller than the
+  // retained un-screened source. Its trim box must expand back to source pixels
+  // without dropping any source pixel that contributed to a kept screen pixel.
+  {
+    const screen = { x: 101, y: 53, width: 307, height: 211 };
+    const source = mapContentBox(screen, 997, 631, 4096, 2592);
+    const leadingHeld = source
+      && source.x / 4096 <= screen.x / 997
+      && source.y / 2592 <= screen.y / 631;
+    const trailingHeld = source
+      && (source.x + source.width) / 4096 >= (screen.x + screen.width) / 997
+      && (source.y + source.height) / 2592 >= (screen.y + screen.height) / 631;
+    check(
+      "halftone box maps without clipping",
+      source ? `${source.x},${source.y} ${source.width}x${source.height}` : "no box",
+      !!leadingHeld && !!trailingHeld,
+    );
+  }
+
+  {
+    const box = { x: 12, y: 7, width: 80, height: 40 };
+    const same = mapContentBox(box, 100, 60, 100, 60);
+    const invalid = mapContentBox(box, 0, 60, 100, 60);
+    check(
+      "halftone box identity and invalid guard",
+      `same ${JSON.stringify(same)}, invalid ${invalid}`,
+      JSON.stringify(same) === JSON.stringify(box) && invalid === null,
+    );
   }
 
   // Nothing to trim must mean nothing to change, or clicking the button twice

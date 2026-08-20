@@ -48,7 +48,7 @@ export interface TrimResult {
  * (`vectorExportMaxEdge`), so routing a large trim through the preview helper
  * would quietly halve the resolution of the sheet.
  */
-function cropCanvasToBox(source: HTMLCanvasElement, box: ContentBox): HTMLCanvasElement | null {
+export function cropSourceToBox(source: CanvasImageSource, box: ContentBox): HTMLCanvasElement | null {
   const canvas = document.createElement("canvas");
   canvas.width = box.width;
   canvas.height = box.height;
@@ -59,6 +59,42 @@ function cropCanvasToBox(source: HTMLCanvasElement, box: ContentBox): HTMLCanvas
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(source, box.x, box.y, box.width, box.height, 0, 0, box.width, box.height);
   return canvas;
+}
+
+/**
+ * Translate a content box between two pixel grids that represent the same
+ * artwork frame.
+ *
+ * Halftone runs at the design's current 300-DPI print size, which can be
+ * smaller than the retained un-screened source. Cropping both with the same
+ * integer box would frame different artwork, so map the screened box back to
+ * the source grid. Floor the leading edges and ceil the trailing edges: a
+ * source pixel that contributed to a kept screened pixel must never be lost to
+ * rounding.
+ */
+export function mapContentBox(
+  box: ContentBox,
+  fromWidth: number,
+  fromHeight: number,
+  toWidth: number,
+  toHeight: number,
+): ContentBox | null {
+  if (!(fromWidth > 0) || !(fromHeight > 0) || !(toWidth > 0) || !(toHeight > 0)) {
+    return null;
+  }
+
+  const x = Math.max(0, Math.min(toWidth - 1, Math.floor((box.x * toWidth) / fromWidth)));
+  const y = Math.max(0, Math.min(toHeight - 1, Math.floor((box.y * toHeight) / fromHeight)));
+  const right = Math.max(
+    x + 1,
+    Math.min(toWidth, Math.ceil(((box.x + box.width) * toWidth) / fromWidth)),
+  );
+  const bottom = Math.max(
+    y + 1,
+    Math.min(toHeight, Math.ceil(((box.y + box.height) * toHeight) / fromHeight)),
+  );
+
+  return { x, y, width: right - x, height: bottom - y };
 }
 
 /**
@@ -93,7 +129,7 @@ export function createTrimmingEdit(apply: (canvas: HTMLCanvasElement) => Promise
     result = { sourceWidth, sourceHeight, box };
     if (!box) return;
 
-    const cropped = cropCanvasToBox(canvas, box);
+    const cropped = cropSourceToBox(canvas, box);
     if (!cropped) {
       // The edit itself succeeded, so keep it and leave the frame alone rather
       // than failing the whole removal over a canvas the browser would not give

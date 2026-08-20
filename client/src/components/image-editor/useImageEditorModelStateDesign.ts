@@ -1260,15 +1260,22 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
   const multiResizeStartRef = useRef<Map<string, { nx: number; ny: number; s: number }> | null>(null);
   const multiRotateStartRef = useRef<Map<string, { nx: number; ny: number; rotation: number }> | null>(null);
 
-  const snapshotCacheRef = useRef<{designs: DesignItem[]; json: string; infoMap: Map<string, ImageInfo>} | null>(null);
+  const snapshotCacheRef = useRef<{
+    designs: DesignItem[];
+    json: string;
+    infoMap: Map<string, ImageInfo>;
+    halftoneSourceMap: Map<string, HTMLImageElement>;
+  } | null>(null);
   const getSnapshot = useCallback((): HistorySnapshot => {
     const currentDesigns = designsRef.current;
     let json: string;
     let infoMap: Map<string, ImageInfo>;
+    let halftoneSourceMap: Map<string, HTMLImageElement>;
     const cache = snapshotCacheRef.current;
     if (cache && cache.designs === currentDesigns) {
       json = cache.json;
       infoMap = cache.infoMap;
+      halftoneSourceMap = cache.halftoneSourceMap;
     } else {
        json = JSON.stringify(currentDesigns.map(d => ({
          id: d.id,
@@ -1282,9 +1289,20 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
          editSplit: d.editSplit,
        })));
       infoMap = new Map(currentDesigns.map(d => [d.id, d.imageInfo]));
-      snapshotCacheRef.current = { designs: currentDesigns, json, infoMap };
+      halftoneSourceMap = new Map(
+        currentDesigns.flatMap(d => d.halftoneSourceImage ? [[d.id, d.halftoneSourceImage]] : []),
+      );
+      snapshotCacheRef.current = { designs: currentDesigns, json, infoMap, halftoneSourceMap };
     }
-    return { designsJson: json, selectedDesignId, imageInfoMap: infoMap, artboardWidth: artboardWidthRef.current, artboardHeight: artboardHeightRef.current, manualHeightFloor: manualHeightFloorRef.current };
+    return {
+      designsJson: json,
+      selectedDesignId,
+      imageInfoMap: infoMap,
+      halftoneSourceMap,
+      artboardWidth: artboardWidthRef.current,
+      artboardHeight: artboardHeightRef.current,
+      manualHeightFloor: manualHeightFloorRef.current,
+    };
   }, [selectedDesignId]);
 
   const saveSnapshot = useCallback(() => {
@@ -1310,6 +1328,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       return;
     }
     const infoMap = snap.imageInfoMap ?? new Map<string, unknown>();
+    const halftoneSourceMap = snap.halftoneSourceMap ?? new Map<string, HTMLImageElement>();
     let restoredIds: Set<string> = new Set();
     setDesigns(prev => {
       const lookup = new Map(prev.map(d => [d.id, d]));
@@ -1334,9 +1353,13 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
              // pixel edit that split this copy off must also clear its tag so
              // the copy re-joins its original row (and redo re-splits it).
              editSplit: p.editSplit,
-             // The original source image is retained in-memory when possible;
-             // restored layers reload their original asset before rebuilding.
-             halftoneSourceImage: p.halftoned ? existing.halftoneSourceImage : undefined,
+             // Prefer the source captured with this exact history entry. Falling
+             // back to the live source keeps old snapshots compatible, while
+             // the captured map is what lets redo cross a non-halftoned entry
+             // without screening the already-screened `imageInfo.image`.
+             halftoneSourceImage: p.halftoned
+               ? (halftoneSourceMap.get(p.id) ?? existing.halftoneSourceImage)
+               : undefined,
           };
         }
         if (savedInfo) {
@@ -1351,6 +1374,7 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
              originalDPI: savedInfo.dpi,
              halftoned: p.halftoned,
              halftoneSettings: p.halftoneSettings,
+              halftoneSourceImage: p.halftoned ? halftoneSourceMap.get(p.id) : undefined,
              editSplit: p.editSplit,
            } as DesignItem;
         }

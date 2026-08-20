@@ -4,6 +4,14 @@ export interface HistorySnapshot {
   designsJson: string;
   selectedDesignId: string | null;
   imageInfoMap?: Map<string, unknown>;
+  /**
+   * The un-screened raster retained by a halftoned design.
+   *
+   * `imageInfoMap` holds the screened editor/export image. Keeping the source
+   * separately is what makes redo deterministic: undoing past the halftone
+   * clears the live source, so redo cannot recover it from the current design.
+   */
+  halftoneSourceMap?: Map<string, HTMLImageElement>;
   artboardWidth?: number;
   artboardHeight?: number;
   /**
