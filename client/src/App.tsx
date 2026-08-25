@@ -7,6 +7,7 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import { LanguageProvider } from "@/lib/i18n";
 import Landing from "@/pages/landing";
 import StickerMaker from "@/pages/sticker-maker";
+import DieCutStickerMaker from "@/pages/die-cut-sticker-maker";
 import EmbedPage from "@/pages/embed";
 import NotFound from "@/pages/not-found";
 import { HOT_PEEL_PROFILE, FLUORESCENT_PROFILE, UV_DTF_PROFILE, SPECIALTY_DTF_PROFILE } from "@/lib/profiles";
@@ -21,6 +22,8 @@ function Router() {
       <Route path="/fluorescent">{() => <StickerMaker profile={FLUORESCENT_PROFILE} />}</Route>
       <Route path="/uv-dtf">{() => <StickerMaker profile={UV_DTF_PROFILE} />}</Route>
       <Route path="/specialty-dtf">{() => <StickerMaker profile={SPECIALTY_DTF_PROFILE} />}</Route>
+      <Route path="/die-cut-stickers" component={DieCutStickerMaker} />
+      <Route path="/sticker-maker" component={DieCutStickerMaker} />
       <Route path="/embed" component={EmbedPage} />
       <Route component={NotFound} />
     </Switch>

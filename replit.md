@@ -4,6 +4,14 @@
 
 This is a full-stack web application (branded as AnyNest App) for creating customizable gangsheets and stickers from PNG images. Users can upload images, add white outlines, adjust stroke settings, resize images in inches, and download high-quality 300 DPI print-ready files. The application offers features like shape backgrounds, precise contour generation, and various download modes for professional printing and cutting.
 
+**Die-Cut Stickers builder** (migrated from Sticker Outline / SOW):
+- Home card → `/die-cut-stickers` wizard (upload → size/qty → design)
+- Pricing via `/api/sticker-settings` (preserved area tiers)
+- Production PDF/preview/design state on Cloudflare R2 through AnyNest + DTF proxy shell (`dtf-builder-r2-*`)
+- Checkout: **Add to Cart** (continue shopping) via `dtf-builder-add-to-cart` + **Draft Order** with custom sticker price (`/apps/dtf-builder/api/create-draft-order`)
+- Email: Shopify `order-paid` webhook → SendGrid with R2 production PDF (Reference_Code)
+- Theme: set product metafield `custom.builder_url` = `die-cut-stickers` for the DTF proxy button
+
 ## User Preferences
 
 Preferred communication style: Simple, everyday language.

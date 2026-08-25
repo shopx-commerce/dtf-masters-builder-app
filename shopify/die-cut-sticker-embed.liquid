@@ -1,0 +1,214 @@
+{%- comment -%}
+  Sticker Maker Embed Snippet
+  ===========================
+  Copy this file into your Shopify theme's snippets/ folder as
+  `die-cut-sticker-embed.liquid`, then include it from any page or
+  section template with:
+
+      {% render 'die-cut-sticker-embed' %}
+
+  Add the following to your section's settings schema so the merchant
+  can enter the app URL once in the theme editor:
+
+      {
+        "type": "text",
+        "id": "sticker_app_url",
+        "label": "Sticker App URL",
+        "info": "Full URL of your deployed sticker app, e.g. https://your-anynest-app.example.com",
+        "default": "https://your-anynest-app.example.com"
+      }
+
+  How pricing stays in sync with Shopify:
+    - All variant prices are embedded as a JSON map using {{ product.variants | json }}.
+      This is authoritative — no dependency on data-price DOM attributes.
+    - The selected variant's price (in cents) is appended as ?variantPrice=<cents>
+      to the /api/sticker-settings URL.
+    - The endpoint derives extraFeeFlat so the designer's total for the default
+      size + qty exactly matches the Shopify variant price (negative adjustments
+      are supported to handle variants priced below the base cost floor).
+    - parentOrigin uses request.host (the live storefront domain) so postMessage
+      security works correctly on custom domains, not just *.myshopify.com.
+    - Variant changes are detected via select/input/change events AND the Shopify
+      section:variant:changed custom event, covering most Shopify theme patterns.
+{%- endcomment -%}
+
+{%- liquid
+  assign app_url = section.settings.sticker_app_url | default: ''
+  if app_url == blank
+    assign app_url = 'https://your-anynest-app.example.com'
+  endif
+  assign app_url = app_url | remove_last: '/'
+
+  assign shop_domain       = shop.permanent_domain
+  assign storefront_origin = 'https://' | append: request.host
+
+  assign selected_variant  = product.selected_or_first_available_variant
+  assign variant_id        = selected_variant.id    | default: ''
+  assign variant_price     = selected_variant.price | default: 0
+-%}
+
+{%- comment -%}
+  settingsUrl uses /api/sticker-settings — a direct browser fetch that does not
+  go through Shopify's app proxy and therefore does not require a Shopify signature.
+  /apps/sticker-settings is the separate app-proxy path Shopify calls server-to-server.
+{%- endcomment -%}
+{%- capture settings_url -%}
+  {{- app_url -}}/api/sticker-settings?shop={{- shop_domain | url_encode -}}&variantId={{- variant_id -}}&variantPrice={{- variant_price -}}
+{%- endcapture -%}
+
+{%- capture iframe_url -%}
+  {{- app_url -}}/die-cut-stickers?embed=true&parentOrigin={{- storefront_origin | url_encode -}}&settingsUrl={{- settings_url | strip | url_encode -}}{%- if product.handle -%}&productHandle={{- product.handle | url_encode -}}{%- endif -%}{%- if variant_id -%}&variantId={{- variant_id -}}{%- endif -%}
+{%- endcapture -%}
+
+<div
+  class="die-cut-sticker-embed-wrapper"
+  data-app-url="{{ app_url | escape }}"
+  data-storefront-origin="{{ storefront_origin | escape }}"
+  data-shop-domain="{{ shop_domain | escape }}"
+  style="width:100%; position:relative;"
+>
+  <iframe
+    id="sticker-maker-iframe"
+    src="{{ iframe_url | strip_newlines | strip }}"
+    title="Custom Sticker Designer"
+    allow="clipboard-write"
+    style="width:100%; min-height:780px; border:none; display:block;"
+    loading="lazy"
+  ></iframe>
+</div>
+
+{%- comment -%}
+  Embed all variant prices (in cents) as a JSON map keyed by variant ID.
+  This is the authoritative price source for variant-change JS logic below.
+{%- endcomment -%}
+<script id="sticker-maker-variant-prices" type="application/json">
+  {
+    {%- for v in product.variants -%}
+      {{ v.id | json }}: {{ v.price }}{%- unless forloop.last -%},{%- endunless -%}
+    {%- endfor -%}
+  }
+</script>
+
+<script>
+(function () {
+  var appUrl           = {{ app_url | json }};
+  var shopDomain       = {{ shop_domain | json }};
+
+  var iframe = document.getElementById('sticker-maker-iframe');
+  if (!iframe) return;
+
+  // Build a reliable variantId → priceCents map from the embedded Liquid JSON.
+  // This never depends on data-price attributes which are theme-specific.
+  var variantPriceMap = {};
+  try {
+    var blob = document.getElementById('sticker-maker-variant-prices');
+    if (blob) variantPriceMap = JSON.parse(blob.textContent || '{}');
+  } catch (e) { /* fall back to initial values */ }
+
+  // Track the currently selected variant, seeded from Liquid context.
+  var currentVariantId    = String({{ variant_id | default: 0 }});
+  var currentVariantPrice = Number({{ variant_price | default: 0 }});
+
+  // Fetch /api/sticker-settings anchored to the variant price, then post
+  // SHOP_STICKER_SETTINGS into the designer iframe.
+  // Uses /api/ (not /apps/) because this is a direct browser fetch — it does
+  // not go through Shopify's app proxy and has no Shopify signature.
+  function sendSettings(variantId, variantPriceCents) {
+    var url = appUrl + '/api/sticker-settings?shop=' + encodeURIComponent(shopDomain);
+    if (variantId)         url += '&variantId='    + encodeURIComponent(variantId);
+    if (variantPriceCents) url += '&variantPrice=' + encodeURIComponent(variantPriceCents);
+
+    fetch(url, { credentials: 'omit', headers: { Accept: 'application/json' } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (settings) {
+        if (!settings || typeof settings.version !== 'number') return;
+        try {
+          iframe.contentWindow.postMessage(
+            { type: 'SHOP_STICKER_SETTINGS', settings: settings },
+            appUrl
+          );
+        } catch (e) { /* cross-origin guard */ }
+      })
+      .catch(function () { /* network error — designer falls back to built-ins */ });
+  }
+
+  // On variant ID change: look up price from the embedded map and re-push settings.
+  function onVariantChanged(newVariantId) {
+    var newVariantIdStr = String(newVariantId || '');
+    if (!newVariantIdStr) return;
+
+    var newPrice = variantPriceMap[newVariantIdStr];
+    if (newPrice === undefined) newPrice = currentVariantPrice;
+
+    currentVariantId    = newVariantIdStr;
+    currentVariantPrice = Number(newPrice);
+
+    // Notify the designer of the raw change (for any listeners it may have)
+    try {
+      iframe.contentWindow.postMessage(
+        { type: 'SHOPIFY_VARIANT_CHANGED', variantId: currentVariantId, variantPrice: currentVariantPrice },
+        appUrl
+      );
+    } catch (e) { /* ignore */ }
+
+    sendSettings(currentVariantId, currentVariantPrice);
+  }
+
+  // --- Respond to the designer's settings handshake request ---
+  window.addEventListener('message', function (ev) {
+    if (ev.origin !== appUrl) return;
+    var data = ev.data;
+    if (!data || typeof data !== 'object') return;
+    if (data.type !== 'STICKER_EMBED_REQUEST_SETTINGS') return;
+    sendSettings(currentVariantId, currentVariantPrice);
+  });
+
+  // --- Auto-resize iframe to reported content height ---
+  window.addEventListener('message', function (ev) {
+    if (ev.origin !== appUrl) return;
+    var data = ev.data;
+    if (data && data.type === 'STICKER_EMBED_HEIGHT' && typeof data.height === 'number') {
+      iframe.style.height = data.height + 'px';
+    }
+  });
+
+  // --- Variant change detection: covers multiple Shopify theme patterns ---
+
+  // Pattern 1: Standard <select name="id"> (default and many free themes)
+  // Pattern 2: Hidden <input name="id"> updated by swatch/button pickers
+  // Pattern 3: Radio <input type="radio" name="id">
+  document.addEventListener('change', function (ev) {
+    var el = ev.target;
+    if (!el) return;
+    var tag  = (el.tagName || '').toUpperCase();
+    var name = (el.name  || '').toLowerCase();
+    if ((tag === 'SELECT' || tag === 'INPUT') && (name === 'id' || name === 'variant-id')) {
+      onVariantChanged(el.value);
+    }
+  });
+
+  // Pattern 4: Shopify section events fired by Dawn/Debut and many paid themes.
+  // The event detail varies by theme but most include variantId or variant.id.
+  document.addEventListener('variant:changed', function (ev) {
+    var d = ev.detail || {};
+    var id = (d.variant && d.variant.id) || d.variantId || d.variant_id;
+    if (id) onVariantChanged(id);
+  });
+
+  // Pattern 5: Custom 'change' on the product form (some themes dispatch this).
+  document.addEventListener('product:variant-change', function (ev) {
+    var d = ev.detail || {};
+    var id = (d.variant && d.variant.id) || d.variantId;
+    if (id) onVariantChanged(id);
+  });
+
+  // Pattern 6: Shopify section rendering events (theme updates hidden input
+  // after fetching the new variant section, not a real DOM change event).
+  document.addEventListener('shopify:section:load', function () {
+    var hiddenInput = document.querySelector('input[name="id"][form]');
+    if (hiddenInput && hiddenInput.value !== currentVariantId) {
+      onVariantChanged(hiddenInput.value);
+    }
+  });
+})();
+</script>
