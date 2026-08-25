@@ -1,6 +1,6 @@
 /** Product card icons - t-shirt for garment transfers, sticker for UV decals */
 
-import { Shirt } from "lucide-react";
+import { Shirt, Sticker } from "lucide-react";
 
 /** Custom panda SVG - Lucide Panda added in 0.507+, project uses 0.453 */
 function PandaIcon({ className }: { className?: string }) {
@@ -43,4 +43,8 @@ export function IconUvDtf({ className = "w-8 h-8" }: { className?: string }) {
 
 export function IconSpecialtyColdPeel({ className = "w-8 h-8" }: { className?: string }) {
   return <Shirt className={className} strokeWidth={2} />;
+}
+
+export function IconDieCutStickers({ className = "w-8 h-8" }: { className?: string }) {
+  return <Sticker className={className} strokeWidth={2} />;
 }

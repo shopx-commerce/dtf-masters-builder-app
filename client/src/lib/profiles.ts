@@ -60,7 +60,25 @@ export const SPECIALTY_DTF_PROFILE: ProfileConfig = {
   description: 'Use a parchment paper or teflon sheet over the transfer, press at 325F for 15 seconds and peel completely COLD! will not work on canvas material but it works on cotton/polyester tshirts.',
 };
 
-export const ALL_PROFILES = [HOT_PEEL_PROFILE, UV_DTF_PROFILE, SPECIALTY_DTF_PROFILE, FLUORESCENT_PROFILE];
+export const DIE_CUT_STICKER_PROFILE: ProfileConfig = {
+  id: 'die-cut-stickers',
+  name: 'Die-Cut Stickers',
+  title: 'DIE-CUT STICKERS',
+  route: '/die-cut-stickers',
+  artboardWidth: 12,
+  gangsheetHeights: [],
+  downloadFormat: 'pdf',
+  enableFluorescent: false,
+  description: 'Custom die-cut stickers with contour cutlines, size/quantity pricing, and Shopify checkout with production PDFs on Cloudflare R2.',
+};
+
+export const ALL_PROFILES = [
+  HOT_PEEL_PROFILE,
+  UV_DTF_PROFILE,
+  SPECIALTY_DTF_PROFILE,
+  DIE_CUT_STICKER_PROFILE,
+  FLUORESCENT_PROFILE,
+];
 
 export function getProfileById(id: string): ProfileConfig {
   return ALL_PROFILES.find(p => p.id === id) ?? HOT_PEEL_PROFILE;

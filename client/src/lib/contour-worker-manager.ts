@@ -38,6 +38,8 @@ export type ContourMode = 'smooth' | 'scattered';
 export interface ContourData {
   pathPoints: Array<{x: number; y: number}>;
   previewPathPoints: Array<{x: number; y: number}>;
+  allPreviewPathPoints?: Array<Array<{x: number; y: number}>>;
+  allPathPoints?: Array<Array<{x: number; y: number}>>;
   widthInches: number;
   heightInches: number;
   imageOffsetX: number;
