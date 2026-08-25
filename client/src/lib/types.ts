@@ -1,5 +1,13 @@
 import type { VectorInkBox } from "./vector-trim";
 
+export interface PDFCutContourInfo {
+  hasCutContour: boolean;
+  cutContourPath: Path2D | null;
+  cutContourPoints: { x: number; y: number }[][];
+  pageWidth: number;
+  pageHeight: number;
+}
+
 export interface ImageInfo {
   file: File;
   image: HTMLImageElement;
@@ -7,6 +15,7 @@ export interface ImageInfo {
   originalHeight: number;
   dpi: number;
   isPDF?: boolean;
+  pdfCutContourInfo?: PDFCutContourInfo;
   /** Retained PDF bytes. Re-rendered at the placement size during export so
    *  large designs print from the page geometry instead of the import preview. */
   originalPdfData?: ArrayBuffer;
@@ -30,11 +39,74 @@ export interface ImageInfo {
   exportCrop?: { x: number; y: number; width: number; height: number };
 }
 
+export type ContourCornerMode = "rounded" | "sharp";
+export type ContourAlgorithm = "shapes" | "complex";
+
+export interface StrokeSettings {
+  width: number;
+  color: string;
+  enabled: boolean;
+  alphaThreshold: number;
+  backgroundColor: string;
+  useCustomBackground: boolean;
+  cornerMode: ContourCornerMode;
+  autoBridging: boolean;
+  autoBridgingThreshold: number;
+  algorithm?: ContourAlgorithm;
+}
+
+export type StrokeMode = "none" | "contour" | "shape";
+
 export interface ResizeSettings {
   widthInches: number;
   heightInches: number;
   maintainAspectRatio: boolean;
   outputDPI: number;
+}
+
+export interface ShapeSettings {
+  enabled: boolean;
+  type:
+    | "square"
+    | "rectangle"
+    | "circle"
+    | "oval"
+    | "rounded-square"
+    | "rounded-rectangle";
+  offset: number;
+  fillColor: string;
+  strokeEnabled: boolean;
+  strokeWidth: number;
+  strokeColor: string;
+  cornerRadius?: number;
+  bleedEnabled?: boolean;
+  bleedColor?: string;
+  widthInches?: number;
+  heightInches?: number;
+  offsetX?: number;
+  offsetY?: number;
+}
+
+export type CutlineVisibility = "thin" | "normal" | "bold";
+export type StickerSize = number;
+
+export const STICKER_SIZES: { value: StickerSize; label: string }[] = [
+  { value: 2, label: "2 inch" },
+  { value: 2.5, label: "2.5 inch" },
+  { value: 3, label: "3 inch" },
+  { value: 3.5, label: "3.5 inch" },
+  { value: 4, label: "4 inch" },
+  { value: 4.5, label: "4.5 inch" },
+  { value: 5, label: "5 inch" },
+  { value: 5.5, label: "5.5 inch" },
+  { value: 6, label: "6 inch" },
+];
+
+export interface SpotColorData {
+  hex: string;
+  rgb: { r: number; g: number; b: number };
+  spotWhite: boolean;
+  spotGloss: boolean;
 }
 
 export interface ImageTransform {
@@ -46,7 +118,7 @@ export interface ImageTransform {
   flipY?: boolean;
 }
 
-export type HalftoneStrength = 'light' | 'balanced' | 'strong';
+export type HalftoneStrength = "light" | "balanced" | "strong";
 
 export interface HalftoneSettings {
   color: { r: number; g: number; b: number };
@@ -62,29 +134,10 @@ export interface DesignItem {
   name: string;
   originalDPI: number;
   alphaThresholded?: boolean;
-  /** Set by the halftone tool. Export pipeline pre-cleans halftoned designs to
-   *  guarantee binary alpha (0 or 255) and uses nearest-neighbour scaling so
-   *  bilinear interpolation cannot reintroduce semi-transparent edge pixels. */
   halftoned?: boolean;
-  /** Settings used to rebuild the halftone when its physical size changes. */
   halftoneSettings?: HalftoneSettings;
-  /** Original pixels kept in memory so resizing never halftones the halftone. */
   halftoneSourceImage?: HTMLImageElement;
   printFileName?: boolean;
-  /**
-   * User-defined group membership. Designs sharing the same `groupId` are
-   * treated as a single unit by:
-   *   - selection (clicking any member selects the whole group)
-   *   - auto-arrange (the group is packed as one super-item whose bounding
-   *     box is preserved so intra-group layout stays intact)
-   *
-   * `undefined` means "not grouped". Empty string is not valid — always
-   * omit the field instead. This design uses a shared id (rather than a
-   * separate `groups: Map<id, Set<id>>` structure) because it round-trips
-   * through the existing snapshot + draft-persistence pipelines without a
-   * migration, and because there is no case in the app where a design
-   * belongs to more than one group at once.
-   */
   groupId?: string;
   /**
    * Present on a copy whose pixels were edited away from its row siblings
@@ -113,13 +166,10 @@ export function computeLayerRect(
 ): { x: number; y: number; width: number; height: number } {
   const designWidthPx = (imageWidthInches / artboardWidthInches) * artboardWidthPx;
   const designHeightPx = (imageHeightInches / artboardHeightInches) * artboardHeightPx;
-
   const finalWidth = designWidthPx * transform.s;
   const finalHeight = designHeightPx * transform.s;
-
   const cx = transform.nx * artboardWidthPx;
   const cy = transform.ny * artboardHeightPx;
-
   return {
     x: cx - finalWidth / 2,
     y: cy - finalHeight / 2,

@@ -1,8 +1,11 @@
 import { existsSync } from "node:fs";
 import express, { type Request, Response, NextFunction } from "express";
 import helmet from "helmet";
-import { registerRoutes } from "./routes";
+import { loadClientEnv } from "./load-env";
+import { registerRoutes, runCleanup } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+
+loadClientEnv();
 
 // Replit injects secrets straight into the environment. Local runs have no
 // such mechanism, so an optional .env file is the only way to supply keys
@@ -81,8 +84,9 @@ if (frameAncestors) {
   });
 }
 
-app.use(express.json({ limit: '25mb' }));
-app.use(express.urlencoded({ extended: false, limit: '5mb' }));
+// Die-cut sticker PDFs are base64 in JSON — allow larger payloads
+app.use(express.json({ limit: "100mb" }));
+app.use(express.urlencoded({ extended: false, limit: "25mb" }));
 
 app.use((req, res, next) => {
   const start = Date.now();
@@ -98,16 +102,14 @@ app.use((req, res, next) => {
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
-      const safePath = path.replace(/[\x00-\x1f\x7f]/g, '');
+      const safePath = path.replace(/[\x00-\x1f\x7f]/g, "");
       let logLine = `${req.method} ${safePath} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
         logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
       }
-
       if (logLine.length > 80) {
         logLine = logLine.slice(0, 79) + "…";
       }
-
       log(logLine);
     }
   });
@@ -131,9 +133,6 @@ app.use((req, res, next) => {
     res.status(status).json({ message });
   });
 
-  // importantly only setup vite in development and after
-  // setting up all the other routes so the catch-all route
-  // doesn't interfere with the other routes
   if (app.get("env") === "development") {
     await setupVite(app, server);
   } else {
@@ -141,10 +140,19 @@ app.use((req, res, next) => {
   }
 
   const port = Number(process.env.PORT) || 5000;
-  server.listen({
-    port,
-    host: "0.0.0.0",
-  }, () => {
-    log(`serving on port ${port}`);
-  });
+  server.listen(
+    {
+      port,
+      host: "0.0.0.0",
+    },
+    () => {
+      log(`serving on port ${port}`);
+      const dayMs = 24 * 60 * 60 * 1000;
+      setInterval(() => {
+        runCleanup().catch((err) =>
+          console.warn("[cleanup] scheduled run failed:", err),
+        );
+      }, dayMs);
+    },
+  );
 })();

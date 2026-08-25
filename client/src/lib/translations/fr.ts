@@ -33,6 +33,12 @@ export const fr: Record<string, string> = {
   "landing.specialty.bullet3": "Non recommandé pour la toile",
   "landing.specialty.press": "325°F • 15s • peler complètement à froid",
 
+  "landing.dieCut.subline": "Autocollants découpés sur mesure avec lignes de coupe précises et tarification checkout.",
+  "landing.dieCut.bullet1": "Contour ou formes pour impression et découpe",
+  "landing.dieCut.bullet2": "Taille, quantité, finition et prix en direct",
+  "landing.dieCut.bullet3": "Checkout Shopify avec PDF de production sur R2",
+  "landing.dieCut.press": "Importer → styliser la coupe → ajouter au panier",
+
   "editor.back": "Retour",
   "editor.noProductSelected": "Aucun produit sélectionné",
   "editor.tips": "Vous avez des suggestions pour améliorer l'appli ? Envoyez-les-nous !",

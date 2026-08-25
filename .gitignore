@@ -3,6 +3,8 @@ dist
 .env
 .env.local
 vendor/realesrgan-ncnn-vulkan/
+.env.*
+!.env.example
 # Copied out of pdfjs-dist at build time by the pdfjsAssets plugin.
 client/public/pdfjs/
 # Copied out of onnxruntime-web at build time by the ortAssets plugin.

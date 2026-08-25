@@ -33,6 +33,12 @@ export const es: Record<string, string> = {
   "landing.specialty.bullet3": "No recomendado para lona",
   "landing.specialty.press": "325°F • 15s • pelar completamente en frío",
 
+  "landing.dieCut.subline": "Stickers troquelados a medida con líneas de corte precisas y precios listos para checkout.",
+  "landing.dieCut.bullet1": "Contorno o formas para impresión y corte",
+  "landing.dieCut.bullet2": "Tamaño, cantidad, acabado y precio en vivo",
+  "landing.dieCut.bullet3": "Checkout de Shopify con PDFs de producción en R2",
+  "landing.dieCut.press": "Sube arte → estiliza el corte → añade al carrito",
+
   "editor.back": "Volver",
   "editor.noProductSelected": "Ningún producto seleccionado",
   "editor.tips": "¿Tienes sugerencias o ideas para mejorar la app? ¡Envíalas!",
