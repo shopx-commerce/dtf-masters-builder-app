@@ -134,6 +134,27 @@ export default function ImageEditorView() {
   const [toolsCollapseSignal, setToolsCollapseSignal] = useState(0);
   const [alignRotatePanelOpen, setAlignRotatePanelOpen] = useState(false);
   /**
+   * A selected design remains active after the customer closes its sizing sheet.
+   *
+   * Selection cannot double as sheet visibility here: on a phone, closing the controls is
+   * specifically how someone gets the sheet out of the way while continuing to drag the
+   * selected artwork. Selecting a different design (or clearing selection) naturally makes
+   * the contextual sheet available again.
+   */
+  const mobileContextSelectionKey = useMemo(() => {
+    if (!selectedDesignId) return null;
+    // The primary design is included explicitly because single-selection mode does not have
+    // to mirror it in the multi-selection set. Sorting makes marquee/layer selection order
+    // irrelevant while still noticing every added or removed design.
+    return JSON.stringify([...new Set([selectedDesignId, ...selectedDesignIds])].sort());
+  }, [selectedDesignId, selectedDesignIds]);
+  const [dismissedContextSelectionKey, setDismissedContextSelectionKey] = useState<string | null>(null);
+  useEffect(() => {
+    setDismissedContextSelectionKey((dismissedKey) =>
+      dismissedKey && dismissedKey !== mobileContextSelectionKey ? null : dismissedKey
+    );
+  }, [mobileContextSelectionKey]);
+  /**
    * Where the canvas's backdrop-colour swatches land on the phone: the right-hand end of the
    * view bar, which is on screen for the whole session.
    */
@@ -993,8 +1014,30 @@ export default function ImageEditorView() {
                   /* All three sheets are `bottom-0 z-40`; only one is ever
                      mounted so they cannot stack. Closing either summoned sheet
                      brings the contextual one straight back. */
-                  open={!!selectedDesignId && !layersOpen && !designToolsOpen}
+                  open={
+                    !!selectedDesignId
+                    && mobileContextSelectionKey !== dismissedContextSelectionKey
+                    && !layersOpen
+                    && !designToolsOpen
+                  }
+                  testId="mobile-context-sheet"
                   handleLabel={t("editor.toolSheetHandle")}
+                  handleLeading={
+                    <button
+                      type="button"
+                      data-testid="mobile-context-sheet-close"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDismissedContextSelectionKey(mobileContextSelectionKey);
+                      }}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      className="flex h-11 w-11 items-center justify-center text-gray-500 hover:text-gray-800"
+                      aria-label={t("editor.closeSizingTools")}
+                      title={t("editor.closeSizingTools")}
+                    >
+                      <X className="h-6 w-6" />
+                    </button>
+                  }
                   handleAccessory={
                     <>
                       {/* Lives here rather than inside the size panel below, where

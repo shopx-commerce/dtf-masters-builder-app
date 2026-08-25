@@ -395,28 +395,30 @@ export default function MobileToolSheet({
           : `height ${SPRING_MS}ms ${SPRING}, bottom ${SPRING_MS}ms ${SPRING}`,
       }}
     >
-      <div
-        role="button"
-        tabIndex={0}
-        aria-label={handleLabel}
-        title={handleLabel}
-        data-testid={`${testId}-handle`}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            advance();
-          }
-        }}
-        className="relative flex flex-shrink-0 cursor-grab items-center justify-center active:cursor-grabbing"
-        style={{ height: handleH, touchAction: "none" }}
-      >
-        <span className="block h-1 w-9 rounded-full bg-gray-300" />
+      <div className="relative flex flex-shrink-0" style={{ height: handleH }}>
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label={handleLabel}
+          title={handleLabel}
+          data-testid={`${testId}-handle`}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              advance();
+            }
+          }}
+          className="absolute inset-0 flex cursor-grab items-center justify-center active:cursor-grabbing"
+          style={{ touchAction: "none" }}
+        >
+          <span className="block h-1 w-9 rounded-full bg-gray-300" />
+        </div>
         {handleLeading && (
-          <span className="absolute left-1 top-1/2 -translate-y-1/2 flex items-center">{handleLeading}</span>
+          <span className="absolute left-1 top-1/2 z-10 flex -translate-y-1/2 items-center">{handleLeading}</span>
         )}
         {handleAccessory && (
           <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2">

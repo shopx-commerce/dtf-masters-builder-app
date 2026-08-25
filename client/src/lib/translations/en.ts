@@ -149,6 +149,7 @@ export const en: Record<string, string> = {
 
   "editor.designTools": "Design tools",
   "editor.closeDesignTools": "Close design tools",
+  "editor.closeSizingTools": "Hide sizing and design options",
   "editor.designToolsHandle": "Design tools",
   "editor.designToolsExpand": "Tap to show design tools",
   "editor.wandActiveHint": "Tap the design to erase",
