@@ -22,6 +22,7 @@ import {
   estimateFillCount,
   planNextFillPass,
   type FillPassOutcome,
+  type FillStopReason,
 } from "@/lib/fill-sheet";
 import { DEFAULT_SHEET_MARGIN, planBandReseat, planLadderJump, planSheetShrink } from "@/lib/sheet-fit";
 import { isUploadBatchActive } from "@/lib/upload-queue";
@@ -79,6 +80,17 @@ function pickFillReference(designs: DesignItem[], selectedDesignId: string | nul
     a.widthInches * a.transform.s * getEffectiveHeight(a) <=
     b.widthInches * b.transform.s * getEffectiveHeight(b) ? a : b
   );
+}
+
+/**
+ * The tighter of two upper brackets for Fill Sheet's capacity search.
+ *
+ * The search moves up as well as down, so the counts it has seen refused do not arrive in
+ * order. Only the smallest of them is worth keeping: a larger one has already been ruled
+ * out by it, and bisecting against the larger would re-try counts that are known to fail.
+ */
+function lowerBracket(current: number | null, refused: number): number {
+  return current === null ? refused : Math.min(current, refused);
 }
 
 /** A design as Fill Sheet's capacity arithmetic sees it: a physical footprint in inches. */
@@ -825,6 +837,15 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       noGrowRestoreRef.current = null;
       /** Reported to `onSettled`: how many expendable copies this run spent. */
       let trimmedCount = 0;
+      /**
+       * Of those, the ones that belong to *earlier* passes of a fill.
+       *
+       * A run can trim and then still revert: the trim clears every overflowing copy, and
+       * an original can be left overflowing anyway. The revert takes back this pass's
+       * copies, but the earlier ones the trim deleted stay deleted — so a fill that counted
+       * them as still on the sheet would be tracking a count the customer cannot see.
+       */
+      let trimmedFromEarlierPasses = 0;
       // Fill Sheet deliberately overshoots its copy count and lets this trim
       // settle the difference: copies the packer could not fit are deleted
       // here, before overflow can grow the sheet or raise the "no space"
@@ -850,6 +871,10 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
           // A trim is Fill Sheet's stop signal: the packer was handed more copies than the
           // film could take, which is the only honest evidence that the sheet is full.
           trimmedCount = removeIds.size;
+          const thisPass = opts.revertIds;
+          trimmedFromEarlierPasses = thisPass
+            ? [...removeIds].filter(id => !thisPass.has(id)).length
+            : removeIds.size;
         }
       }
       // Pack properly before concluding the sheet is full.
@@ -906,7 +931,9 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         if (!opts.onSettled) {
           toast({ title: t("toast.noSpace"), description: t("toast.noSpaceDesc"), variant: "destructive" });
         }
-        finishArrange({ trimmed: trimmedCount, reverted: true, packed: false, frozenMs });
+        // Only the copies that are gone for good. This pass's own are accounted for by the
+        // revert itself, and counting them twice would walk a fill's tally below zero.
+        finishArrange({ trimmed: trimmedFromEarlierPasses, reverted: true, packed: false, frozenMs });
         return;
       }
       if (!opts?.noGrow && hasOverflow && artboardHeightRef.current < MAX_ARTBOARD_HEIGHT && ladderStep < maxLadderSteps) {
@@ -1349,19 +1376,30 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       }));
     };
 
-    const endFill = () => {
+    /**
+     * `reason` is how the search ended, or `'abandoned'` when the arrange never got as far
+     * as packing — a broken image, no worker, a superseded generation, a watchdog.
+     */
+    const endFill = (reason: FillStopReason | 'abandoned') => {
       if (session.watchdog !== null) clearTimeout(session.watchdog);
       session.watchdog = null;
       fillActiveRef.current = false;
       // The last pass released the arrange lock itself; all that is left is the veil this
       // loop has been holding up across the gaps between passes.
       setArrangeStage(stage => (stage === 'filling' ? null : stage));
-      // Silence is the success case — the customer can see the copies. Only a fill that
-      // achieved nothing needs to account for itself, and "already full" is information
-      // rather than a failure, so it is not raised as one.
-      if (session.added <= 0) {
+      // Silence is the success case — the customer can see the copies.
+      if (session.added > 0) return;
+      // "Full" is a claim about the film, and only one ending earns it: the search came all
+      // the way down to a single copy and the packer refused even that. Every other way of
+      // arriving here — a layout the packer could not settle, a budget spent, a pass that
+      // never reported — is this feature failing to do its job, and saying "sheet is full"
+      // there sends the customer off to buy film they do not need. They can see the space.
+      if (reason === 'nothingFits') {
         toast({ title: t("toast.fillNoRoom"), description: t("toast.fillNoRoomDesc") });
+        return;
       }
+      console.warn(`[fillSheet] ended with nothing added: ${reason}`);
+      toast({ title: t("toast.fillIncomplete"), description: t("toast.fillIncompleteDesc") });
     };
 
     /** Undo the pass in flight, whose copies were never placed anywhere. */
@@ -1391,18 +1429,23 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       // other in the middle of the sheet, so take them back off and stop.
       if (!outcome.packed && !outcome.reverted) {
         rollBackPass();
-        endFill();
+        endFill('abandoned');
         return;
       }
       if (outcome.reverted) {
-        // Not evidence about capacity: the pack fell over on the customer's own designs, so
-        // it says nothing about how many copies the film would take. The bracket stands.
+        // A refusal of this count, even though it is not a measurement of the film. The
+        // packer would not lay the sheet out with this many items on it, and asking again
+        // for the same number is the one thing guaranteed not to work — which is exactly
+        // what a fill used to do before giving up and calling the sheet full.
+        session.highFail = lowerBracket(session.highFail, session.added);
         for (const id of session.lastBatchIds) session.fillIds.delete(id);
-        session.added -= session.lastBatch;
+        // The batch that was taken back, plus any copies from earlier passes the trim
+        // removed on the way — those are off the sheet and are not coming back.
+        session.added -= session.lastBatch + outcome.trimmed;
       } else if (outcome.trimmed > 0) {
         // `added` still counts the copies this pass appended, so it is the count the packer
         // was asked for and refused — the upper bracket of the search.
-        session.highFail = session.added;
+        session.highFail = lowerBracket(session.highFail, session.added);
         session.added -= outcome.trimmed;
       }
 
@@ -1428,7 +1471,7 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         runPass(plan.batch, plan.stable);
         return;
       }
-      endFill();
+      endFill(plan.reason);
     };
 
     const runPass = (batch: number, stable: boolean) => {
@@ -1447,37 +1490,56 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         // failing the generation check makes it drop its result and release the lock.
         arrangeGenerationRef.current++;
         rollBackPass();
-        endFill();
+        endFill('abandoned');
       }, FILL_PASS_WATCHDOG_MS);
       requestAnimationFrame(() => {
         // Nothing saved to put back: a pass that cannot honour `noGrow` undoes itself by
         // deleting the copies it added, which leaves the copies earlier passes placed —
         // and anything the customer did meanwhile — untouched. See `revertIds`.
         noGrowRestoreRef.current = null;
-        handleAutoArrangeRef.current({
-          skipSnapshot: true,
-          // Selection survives for feedback, but `arrangeAll` keeps the packer
-          // in whole-sheet mode — selected-only mode treats everything else as
-          // fixed obstacles and would stack the new copies into a column.
-          preserveSelection: true,
-          arrangeAll: true,
-          fullRepack: !stable,
-          // A stable rescue must not be talked out of being stable: the repack retry inside
-          // `applyResult` exists to check a stable pack's overflow against a fresh one, and
-          // a fresh pack is exactly what just failed to place the customer's own designs.
-          repacked: stable,
-          trimOverflow: true,
-          noGrow: true,
-          noShrink: true,
-          // Cumulative, not just this batch. A later pass re-packs everything, and a copy
-          // from an earlier pass that no longer fits has to stay expendable — treated as a
-          // customer original it would revert the pass instead of simply being trimmed.
-          fillIds: new Set(session.fillIds),
-          // Only this pass's copies. Everything the fill has placed so far has earned its
-          // spot on the film and a failure here is not a reason to take it back.
-          revertIds: new Set(session.lastBatchIds),
-          onSettled: onPassSettled,
-        });
+        // Nothing above this call has a `finally`, and it is called from a frame callback
+        // where a throw goes to the window and nowhere useful. Unhandled, it would leave
+        // `fillActiveRef` set for the life of the page: the button would do nothing, every
+        // click swallowed by the one-fill-at-a-time guard, with no error and no way back
+        // short of a reload. A fill that fails must fail once.
+        try {
+          handleAutoArrangeRef.current({
+            skipSnapshot: true,
+            // Selection survives for feedback, but `arrangeAll` keeps the packer
+            // in whole-sheet mode — selected-only mode treats everything else as
+            // fixed obstacles and would stack the new copies into a column.
+            preserveSelection: true,
+            arrangeAll: true,
+            fullRepack: !stable,
+            // A stable rescue must not be talked out of being stable: the repack retry
+            // inside `applyResult` exists to check a stable pack's overflow against a fresh
+            // one, and a fresh pack is exactly what just failed to place the originals.
+            repacked: stable,
+            trimOverflow: true,
+            noGrow: true,
+            noShrink: true,
+            // Cumulative, not just this batch. A later pass re-packs everything, and a copy
+            // from an earlier pass that no longer fits has to stay expendable — treated as
+            // a customer original it would revert the pass instead of being trimmed.
+            fillIds: new Set(session.fillIds),
+            // Only this pass's copies. Everything the fill has placed so far has earned its
+            // spot on the film and a failure here is not a reason to take it back.
+            revertIds: new Set(session.lastBatchIds),
+            onSettled: onPassSettled,
+          });
+        } catch (error) {
+          console.error('[fillSheet] pass threw; ending fill', error);
+          // The arrange may have died holding the editor's lock. Retiring the generation
+          // makes any late answer drop itself, and settling releases the lock so the rest
+          // of the editor — every ordinary arrange — keeps working.
+          arrangeGenerationRef.current++;
+          // Only if this throw is what left it held. A late answer from the run that died
+          // will settle it itself, and releasing a lock twice hands the editor to two packs
+          // at once.
+          if (arrangeInFlightRef.current) settleArrange();
+          rollBackPass();
+          endFill('abandoned');
+        }
       });
     };
 

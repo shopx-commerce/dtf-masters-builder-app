@@ -246,6 +246,8 @@ export const fr: Record<string, string> = {
   "editor.fillingSheet": "Remplissage de la feuille",
   "toast.fillNoRoom": "La feuille est déjà pleine",
   "toast.fillNoRoomDesc": "Il ne reste plus de place pour une autre copie à cette taille.",
+  "toast.fillIncomplete": "Impossible de remplir la feuille",
+  "toast.fillIncompleteDesc": "Rien n'a été ajouté cette fois. Réessayez ou ajoutez des copies depuis l'onglet Calques.",
   "toast.arrangeUnavailable": "Organisation de la sélection indisponible",
   "toast.arrangeUnavailableDesc": "Veuillez rafraîchir la page et réessayer.",
   "toast.gangsheetExpanded": "Feuille agrandie",

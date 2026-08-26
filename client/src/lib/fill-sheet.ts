@@ -21,11 +21,17 @@ export const MAX_FILL_TOTAL_DESIGNS = 500;
  * How many packs one fill may run.
  *
  * The search needs a handful: one to place the estimate, one or two to bracket the true
- * capacity, then a bisection whose interval starts at a quarter of the estimate and halves
- * every pass. Ten is enough to land exactly on the answer for any sheet the design cap
- * allows, and the time budget stops it long before this on a sheet where packs are slow.
+ * capacity, then a bisection whose interval halves every pass.
+ *
+ * The generous ceiling is for the descent. When the opening estimate is one the packer will
+ * not lay out at all, the fill has to walk *down* from it — one halving per pass, from a
+ * count that on a large sheet can be in the hundreds — and every pass spent getting down
+ * there is one it does not have for finding the real number. Running out mid-descent is a
+ * fill that adds nothing on a sheet with room, which is the failure this whole loop exists
+ * to prevent. Passes are the cheap ceiling anyway: the wall-clock and frozen-page budgets
+ * below are what actually stop a fill the customer is waiting on.
  */
-export const MAX_FILL_PASSES = 10;
+export const MAX_FILL_PASSES = 14;
 
 /**
  * How long a fill may keep packing before it settles for what it has.
@@ -84,9 +90,32 @@ export function estimateFillCount(
 export type FillPassOutcome = {
   /** Copies the packer could not place, which the arrange then deleted. */
   trimmed: number;
-  /** The pass could not be honoured at all, and the sheet was put back. */
+  /**
+   * The pass could not be honoured at all, and the sheet was put back.
+   *
+   * This is what an overshoot usually looks like in practice. The packer is a heuristic
+   * search over every item at once, so a large surplus does not leave the extras politely
+   * hanging off the film — it changes which layout wins, badly enough that the customer's
+   * own designs stop fitting, and a fill is not allowed to grow the sheet to rescue them.
+   */
   reverted: boolean;
 };
+
+/**
+ * Why a fill stopped.
+ *
+ * Only `nothingFits` is a statement about the film — the packer was offered a single copy
+ * and would not take it. Every other reason is the fill giving up on its own terms, which
+ * is a different thing to tell the customer.
+ */
+export type FillStopReason =
+  | 'saturated'
+  | 'reverted'
+  | 'nothingFits'
+  | 'passLimit'
+  | 'designLimit'
+  | 'timeBudget'
+  | 'frozenBudget';
 
 export type FillPlan =
   | {
@@ -99,17 +128,7 @@ export type FillPlan =
        */
       stable: boolean;
     }
-  | {
-      kind: 'stop';
-      reason:
-        | 'saturated'
-        | 'reverted'
-        | 'nothingFits'
-        | 'passLimit'
-        | 'designLimit'
-        | 'timeBudget'
-        | 'frozenBudget';
-    };
+  | { kind: 'stop'; reason: FillStopReason };
 
 export type FillPassState = {
   /** Passes already packed. 0 on the first call. */
@@ -136,6 +155,10 @@ export type FillPassState = {
   /**
    * Smallest copy count the packer has already refused, or null while it has refused
    * none. The upper bracket of the search.
+   *
+   * A count counts as refused whether the packer trimmed the surplus or could not lay the
+   * sheet out at all — both mean "not this many". Keep the *smallest* such count: the
+   * search walks up as well as down, and a later, larger failure is the looser bracket.
    */
   highFail: number | null;
 };
@@ -189,6 +212,11 @@ export const FILL_FROZEN_BUDGET_MS = 8_000;
  *   the customer's own designs at this height. That is a failure of the heuristics rather
  *   than a shortage of film, so it is worth one retry with the existing layout held in
  *   place and the copies slotted into what is left over.
+ * - **Bracket a revert too.** If that rescue does not save it either, the count still has
+ *   to come down. A revert says nothing about how much *film* is left, but it says plenty
+ *   about this copy count: the packer will not lay out the sheet with that many items on
+ *   it. Treating it as an upper bracket and bisecting is the difference between a fill that
+ *   finds the 14 copies that fit and one that asks for 19 twice and reports a full sheet.
  */
 export function planNextFillPass(state: FillPassState): FillPlan {
   const remaining = Math.max(0, MAX_FILL_TOTAL_DESIGNS - state.totalDesigns);
@@ -211,12 +239,18 @@ export function planNextFillPass(state: FillPassState): FillPlan {
   if (remaining < 1) return { kind: 'stop', reason: 'designLimit' };
 
   if (state.outcome.reverted) {
-    if (state.usedStableRetry) return { kind: 'stop', reason: 'reverted' };
-    const batch = Math.min(Math.max(1, state.lastBatch), remaining);
-    return batch >= 1 ? { kind: 'pack', batch, stable: true } : { kind: 'stop', reason: 'reverted' };
-  }
-
-  if (state.highFail === null) {
+    // One retry at the same count with the layout held in place. A fresh repack is free to
+    // rearrange the customer's designs into a worse layout than the one they are already
+    // looking at, and often that — not a shortage of space — is what a revert means.
+    if (!state.usedStableRetry) {
+      const batch = Math.min(Math.max(1, state.lastBatch), remaining);
+      if (batch >= 1) return { kind: 'pack', batch, stable: true };
+    }
+    // Out of rescues. Fall through to the bisection below, which needs a bracket to work
+    // from; without one there is nothing left to try that is not the count that just
+    // failed. The caller records a revert as a refusal of that count for exactly this.
+    if (state.highFail === null) return { kind: 'stop', reason: 'reverted' };
+  } else if (state.highFail === null) {
     return {
       kind: 'pack',
       batch: Math.min(Math.max(2, Math.ceil(state.added * GROWTH_RATIO)), remaining),
@@ -230,9 +264,14 @@ export function planNextFillPass(state: FillPassState): FillPlan {
   const target = Math.floor((state.added + state.highFail) / 2);
   const batch = Math.min(target - state.added, remaining);
   if (batch < 1) {
-    // The brackets have closed: the sheet holds what it holds. Closing at zero means the
-    // packer would not take even the first copy.
-    return state.added > 0 ? { kind: 'stop', reason: 'saturated' } : { kind: 'stop', reason: 'nothingFits' };
+    // The brackets have closed: the sheet holds what it holds.
+    if (state.added > 0) return { kind: 'stop', reason: 'saturated' };
+    // Closing at zero means not one copy went on. Which of the two things that can mean
+    // depends on how the last pass failed, and the difference is what the customer gets
+    // told. A *trimmed* copy was placed nowhere because there was nowhere to place it —
+    // that is a full sheet. A *reverted* one means the packer could not settle the layout
+    // at all, which is this feature failing, not the film running out.
+    return { kind: 'stop', reason: state.outcome.reverted ? 'reverted' : 'nothingFits' };
   }
   return { kind: 'pack', batch, stable: false };
 }

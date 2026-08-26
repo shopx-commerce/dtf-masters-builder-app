@@ -248,6 +248,8 @@ export const en: Record<string, string> = {
   "editor.fillingSheet": "Filling sheet",
   "toast.fillNoRoom": "Sheet is already full",
   "toast.fillNoRoomDesc": "There is no room left for another copy at this size.",
+  "toast.fillIncomplete": "Could not fill the sheet",
+  "toast.fillIncompleteDesc": "Nothing was added this time. Try again, or add copies from the Layers tab.",
   "toast.arrangeUnavailable": "Arranging selection unavailable",
   "toast.arrangeUnavailableDesc": "Please refresh the page and try again.",
   "toast.gangsheetExpanded": "Gangsheet expanded",

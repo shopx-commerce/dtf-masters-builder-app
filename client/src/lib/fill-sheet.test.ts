@@ -124,8 +124,57 @@ describe("planNextFillPass", () => {
   it("rescues a reverted pass once, with the layout held in place", () => {
     const reverted = baseState({ added: 0, lastBatch: 8, outcome: { trimmed: 0, reverted: true } });
     expect(planNextFillPass(reverted)).toEqual({ kind: "pack", batch: 8, stable: true });
-    expect(planNextFillPass({ ...reverted, usedStableRetry: true }))
-      .toEqual({ kind: "stop", reason: "reverted" });
+  });
+
+  it("comes down off a count the packer would not lay out", () => {
+    // The reported bug. An overshoot does not leave the surplus hanging off the film — it
+    // wrecks the layout until the customer's own designs stop fitting, and the pass reverts.
+    // Asking for the same number again is the one thing that cannot work, so once the
+    // stable rescue is spent the search has to bisect below it like any other refusal.
+    const spent = baseState({
+      added: 0,
+      lastBatch: 19,
+      totalDesigns: 2,
+      usedStableRetry: true,
+      highFail: 19,
+      outcome: { trimmed: 0, reverted: true },
+    });
+    expect(planNextFillPass(spent)).toEqual({ kind: "pack", batch: 9, stable: false });
+    // And keeps coming down while it keeps reverting, rather than giving up at the first one.
+    expect(planNextFillPass({ ...spent, lastBatch: 9, highFail: 9 }))
+      .toEqual({ kind: "pack", batch: 4, stable: false });
+  });
+
+  it("does not call a sheet full on the word of a reverted pass", () => {
+    // Brackets closed with nothing placed, but the last pass reverted — the packer never
+    // said the copy would not fit, it failed to lay the sheet out. The customer is looking
+    // at that space; telling them the sheet is full is telling them something untrue.
+    expect(planNextFillPass(baseState({
+      added: 0,
+      lastBatch: 1,
+      usedStableRetry: true,
+      highFail: 1,
+      outcome: { trimmed: 0, reverted: true },
+    }))).toEqual({ kind: "stop", reason: "reverted" });
+    // A trim at the same point is real evidence, and still reads as full.
+    expect(planNextFillPass(baseState({
+      added: 0,
+      lastBatch: 1,
+      highFail: 1,
+      outcome: { trimmed: 1, reverted: false },
+    }))).toEqual({ kind: "stop", reason: "nothingFits" });
+  });
+
+  it("stops on a revert it has no bracket for", () => {
+    // Nothing has been refused at a known count, so there is no interval to bisect and the
+    // only untried number is the one that just failed. Stopping beats looping.
+    expect(planNextFillPass(baseState({
+      added: 0,
+      lastBatch: 8,
+      usedStableRetry: true,
+      highFail: null,
+      outcome: { trimmed: 0, reverted: true },
+    }))).toEqual({ kind: "stop", reason: "reverted" });
   });
 
   it("honours the design, pass and time ceilings", () => {
@@ -242,19 +291,32 @@ function simulateFill(opts: {
     pass += 1;
     lastBatch = plan.batch;
 
+    const overflowing = new Set(placed.filter(p => p.overflows).map(p => p.id));
+    const thisPass = new Set(copies.map(c => c.id));
+
     // An original that no longer fits is not something a fill may spend, so the pass undoes
     // itself — exactly as `applyResult` does under `noGrow`.
     if (placed.some(p => p.overflows && originalIds.has(p.id))) {
-      designs = prePass;
-      outcome = { trimmed: 0, reverted: true };
+      // Not a clean rewind. The trim runs first and takes every overflowing copy with it,
+      // including ones earlier passes placed; only this pass's copies come back. Production
+      // reports exactly that count so the tally follows the sheet — mirror it here or the
+      // harness proves the loop correct for a state machine that is not the one shipping.
+      const earlierLost = [...overflowing].filter(id => !thisPass.has(id) && !originalIds.has(id));
+      designs = prePass.filter(d => !earlierLost.includes(d.id));
+      // Still a count the packer refused, and recorded as one — see the hook's
+      // `lowerBracket`. Without this the search has nothing to bisect against and can only
+      // ask for the same number again.
+      highFail = Math.min(highFail ?? Infinity, added + plan.batch);
+      added -= earlierLost.length;
+      outcome = { trimmed: earlierLost.length, reverted: true };
       continue;
     }
-    const trimmed = new Set(placed.filter(p => p.overflows).map(p => p.id));
+    const trimmed = overflowing;
     designs = candidate.filter(d => !trimmed.has(d.id));
     added += plan.batch;
     if (trimmed.size > 0) {
       // The count just refused becomes the upper bracket, exactly as the hook records it.
-      highFail = added;
+      highFail = Math.min(highFail ?? Infinity, added);
       added -= trimmed.size;
     }
     outcome = { trimmed: trimmed.size, reverted: false };
@@ -301,6 +363,34 @@ describe("fill loop against the real packer", () => {
     const out = simulateFill({ existing, ref, sheetW, sheetH, gap, estimate: short });
 
     expect(out.added).toBeGreaterThan(short);
+    expect(holdsOneMore(out.designs, ref, sheetW, sheetH, gap)).toBe(false);
+    expect(out.packs).toBeLessThanOrEqual(MAX_FILL_PASSES);
+  });
+
+  it("fills a sheet whose first estimate the packer will not lay out", () => {
+    // The customer's report: a sheet with obvious space left, told there was no room. One
+    // large design and one small one, and the small one is what Fill Sheet clones. Nineteen
+    // copies is what the estimate asks for; at that count the packer cannot re-place the
+    // large design and the whole pass reverts. So did the retry, and the fill then declared
+    // the sheet full — while ten copies go on without complaint.
+    const sheetW = 22, sheetH = 12, gap = 0.25;
+    const ref: SimItem = { id: "small", w: 1.5, h: 1.5, fill: 1 };
+    const existing: SimItem[] = [{ id: "big", w: 20, h: 9.5, fill: 1 }, ref];
+
+    // The premise: the opening estimate is a count this sheet cannot be laid out at.
+    const estimate = estimateFillCount(ref, existing, gap, sheetW, sheetH);
+    const overshoot = pack(
+      [...existing, ...Array.from({ length: estimate }, (_, i) => ({ ...ref, id: `o${i}` }))],
+      sheetW, sheetH, gap,
+    );
+    expect(overshoot.some(p => p.overflows && p.id === "big")).toBe(true);
+
+    const out = simulateFill({ existing, ref, sheetW, sheetH, gap });
+
+    expect(out.added).toBeGreaterThan(0);
+    expect(out.stopReason).not.toBe("nothingFits");
+    expect(out.stopReason).not.toBe("reverted");
+    // And it did not merely add one or two: it found what the film actually holds.
     expect(holdsOneMore(out.designs, ref, sheetW, sheetH, gap)).toBe(false);
     expect(out.packs).toBeLessThanOrEqual(MAX_FILL_PASSES);
   });

@@ -246,6 +246,8 @@ export const es: Record<string, string> = {
   "editor.fillingSheet": "Llenando la hoja",
   "toast.fillNoRoom": "La hoja ya está llena",
   "toast.fillNoRoomDesc": "No queda espacio para otra copia de este tamaño.",
+  "toast.fillIncomplete": "No se pudo llenar la hoja",
+  "toast.fillIncompleteDesc": "Esta vez no se agregó nada. Inténtalo de nuevo o agrega copias desde la pestaña Capas.",
   "toast.arrangeUnavailable": "Organización de selección no disponible",
   "toast.arrangeUnavailableDesc": "Por favor recarga la página e intenta de nuevo.",
   "toast.gangsheetExpanded": "Hoja expandida",

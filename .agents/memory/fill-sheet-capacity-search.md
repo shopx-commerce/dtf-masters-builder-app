@@ -32,6 +32,41 @@ The same non-monotonicity means "a binary search found N copies that fit" does n
 N-1 fit. Do not write a test asserting the loop beats a particular number; assert the
 property that matters — when the fill stops, one more copy does not fit.
 
+## A revert is an upper bracket, not a blank
+
+An overshoot's usual symptom is not overflowing extras: the layout degrades until the
+*customer's own designs* stop fitting, and since a fill may not grow the sheet the pass
+reverts. Reverts are therefore the normal way an opening estimate fails, not an exotic case.
+
+**The rule:** a reverted count is a refused count. Bracket it and bisect below it, the same
+as a trim. Keep the *smallest* refused count — the search walks up as well as down, so
+refusals do not arrive in order.
+
+**Why:** treating a revert as "no evidence about capacity" and retrying at the same count is
+a guaranteed second failure. That was a live bug: a crowded sheet whose estimate the packer
+would not lay out reported "sheet is already full" with zero copies added, while ten copies
+went on without complaint.
+
+**How to apply:** a revert still is not a measurement of the *film*, only of that count, so
+it must never be the evidence behind a "sheet is full" message — see below. Budget passes for
+the descent, too: walking down from a three-figure estimate costs one pass per halving.
+
+## Only a trim may be called a full sheet
+
+"No room left" is a claim about the film that customers act on by buying more. Earn it: only
+a pass that placed copies and had them *trimmed* proves it. A revert, a spent time budget, a
+pass ceiling, a dead worker, an unrehydrated image — all of these end a fill with nothing
+added, and all of them are this feature failing rather than the film running out. Give them
+their own message. A customer looking at obvious empty space and being told it is full stops
+trusting the whole builder.
+
+## A trim can precede a revert in the same pass
+
+The trim clears every overflowing copy first, then an original may still overflow and revert
+the pass. Copies from *earlier* passes that the trim deleted are gone for good; only the
+current batch comes back. Report and subtract that count separately, or the fill's tally of
+what it placed drifts above what is actually on the sheet.
+
 ## What a fill must never do
 
 - **Never grow the sheet.** The customer is filling the film they already bought.
