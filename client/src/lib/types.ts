@@ -37,6 +37,30 @@ export interface ImageInfo {
   exportPixelHeight?: number;
 }
 
+/**
+ * Contour/cut-line settings passed to the contour worker and the PDF tracer.
+ *
+ * The worker manager declared this shape inline in three places and
+ * `contour-outline.ts` imported a `StrokeSettings` from here that had never
+ * been defined — so every function in the tracer typed against it was silently
+ * accepting `any`. The fields mirror the manager's request contract exactly.
+ */
+export interface StrokeSettings {
+  width: number;
+  color: string;
+  enabled: boolean;
+  /** Alpha below this counts as background when scanning for the silhouette. */
+  alphaThreshold: number;
+  backgroundColor: string;
+  useCustomBackground: boolean;
+  /** Bridge gaps narrower than the threshold so a cut line stays one loop. */
+  autoBridging: boolean;
+  /** Gap width in inches; scaled by the effective DPI at trace time. */
+  autoBridgingThreshold: number;
+  contourMode?: "smooth" | "scattered";
+  cornerMode?: string;
+}
+
 export interface ResizeSettings {
   widthInches: number;
   heightInches: number;
