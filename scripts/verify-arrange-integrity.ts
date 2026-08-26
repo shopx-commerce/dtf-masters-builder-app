@@ -53,6 +53,58 @@ function check(ok: boolean, what: string, detail = ''): void {
   console.log(`  FAIL  ${what}${detail ? ` — ${detail}` : ''}`);
 }
 
+console.log('\ncanvas edges do not consume the inter-design gap');
+{
+  const gap = 0.25;
+  const edgeItems = [
+    { id: 'left', w: 10, h: 12, fill: 1, noRotate: true },
+    { id: 'right', w: 11.75, h: 12, fill: 1, noRotate: true },
+  ];
+  const out = runArrange({
+    type: 'arrange',
+    requestId: 0,
+    items: edgeItems,
+    usableW: SHEET_W,
+    usableH: 12,
+    artboardWidth: SHEET_W,
+    artboardHeight: 12,
+    customGap: gap,
+    preferStable: false,
+    heightSteps: [12, 18],
+  });
+  const placed = out.result.filter(item => !item.overflows);
+  check(placed.length === 2, 'two designs use the full sheet width without a trailing edge gap', `${placed.length}/2 placed`);
+  check(Math.abs(out.filmHeight - 12) < EPS, 'artwork may finish at the bottom edge', `${out.filmHeight.toFixed(3)}" film`);
+  const rects = placed.map(item => {
+    const source = edgeItems.find(candidate => candidate.id === item.id)!;
+    return {
+      left: item.nx * SHEET_W - source.w / 2,
+      right: item.nx * SHEET_W + source.w / 2,
+    };
+  }).sort((a, b) => a.left - b.left);
+  if (rects.length === 2) {
+    check(Math.abs(rects[0].left) < EPS, 'first design may touch the left edge', `${rects[0].left.toFixed(3)}"`);
+    check(Math.abs(rects[1].right - SHEET_W) < EPS, 'last design may touch the right edge', `${rects[1].right.toFixed(3)}"`);
+    check(rects[1].left - rects[0].right >= gap - EPS, 'the requested gap remains between designs');
+  }
+
+  const overflow = runArrange({
+    type: 'arrange',
+    requestId: 1,
+    items: [{ id: 'too-tall', w: 10, h: 13, fill: 1, noRotate: true }],
+    usableW: SHEET_W,
+    usableH: 12,
+    artboardWidth: SHEET_W,
+    artboardHeight: 12,
+    customGap: gap,
+    fixedRects: [{ id: 'fixed', x: 0, y: 0, w: 1, h: 1 }],
+    preferStable: false,
+    heightSteps: [12, 18],
+  });
+  check(overflow.result[0]?.overflows === true, 'fixed-obstacle MaxRects reports the oversized artwork as unplaced');
+  check(Math.abs(overflow.packedExtent - 13) < EPS, 'overflow extent excludes a trailing bottom-edge gap', `${overflow.packedExtent.toFixed(3)}"`);
+}
+
 type ShapeKind = 'circle' | 'triangle' | 'lshape' | 'ring' | 'diagonal' | 'rect' | 'star' | 'blob';
 const KINDS: ShapeKind[] = ['circle', 'triangle', 'lshape', 'ring', 'diagonal', 'rect', 'star', 'blob'];
 

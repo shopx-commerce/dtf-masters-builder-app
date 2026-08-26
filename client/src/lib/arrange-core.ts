@@ -189,19 +189,29 @@ const DEBUG_OVERLAP = false; // Set true to log when rotation is used (for overl
 const DEBUG_RANK = typeof process !== 'undefined' && !!process.env?.ARRANGE_RANK_DEBUG;
 const ROTATION_SAFETY = 0.02; // Extra vertical offset when rotation=90 to prevent overlap with row above
 
-function findBestPos(sky: SkylineSeg[], itemW: number, itemH: number, usableH: number): { x: number; y: number; waste: number } | null {
+function findBestPos(
+  sky: SkylineSeg[],
+  footprintW: number,
+  footprintH: number,
+  usableW: number,
+  usableH: number,
+  artworkW: number,
+  artworkH: number,
+): { x: number; y: number; waste: number } | null {
   let bestX = -1, bestY = Infinity, bestWaste = Infinity, found = false;
   for (let i = 0; i < sky.length; i++) {
     let spanW = 0, maxY = 0, j = i;
-    while (j < sky.length && spanW < itemW) {
+    while (j < sky.length && spanW < footprintW) {
       maxY = Math.max(maxY, sky[j].y);
       spanW += sky[j].w;
       j++;
     }
-    if (spanW < itemW - EPS) continue;
-    if (maxY + itemH > usableH + EPS) continue;
+    if (spanW < footprintW - EPS) continue;
+    // The footprint includes the inter-design gap. It may extend past the
+    // sheet edge because there is no neighbour there; the artwork may not.
+    if (sky[i].x + artworkW > usableW + EPS || maxY + artworkH > usableH + EPS) continue;
     let waste = 0;
-    const rightBound = sky[i].x + itemW;
+    const rightBound = sky[i].x + footprintW;
     for (let k = i; k < j; k++) {
       const segL = Math.max(sky[k].x, sky[i].x);
       const segR = Math.min(sky[k].x + sky[k].w, rightBound);
@@ -253,9 +263,11 @@ function toNxNy(absX: number, absY: number, w: number, h: number, abW: number, a
 }
 
 function skylinePack(items: PackItem[], usableW: number, usableH: number, abW: number, abH: number): { result: PlacedItem[]; maxHeight: number; wastedArea: number } {
-  let sky: SkylineSeg[] = [{ x: 0, y: 0, w: usableW }];
+  const edgeAllowance = Math.max(0, ...items.map(item => item.gap));
+  let sky: SkylineSeg[] = [{ x: 0, y: 0, w: usableW + edgeAllowance }];
   const result: PlacedItem[] = [];
   let totalWaste = 0;
+  let maxHeight = 0;
 
   for (let idx = 0; idx < items.length; idx++) {
     const item = items[idx];
@@ -264,10 +276,10 @@ function skylinePack(items: PackItem[], usableW: number, usableH: number, abW: n
     let pos: { x: number; y: number; waste: number } | null = null;
     let rw = 0, rh = 0;
 
-    pos = findBestPos(sky, item.w + g, item.h + g, usableH);
+    pos = findBestPos(sky, item.w + g, item.h + g, usableW, usableH, item.w, item.h);
     if (pos) { rw = item.w + g; rh = item.h + g; }
     if (!pos) {
-      pos = findBestPos(sky, item.w + halfG, item.h + halfG, usableH);
+      pos = findBestPos(sky, item.w + halfG, item.h + halfG, usableW, usableH, item.w, item.h);
       if (pos) { rw = item.w + halfG; rh = item.h + halfG; }
     }
 
@@ -278,25 +290,28 @@ function skylinePack(items: PackItem[], usableW: number, usableH: number, abW: n
       const absCx = pos.x + item.w / 2, absCy = pos.y + item.h / 2 + extraY;
       const { nx, ny } = toNxNy(absCx, absCy, item.w, item.h, abW, abH);
       result.push({ id: item.id, nx, ny, rotation: item.rotation, overflows: false });
+      maxHeight = Math.max(maxHeight, pos.y + item.h);
     } else {
-      const skyMax = sky.length > 0 ? Math.max(...sky.map(s => s.y)) : 0;
       const placedH = item.h + halfG;
       const absX = item.w / 2;
       const extraY = item.rotation === 90 ? ROTATION_SAFETY : 0;
-      const absY = skyMax + placedH / 2 + extraY;
+      const overflowTop = maxHeight > EPS ? maxHeight + g : 0;
+      const absY = overflowTop + item.h / 2 + extraY;
       sky = placeSeg(sky, 0, Math.min(item.w + halfG, usableW), placedH);
       const { nx, ny } = toNxNy(absX, absY, item.w, item.h, abW, abH);
       result.push({ id: item.id, nx, ny, rotation: item.rotation, overflows: true });
+      maxHeight = Math.max(maxHeight, overflowTop + item.h);
     }
   }
-  const maxH = sky.length > 0 ? Math.max(...sky.map(s => s.y)) : 0;
-  return { result, maxHeight: maxH, wastedArea: totalWaste };
+  return { result, maxHeight, wastedArea: totalWaste };
 }
 
 function greedyOrientPack(sortedItems: Array<{ id: string; w: number; h: number; gap: number; noRotate?: boolean }>, usableW: number, usableH: number, abW: number, abH: number): { result: PlacedItem[]; maxHeight: number; wastedArea: number } {
-  let sky: SkylineSeg[] = [{ x: 0, y: 0, w: usableW }];
+  const edgeAllowance = Math.max(0, ...sortedItems.map(item => item.gap));
+  let sky: SkylineSeg[] = [{ x: 0, y: 0, w: usableW + edgeAllowance }];
   const result: PlacedItem[] = [];
   let totalWaste = 0;
+  let maxHeight = 0;
 
   for (const item of sortedItems) {
     const g = item.gap;
@@ -318,7 +333,7 @@ function greedyOrientPack(sortedItems: Array<{ id: string; w: number; h: number;
         { w: orient.w + halfG, h: orient.h + halfG },
       ];
       for (const attempt of attempts) {
-        const pos = findBestPos(sky, attempt.w, attempt.h, usableH);
+        const pos = findBestPos(sky, attempt.w, attempt.h, usableW, usableH, orient.w, orient.h);
         if (!pos) continue;
         const score = pos.y * 10000 + pos.x * 10 + pos.waste;
         const bestScore = bestPos ? bestPos.y * 10000 + bestPos.x * 10 + bestPos.waste : Infinity;
@@ -337,21 +352,22 @@ function greedyOrientPack(sortedItems: Array<{ id: string; w: number; h: number;
       const extraY = bestOrient.rot === 90 ? ROTATION_SAFETY : 0;
       const { nx, ny } = toNxNy(bestPos.x + bestOrient.w / 2, bestPos.y + bestOrient.h / 2 + extraY, bestOrient.w, bestOrient.h, abW, abH);
       result.push({ id: item.id, nx, ny, rotation: bestOrient.rot, overflows: false });
+      maxHeight = Math.max(maxHeight, bestPos.y + bestOrient.h);
     } else {
       if (DEBUG_OVERLAP && Math.abs(item.w - item.h) > 0.1) {
         console.debug('[arrange] greedyOrientPack overflow', item.id.slice(0, 8), 'rect', item.w.toFixed(2), 'x', item.h.toFixed(2));
       }
-      const skyMax = sky.length > 0 ? Math.max(...sky.map(s => s.y)) : 0;
       const placedH = item.h + g;
       const absX = item.w / 2;
-      const absY = skyMax + placedH / 2;
+      const overflowTop = maxHeight > EPS ? maxHeight + g : 0;
+      const absY = overflowTop + item.h / 2;
       sky = placeSeg(sky, 0, Math.min(item.w + g, usableW), placedH);
       const { nx, ny } = toNxNy(absX, absY, item.w, item.h, abW, abH);
       result.push({ id: item.id, nx, ny, rotation: 0, overflows: true });
+      maxHeight = Math.max(maxHeight, overflowTop + item.h);
     }
   }
-  const maxH = sky.length > 0 ? Math.max(...sky.map(s => s.y)) : 0;
-  return { result, maxHeight: maxH, wastedArea: totalWaste };
+  return { result, maxHeight, wastedArea: totalWaste };
 }
 
 function gridPack(
@@ -523,7 +539,8 @@ function maxRectsPack(
   gap?: number,
 ): { result: PlacedItem[]; maxHeight: number; wastedArea: number } {
   const GAP = gap ?? 0.25;
-  let freeRects: FreeRect[] = [{ x: 0, y: 0, w: usableW, h: usableH }];
+  const edgeAllowance = Math.max(0, ...items.map(item => item.gap));
+  let freeRects: FreeRect[] = [{ x: 0, y: 0, w: usableW + edgeAllowance, h: usableH + edgeAllowance }];
   if (initialObstacles && initialObstacles.length > 0) {
     freeRects = applyObstacles(freeRects, initialObstacles, GAP);
   }
@@ -543,6 +560,7 @@ function maxRectsPack(
 
     for (const fr of freeRects) {
       if (iw > fr.w + EPS || ih > fr.h + EPS) continue;
+      if (fr.x + item.w > usableW + EPS || fr.y + item.h > usableH + EPS) continue;
       let score: number, secondary: number;
       if (heuristic === 'bssf') {
         score = Math.min(fr.w - iw, fr.h - ih);
@@ -561,7 +579,7 @@ function maxRectsPack(
     }
 
     if (found) {
-      maxHeight = Math.max(maxHeight, bestY + ih);
+      maxHeight = Math.max(maxHeight, bestY + item.h);
       totalItemArea += item.w * item.h;
       const extraY = item.rotation === 90 ? ROTATION_SAFETY : 0;
       const { nx, ny } = toNxNy(bestX + item.w / 2, bestY + item.h / 2 + extraY, item.w, item.h, abW, abH);
@@ -573,9 +591,10 @@ function maxRectsPack(
       freeRects = removeContainedRects(newFree);
     } else {
       const extraY = item.rotation === 90 ? ROTATION_SAFETY : 0;
-      const { nx, ny } = toNxNy(item.w / 2, maxHeight + ih / 2 + extraY, item.w, item.h, abW, abH);
+      const overflowTop = maxHeight > EPS ? maxHeight + g : 0;
+      const { nx, ny } = toNxNy(item.w / 2, overflowTop + item.h / 2 + extraY, item.w, item.h, abW, abH);
       result.push({ id: item.id, nx, ny, rotation: item.rotation, overflows: true });
-      maxHeight += ih;
+      maxHeight = overflowTop + item.h;
     }
   }
 
@@ -758,16 +777,15 @@ function shelfPack(
   for (const item of items) {
     const g = item.gap;
     const iw = item.w + g;
-    const ih = item.h + g;
 
-    if (curX + iw > usableW + EPS) {
+    if (curX + item.w > usableW + EPS) {
       curY += shelfH + g;
       curX = 0;
       shelfH = 0;
     }
 
-    shelfH = Math.max(shelfH, ih);
-    const overflows = curX + iw > usableW + EPS || curY + ih > usableH + EPS;
+    shelfH = Math.max(shelfH, item.h);
+    const overflows = curX + item.w > usableW + EPS || curY + item.h > usableH + EPS;
     totalItemArea += item.w * item.h;
 
     const extraY = item.rotation === 90 ? ROTATION_SAFETY : 0;

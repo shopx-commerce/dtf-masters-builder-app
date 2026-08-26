@@ -14,3 +14,9 @@ Duplicate-aware optimization must add candidate orderings rather than replace th
 **Why:** A weak duplicate signal changes ordinary mixed sheets, while a geometric tie tolerance can straddle a Shopify height boundary and charge for more film. Groups are layout units, not duplicate families.
 
 **How to apply:** Keep duplicate identity as optional packing metadata; omit it from group super-items. Compare billable height before raw height, preserve the honestly shorter candidate, and apply source-kind preference only after both tie.
+
+Design gap is clearance between neighboring artwork only; sheet edges are not neighbors. Rectangle packers may let their reserved footprint extend past the right/bottom boundary, but the artwork itself must remain in bounds, and reported height must end at the last artwork rather than include a trailing gap.
+
+**Why:** Charging the final footprint gap at a sheet boundary can wrap artwork early, report a false overflow, or push the customer onto a taller purchasable sheet even though the printable artwork fits.
+
+**How to apply:** Keep the gap in occupancy geometry between items, validate physical artwork bounds separately, and cover both ordinary fits and fixed-obstacle overflow extent in arrangement regressions.
