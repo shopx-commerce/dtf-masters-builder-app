@@ -118,7 +118,7 @@ function setup() {
     saveSnapshot: vi.fn(),
     thumbnailCacheRef: { current: new Map<string, string>() },
     contentFillCacheRef: { current: new Map() },
-    assetDataUrlCacheRef: { current: new Map<string, string>() },
+    assetDataUrlCacheRef: { current: new Map() },
     toast: vi.fn(),
     t: (key: string) => key,
   };
@@ -273,7 +273,7 @@ describe("color change job bookkeeping", () => {
 
     recolorPngBlob.mockResolvedValueOnce({
       ok: true,
-      png: ONE_PIXEL_PNG,
+      blob: new Blob([ONE_PIXEL_PNG], { type: "image/png" }),
       width: 1,
       height: 1,
     });

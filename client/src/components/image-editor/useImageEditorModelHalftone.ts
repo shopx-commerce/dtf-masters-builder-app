@@ -92,6 +92,14 @@ export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) 
     Array<{ r: number; g: number; b: number; hex: string; name?: string }>
   >([]);
   const halftoneJobRef = useRef(new Map<string, number>());
+  /**
+   * designId → whether the screen currently running for it already took an undo
+   * snapshot. A second click supersedes the first job by token, but both jobs
+   * would otherwise call `saveSnapshot`, and the second one captures a state
+   * identical to the first (nothing has committed yet) — leaving the customer
+   * to press undo twice to walk back one screen.
+   */
+  const halftoneInFlightRef = useRef(new Map<string, boolean>());
   const halftoneSizeSignatureRef = useRef('');
 
   /**
@@ -174,8 +182,13 @@ export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) 
     }
 
     // Snapshot the pre-halftone design state now so an undo issued while the
-    // worker is running still walks back through the pre-halftone state.
-    if (!options?.skipSnapshot) saveSnapshot();
+    // worker is running still walks back through the pre-halftone state. A
+    // screen already running for this design has captured that state already —
+    // a rebuild (`skipSnapshot`) has not, which is why this tracks whether a
+    // snapshot was taken rather than merely whether a job is in flight.
+    const snapshotTaken = halftoneInFlightRef.current.get(designId) === true;
+    const takeSnapshot = !options?.skipSnapshot && !snapshotTaken;
+    if (takeSnapshot) saveSnapshot();
 
     const imgData = ctx.getImageData(0, 0, procW, procH);
     // Transfer the getImageData buffer into the worker. `imgData` becomes
@@ -183,7 +196,7 @@ export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) 
     // pixels come back as a new ArrayBuffer.
     const transferBuffer = imgData.data.buffer;
 
-    const finish = async () => {
+    const screen = async () => {
       let outBuffer: ArrayBuffer;
       try {
         outBuffer = await runHalftone({
@@ -370,6 +383,20 @@ export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) 
       }
     };
 
+    /**
+     * Releasing the in-flight entry is ownership-scoped: a superseded job that
+     * finally notices it lost must not clear the bookkeeping the job that
+     * replaced it is relying on.
+     */
+    const finish = async () => {
+      try {
+        await screen();
+      } finally {
+        if (halftoneJobRef.current.get(designId) === job) halftoneInFlightRef.current.delete(designId);
+      }
+    };
+
+    halftoneInFlightRef.current.set(designId, snapshotTaken || takeSnapshot);
     void finish();
   }, [
     designs,

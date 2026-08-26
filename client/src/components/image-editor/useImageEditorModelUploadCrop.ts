@@ -240,8 +240,35 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
   /** 0..1 while an upscale runs, `null` otherwise. */
   const [upscaleProgress, setUpscaleProgress] = useState<number | null>(null);
   const [canIncreaseQuality, setCanIncreaseQuality] = useState(false);
+  /**
+   * Claimed synchronously for the length of one upscale.
+   *
+   * `isUpscaling` is React state, so two clicks landing in the same tick both
+   * read the pre-update `false` and both start a full model run over the print
+   * source — the most expensive operation in the editor, twice, with the second
+   * result overwriting the first.
+   */
+  const upscaleInFlightRef = useRef(false);
+  /**
+   * The current designs, readable after an await. The upscale closes over the
+   * design it started on; by the time the model returns, that design may have
+   * been cropped, recoloured or removed.
+   */
+  const designsLatestRef = useRef(designs);
+  designsLatestRef.current = designs;
+  /**
+   * Identifies the upscale run that owns the editor state.
+   *
+   * Unmount bumps it. `getUpscaleManager().cancel()` only *asks* the session to
+   * stop — a run already past its last checkpoint still resolves, and without
+   * this it would go on to snapshot and commit into an editor that is gone.
+   */
+  const upscaleRunRef = useRef(0);
 
-  useEffect(() => () => { getUpscaleManager().cancel(); }, []);
+  useEffect(() => () => {
+    upscaleRunRef.current++;
+    getUpscaleManager().cancel();
+  }, []);
 
   // The control appears only once this machine has been measured and found
   // fast enough. A WebGPU adapter existing is not sufficient: on a Windows
@@ -1262,7 +1289,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
   const handleIncreaseQuality = useCallback(async (scaleFactor: number) => {
     const design = selectedDesignId ? designs.find(d => d.id === selectedDesignId) : null;
     const sourceInfo = design?.imageInfo ?? imageInfo;
-    if (!design || !sourceInfo?.image || isUpscaling) return;
+    if (!design || !sourceInfo?.image || isUpscaling || upscaleInFlightRef.current) return;
 
     // Vector artwork is re-rasterised at placement size on export, so it is
     // already resolution-independent. Upscaling would bake it to fixed pixels,
@@ -1272,6 +1299,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
       return;
     }
 
+    const run = ++upscaleRunRef.current;
     let skipReason: string | null = null;
     let appliedScale = 0;
 
@@ -1315,7 +1343,10 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
         canvas.width,
         canvas.height,
         scale,
-        ({ completed, total }) => setUpscaleProgress(total > 0 ? completed / total : 0),
+        ({ completed, total }) => {
+          if (upscaleRunRef.current !== run) return;
+          setUpscaleProgress(total > 0 ? completed / total : 0);
+        },
       );
       appliedScale = scale;
       console.info("[upscale]", {
@@ -1334,6 +1365,7 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
       return out;
     };
 
+    upscaleInFlightRef.current = true;
     setIsUpscaling(true);
     setUpscaleProgress(0);
     toast({ title: t("toast.upscaleStarted"), description: t("toast.upscaleStartedDesc") });
@@ -1366,6 +1398,24 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
         dpi: nextDpi,
       };
 
+      // Abandoned by unmount while the model ran: there is no editor left to
+      // commit into.
+      if (upscaleRunRef.current !== run) return;
+
+      // The model takes seconds over a print-resolution canvas, and the artwork
+      // can change underneath it — a crop, a colour change, or the layer being
+      // deleted outright. Committing anyway would silently put the pre-edit
+      // pixels back, because `nextInfo` is built from the source this run
+      // started with.
+      const live = designsLatestRef.current.find(current => current.id === design.id);
+      if (!live || live.imageInfo !== sourceInfo) {
+        toast({
+          title: t("toast.upscaleNotNeeded"),
+          description: t("toast.upscaleSourceChangedDesc"),
+        });
+        return;
+      }
+
       saveSnapshot();
       const oldSrc = sourceInfo.image.src;
       revokeThumbnailCacheEntry(thumbnailCacheRef.current, oldSrc);
@@ -1395,7 +1445,9 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
       setResizeSettings(prev => ({ ...prev, widthInches: design.widthInches, heightInches: design.heightInches }));
       toast({ title: t("toast.upscaleSuccess"), description: t("toast.upscaleSuccessDesc", { scale: appliedScale }) });
     } catch (error) {
-      if (skipReason) {
+      if (upscaleRunRef.current !== run) {
+        // Nobody is left to read the message.
+      } else if (skipReason) {
         toast({ title: t("toast.upscaleNotNeeded"), description: t(skipReason) });
       } else if (error instanceof Error && error.message === "cancelled") {
         // Nothing to say: the customer asked for this by navigating away.
@@ -1408,8 +1460,13 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
         });
       }
     } finally {
-      setIsUpscaling(false);
-      setUpscaleProgress(null);
+      // Ownership-scoped: an abandoned run must not clear state it no longer
+      // owns, and must not push React updates into an unmounted editor.
+      if (upscaleRunRef.current === run) {
+        upscaleInFlightRef.current = false;
+        setIsUpscaling(false);
+        setUpscaleProgress(null);
+      }
     }
   }, [
     selectedDesignId,

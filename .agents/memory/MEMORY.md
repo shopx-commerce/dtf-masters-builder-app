@@ -31,3 +31,6 @@
 - [Mobile contextual sheet dismissal](mobile-context-sheet-dismissal.md) — hiding selection tools must preserve canvas selection and reset when the full selection changes.
 - [Lossless single-ink recolor](lossless-single-ink-recolor.md) — recolor authoritative PNG bytes only; require exact visible RGB equality and preserve alpha plus pHYs metadata.
 - [Client test harness](client-test-harness.md) — Vitest + jsdom for hook ordering bugs; stub blob URLs/image loads and mock worker-backed modules.
+- [Fill Sheet capacity search](fill-sheet-capacity-search.md) — measure capacity by repacking to saturation, never estimate once; a fill neither grows nor shrinks the sheet.
+- [Large PNG pixel edits](large-png-pixel-edits.md) — stream rows through native compression codecs instead of decoding whole images; caps belong only on the fallback decoder.
+- [Editor async job guards](editor-async-job-guards.md) — claim in-flight guards synchronously, release by token ownership, re-check source identity after every await.

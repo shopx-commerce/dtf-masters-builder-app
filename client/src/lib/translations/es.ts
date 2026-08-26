@@ -240,6 +240,9 @@ export const es: Record<string, string> = {
   "toast.autoArrangedDesc": "Los diseños se rotaron para un ajuste óptimo.",
   "editor.nesting": "Anidando",
   "editor.expandingSheet": "Ampliando la hoja",
+  "editor.fillingSheet": "Llenando la hoja",
+  "toast.fillNoRoom": "La hoja ya está llena",
+  "toast.fillNoRoomDesc": "No queda espacio para otra copia de este tamaño.",
   "toast.arrangeUnavailable": "Organización de selección no disponible",
   "toast.arrangeUnavailableDesc": "Por favor recarga la página e intenta de nuevo.",
   "toast.gangsheetExpanded": "Hoja expandida",
@@ -331,6 +334,7 @@ export const es: Record<string, string> = {
   "toast.upscaleVectorDesc": "Este diseño es vectorial, así que ya se imprime nítido a cualquier tamaño.",
   "toast.upscaleAlreadySharpDesc": "Este diseño ya está a la resolución de impresión máxima para su tamaño actual.",
   "toast.upscaleTooLargeDesc": "Este diseño ya es tan grande que ampliarlo superaría el límite de tamaño del editor.",
+  "toast.upscaleSourceChangedDesc": "El diseño cambió mientras se ampliaba, así que se descartó el resultado. Inténtalo de nuevo.",
 
   "resize.modalTitle": "Establecer tamaño del sticker",
   "resize.modalSubtitle": "lado más largo en pulgadas",

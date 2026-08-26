@@ -82,9 +82,27 @@ export default function ColorChangeDialog({
 
         <div className="space-y-4 p-4">
           {(state.status === "checking" || state.status === "applying") && (
-            <div className="flex min-h-40 items-center justify-center gap-2 text-sm font-medium text-slate-600">
-              <Loader2 className="h-5 w-5 animate-spin text-violet-600" />
-              {state.status === "checking" ? t("editor.colorChangeChecking") : t("editor.colorChangeApplying")}
+            <div className="flex min-h-40 flex-col items-center justify-center gap-3 text-sm font-medium text-slate-600">
+              <div className="flex items-center gap-2">
+                <Loader2 className="h-5 w-5 animate-spin text-violet-600" />
+                {state.status === "checking" ? t("editor.colorChangeChecking") : t("editor.colorChangeApplying")}
+              </div>
+              {/* Large artwork takes seconds, and a bare spinner on a phone is
+                  indistinguishable from a hung tab — the bar is the worker
+                  reporting the rows it has actually rewritten. */}
+              {typeof state.progress === "number" && (
+                <div className="w-48">
+                  <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
+                    <div
+                      className="h-full rounded-full bg-violet-600 transition-[width] duration-150"
+                      style={{ width: `${Math.round(state.progress * 100)}%` }}
+                    />
+                  </div>
+                  <p className="mt-1 text-center text-xs font-mono text-slate-500">
+                    {Math.round(state.progress * 100)}%
+                  </p>
+                </div>
+              )}
             </div>
           )}
 

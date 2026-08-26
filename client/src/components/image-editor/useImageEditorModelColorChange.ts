@@ -15,6 +15,8 @@ export interface ColorChangeState {
   targetHex: string;
   reason?: ColorChangeReason | "vector-source" | "halftoned" | "select-one";
   message?: string;
+  /** Rows processed, 0 to 1, while checking or applying. */
+  progress?: number;
 }
 
 const CLOSED_STATE: ColorChangeState = {
@@ -42,6 +44,64 @@ function imageFromBlob(blob: Blob): Promise<HTMLImageElement> {
 
 function colorToHex(color: RgbColor): string {
   return `#${[color.r, color.g, color.b].map(value => value.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/**
+ * Recolours the preview the editor already has, instead of decoding the new
+ * print source.
+ *
+ * The recoloured file can be hundreds of megapixels, and decoding it in the tab
+ * just to build a thumbnail throws away everything the streaming recolour
+ * saved — it is also the step most likely to fail outright on iOS, which caps
+ * how large an image it will rasterise. The preview is already the same artwork
+ * at display size, and a single-ink recolour changes nothing but RGB, so
+ * painting the target colour through the preview's own alpha (`source-in`
+ * keeps destination alpha and replaces the colour) produces exactly the image
+ * the full decode would have produced, at a few hundred kilopixels.
+ */
+async function maskRecolorPreview(source: HTMLImageElement, target: RgbColor): Promise<HTMLImageElement | null> {
+  const width = source.naturalWidth || 0;
+  const height = source.naturalHeight || 0;
+  if (!width || !height) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  context.drawImage(source, 0, 0);
+  context.globalCompositeOperation = "source-in";
+  context.fillStyle = colorToHex(target);
+  context.fillRect(0, 0, width, height);
+  const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/png"));
+  if (!blob) return null;
+  return imageFromBlob(blob);
+}
+
+/** Within this much of the output's aspect ratio, the preview frames the same artwork. */
+const PREVIEW_ASPECT_TOLERANCE = 0.01;
+
+async function buildRecoloredPreview(
+  currentPreview: HTMLImageElement | undefined,
+  recolored: Blob,
+  target: RgbColor,
+  output: { width: number; height: number },
+  preserveCleanAlpha: boolean,
+): Promise<HTMLImageElement> {
+  const width = currentPreview?.naturalWidth ?? 0;
+  const height = currentPreview?.naturalHeight ?? 0;
+  const outputAspect = output.width / output.height;
+  // A preview framed differently from the output — which a crop applied since
+  // it was built would cause — cannot stand in for it, so that case pays for
+  // the decode.
+  if (currentPreview && width > 0 && height > 0 &&
+      Math.abs(width / height - outputAspect) <= PREVIEW_ASPECT_TOLERANCE * outputAspect) {
+    const masked = await maskRecolorPreview(currentPreview, target).catch(() => null);
+    if (masked) return masked;
+  }
+  const decoded = await imageFromBlob(recolored);
+  const capped = await capRestoredPreview(decoded, recolored, { preserveCleanAlpha });
+  if (capped.image !== decoded && decoded.src.startsWith("blob:")) URL.revokeObjectURL(decoded.src);
+  return capped.image;
 }
 
 function hexToColor(hex: string): RgbColor | null {
@@ -76,6 +136,28 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
    * recolored on trust rather than on analysis.
    */
   const analyzedSourceRef = useRef<{ designId: string; imageInfo: object } | null>(null);
+
+  /**
+   * Turns the worker's row reports into dialog progress.
+   *
+   * Reported often enough to prove the worker is alive on a slow phone, so it
+   * is collapsed to whole percent before it reaches React — a print-resolution
+   * source would otherwise re-render the dialog a few hundred times.
+   */
+  const makeProgressReporter = useCallback((token: number) => {
+    let lastPercent = -1;
+    return (fraction: number) => {
+      const percent = Math.round(Math.min(1, Math.max(0, fraction)) * 100);
+      if (percent === lastPercent) return;
+      lastPercent = percent;
+      if (token !== jobTokenRef.current) return;
+      setColorChangeState(previous => (
+        previous.status === "checking" || previous.status === "applying"
+          ? { ...previous, progress: percent / 100 }
+          : previous
+      ));
+    };
+  }, []);
 
   /**
    * Ignoring a stale result is not enough: a print-resolution decode and
@@ -136,10 +218,16 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
       sourceColor: null,
       reason: undefined,
       message: undefined,
+      progress: 0,
     }));
     try {
       const source = design.imageInfo.exportBlob ?? design.imageInfo.file;
-      const analysis = await analyzeColorChangeBlob(source, design.imageInfo.exportCrop, signal);
+      const analysis = await analyzeColorChangeBlob(
+        source,
+        design.imageInfo.exportCrop,
+        signal,
+        makeProgressReporter(token),
+      );
       if (token !== jobTokenRef.current) return;
       analyzedSourceRef.current = analysis.eligible ? { designId: design.id, imageInfo: design.imageInfo } : null;
       if (!analysis.eligible) {
@@ -164,7 +252,7 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
         message: error instanceof Error ? error.message : "Color analysis failed.",
       }));
     }
-  }, [beginJob, designsRef, selectedDesignId, selectedDesignIds]);
+  }, [beginJob, designsRef, makeProgressReporter, selectedDesignId, selectedDesignIds]);
 
   const applyColorChange = useCallback(async () => {
     const designId = colorChangeState.designId;
@@ -199,26 +287,36 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
     // previous job's claim, so an earlier claim would be wiped by the very call
     // that starts the job it was meant to protect.
     applyInFlightRef.current = true;
-    setColorChangeState(previous => ({ ...previous, status: "applying", message: undefined }));
+    setColorChangeState(previous => ({ ...previous, status: "applying", message: undefined, progress: 0 }));
     try {
       const source = design.imageInfo.exportBlob ?? design.imageInfo.file;
-      const result = await recolorPngBlob(source, target, design.imageInfo.exportCrop, signal);
+      const result = await recolorPngBlob(
+        source,
+        target,
+        design.imageInfo.exportCrop,
+        signal,
+        makeProgressReporter(token),
+      );
       if (token !== jobTokenRef.current) return;
       if (!result.ok) {
         setColorChangeState(previous => ({ ...previous, status: "ineligible", reason: result.reason }));
         return;
       }
-      const blob = new Blob([result.png], { type: "image/png" });
-      const decoded = await imageFromBlob(blob);
-      const preview = await capRestoredPreview(decoded, blob, { preserveCleanAlpha: !!design.alphaThresholded });
-      if (preview.image !== decoded && decoded.src.startsWith("blob:")) URL.revokeObjectURL(decoded.src);
+      const blob = result.blob;
+      const previewImage = await buildRecoloredPreview(
+        design.imageInfo.image,
+        blob,
+        target,
+        result,
+        !!design.alphaThresholded,
+      );
       if (token !== jobTokenRef.current) {
-        if (preview.image.src.startsWith("blob:")) URL.revokeObjectURL(preview.image.src);
+        if (previewImage.src.startsWith("blob:")) URL.revokeObjectURL(previewImage.src);
         return;
       }
       const current = designsRef.current.find(item => item.id === designId);
       if (!current || current.imageInfo !== design.imageInfo) {
-        if (preview.image.src.startsWith("blob:")) URL.revokeObjectURL(preview.image.src);
+        if (previewImage.src.startsWith("blob:")) URL.revokeObjectURL(previewImage.src);
         setColorChangeState(previous => ({
           ...previous,
           status: "error",
@@ -231,7 +329,7 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
       const nextInfo = {
         ...design.imageInfo,
         file,
-        image: preview.image,
+        image: previewImage,
         originalWidth: result.width,
         originalHeight: result.height,
         exportBlob: blob,
@@ -280,6 +378,7 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
     colorChangeState,
     contentFillCacheRef,
     designsRef,
+    makeProgressReporter,
     saveSnapshot,
     selectedDesignId,
     setDesigns,

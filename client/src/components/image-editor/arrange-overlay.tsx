@@ -86,7 +86,7 @@ function WaveLayer({
  * so the controls that do it must stay both crisp and clickable while the sheet behind them is
  * covered; a veil that dimmed or swallowed those clicks would make the editor feel locked.
  */
-export function ArrangeOverlay({ stage }: { stage: 'nesting' | 'expanding' | null }) {
+export function ArrangeOverlay({ stage }: { stage: 'nesting' | 'expanding' | 'filling' | null }) {
   const { t } = useLanguage();
   // `mounted` outlives `stage` by one fade so the veil can be seen leaving; without it the
   // overlay would be unmounted on the same frame the layout settles and simply blink out.
@@ -94,7 +94,7 @@ export function ArrangeOverlay({ stage }: { stage: 'nesting' | 'expanding' | nul
   const [shown, setShown] = useState(false);
   // Held so the caption does not change while the veil is fading out, which would read as the
   // editor starting a second operation on its way to finishing the first.
-  const [lastStage, setLastStage] = useState<'nesting' | 'expanding'>('nesting');
+  const [lastStage, setLastStage] = useState<'nesting' | 'expanding' | 'filling'>('nesting');
   useEffect(() => {
     if (stage) setLastStage(stage);
   }, [stage]);
@@ -146,7 +146,11 @@ export function ArrangeOverlay({ stage }: { stage: 'nesting' | 'expanding' | nul
           <i className="veil-droplet" style={{ animationDelay: "0.16s" }} />
           <i className="veil-droplet" style={{ animationDelay: "0.32s" }} />
         </span>
-        {lastStage === 'expanding' ? t("editor.expandingSheet") : t("editor.nesting")}
+        {lastStage === 'expanding'
+          ? t("editor.expandingSheet")
+          : lastStage === 'filling'
+            ? t("editor.fillingSheet")
+            : t("editor.nesting")}
       </div>
     </div>
   );

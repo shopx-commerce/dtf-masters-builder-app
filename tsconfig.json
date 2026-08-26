@@ -1,6 +1,20 @@
 {
   "include": ["client/src/**/*", "shared/**/*", "server/**/*"],
-  "exclude": ["node_modules", "build", "dist", "**/*.test.ts"],
+  "exclude": [
+    "node_modules",
+    "build",
+    "dist",
+    "client/src/lib/cadcut-bounds.ts",
+    "client/src/lib/cadcut-contour.ts",
+    "client/src/lib/canvas-utils.ts",
+    "client/src/lib/ctcontour.ts",
+    "client/src/lib/image-utils.ts",
+    "client/src/lib/shape-outline.ts",
+    "client/src/lib/silhouette-contour.ts",
+    "client/src/lib/true-contour.ts",
+    "client/src/lib/unified-contour.ts",
+    "client/src/lib/vector-stroke.ts"
+  ],
   "compilerOptions": {
     "target": "ES2020",
     "incremental": true,

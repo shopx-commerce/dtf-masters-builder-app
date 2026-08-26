@@ -1,5 +1,6 @@
 import { afterEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
+import { installCanvasStub } from "./client/src/test/canvas-stub";
 
 /**
  * Browser APIs jsdom does not implement, stubbed just far enough for the
@@ -10,9 +11,12 @@ import { cleanup } from "@testing-library/react";
  * `onload` that cannot fire. Rather than resolving every decode blindly (which
  * would let a test "decode" arbitrary bytes and quietly bless invalid output),
  * object URLs keep their Blob and the image stub reads the PNG header out of
- * it: valid PNG bytes load with their real dimensions, anything else raises
- * `onerror` the way a browser would. Error paths stay testable, and a test that
- * feeds in junk still fails.
+ * it: bytes with a PNG signature and a readable IHDR load with the dimensions
+ * that header declares, anything else raises `onerror` the way a browser would.
+ * It is a header check, not a decoder — chunk CRCs and the compressed image
+ * data are never examined, so a PNG that is corrupt past its header still
+ * "loads" here. Enough to keep error paths testable and to stop a test from
+ * blessing plausible junk; not enough to prove an encoder is correct.
  */
 
 /**
@@ -30,6 +34,8 @@ if (typeof Blob.prototype.arrayBuffer !== "function") {
     });
   };
 }
+
+installCanvasStub();
 
 let objectUrlSeq = 0;
 const blobsByUrl = new Map<string, Blob>();

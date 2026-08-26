@@ -53,6 +53,145 @@ export function stripRangesFor(outW: number, outH: number): Array<{ y: number; h
   return ranges.length > 0 ? ranges : [{ y: 0, height: outH }];
 }
 
+function paethPredictor(a: number, b: number, c: number): number {
+  const p = a + b - c;
+  const pa = p >= a ? p - a : a - p;
+  const pb = p >= b ? p - b : b - p;
+  const pc = p >= c ? p - c : c - p;
+  if (pa <= pb && pa <= pc) return a;
+  if (pb <= pc) return b;
+  return c;
+}
+
+/**
+ * Distance between scored bytes when choosing a row's filter.
+ *
+ * Coprime with the 4-byte pixel on purpose, so consecutive samples land on
+ * different channels. A multiple of 4 scores red and never looks at alpha,
+ * which is where most of the structure in cutout artwork lives: on halftone
+ * art a stride of 16 came out 1.2% smaller than scoring everything while 17
+ * came out level, but on gradients 16 cost 3% and 17 cost 1%.
+ */
+const FILTER_SCORE_STRIDE = 17;
+
+/**
+ * Pick a PNG row filter (None/Sub/Up/Average/Paeth) and write the filtered row.
+ *
+ * The five predictors are scored on a sample of the row rather than on every
+ * byte, and only the winner is then computed in full. Scoring all five for
+ * every byte of a 67 MB strip was two thirds of the export worker's
+ * non-compression time; sampling measured 2.6-2.9x faster on sheet-sized strips
+ * for 0.1-1% more compressed bytes.
+ *
+ * Sampling cannot change a single output pixel. The filter type is per-row
+ * metadata and the decoder reverses whichever one it finds, so a worse guess
+ * costs bytes, never fidelity.
+ *
+ * Shared rather than copied: the export worker and the recolour stream both
+ * emit RGBA rows, and a filter bug reproduced in two places is a corrupt file
+ * in whichever one was not fixed.
+ */
+export function filterRowAdaptive(
+  cur: Uint8Array | Uint8ClampedArray,
+  prev: Uint8Array,
+  bpp: number,
+  rowBytes: number,
+  out: Uint8Array,
+  outOff: number,
+) {
+  let sNone = 0, sSub = 0, sUp = 0, sAvg = 0, sPaeth = 0;
+  for (let i = 0; i < rowBytes; i += FILTER_SCORE_STRIDE) {
+    const x = cur[i];
+    const a = i >= bpp ? cur[i - bpp] : 0;
+    const b = prev[i];
+    const c = i >= bpp ? prev[i - bpp] : 0;
+
+    sNone += x < 128 ? x : 256 - x;
+
+    const vs = (x - a) & 0xff; sSub += vs < 128 ? vs : 256 - vs;
+    const vu = (x - b) & 0xff; sUp += vu < 128 ? vu : 256 - vu;
+    const vg = (x - ((a + b) >> 1)) & 0xff; sAvg += vg < 128 ? vg : 256 - vg;
+    const vp = (x - paethPredictor(a, b, c)) & 0xff; sPaeth += vp < 128 ? vp : 256 - vp;
+  }
+
+  let best = 0, bestSum = sNone;
+  if (sSub < bestSum) { best = 1; bestSum = sSub; }
+  if (sUp < bestSum) { best = 2; bestSum = sUp; }
+  if (sAvg < bestSum) { best = 3; bestSum = sAvg; }
+  if (sPaeth < bestSum) { best = 4; }
+
+  out[outOff] = best;
+  const d = outOff + 1;
+  switch (best) {
+    case 0:
+      out.set(cur, d);
+      break;
+    case 1:
+      for (let i = 0; i < rowBytes; i++) {
+        out[d + i] = (cur[i] - (i >= bpp ? cur[i - bpp] : 0)) & 0xff;
+      }
+      break;
+    case 2:
+      for (let i = 0; i < rowBytes; i++) {
+        out[d + i] = (cur[i] - prev[i]) & 0xff;
+      }
+      break;
+    case 3:
+      for (let i = 0; i < rowBytes; i++) {
+        out[d + i] = (cur[i] - (((i >= bpp ? cur[i - bpp] : 0) + prev[i]) >> 1)) & 0xff;
+      }
+      break;
+    default:
+      for (let i = 0; i < rowBytes; i++) {
+        const a = i >= bpp ? cur[i - bpp] : 0;
+        const c = i >= bpp ? prev[i - bpp] : 0;
+        out[d + i] = (cur[i] - paethPredictor(a, prev[i], c)) & 0xff;
+      }
+      break;
+  }
+}
+
+/**
+ * Reverse a PNG row filter in place, given the previous *unfiltered* row.
+ *
+ * The inverse of `filterRowAdaptive`, and the reason a PNG cannot be decoded
+ * from the middle: every predictor but None reads bytes to the left, above, or
+ * both, so row N is only recoverable once row N-1 is.
+ */
+export function unfilterRow(
+  filterType: number,
+  row: Uint8Array,
+  prev: Uint8Array,
+  bpp: number,
+): boolean {
+  const length = row.length;
+  switch (filterType) {
+    case 0:
+      return true;
+    case 1:
+      for (let i = bpp; i < length; i++) row[i] = (row[i] + row[i - bpp]) & 0xff;
+      return true;
+    case 2:
+      for (let i = 0; i < length; i++) row[i] = (row[i] + prev[i]) & 0xff;
+      return true;
+    case 3:
+      for (let i = 0; i < length; i++) {
+        const left = i >= bpp ? row[i - bpp] : 0;
+        row[i] = (row[i] + ((left + prev[i]) >> 1)) & 0xff;
+      }
+      return true;
+    case 4:
+      for (let i = 0; i < length; i++) {
+        const left = i >= bpp ? row[i - bpp] : 0;
+        const upLeft = i >= bpp ? prev[i - bpp] : 0;
+        row[i] = (row[i] + paethPredictor(left, prev[i], upLeft)) & 0xff;
+      }
+      return true;
+    default:
+      return false;
+  }
+}
+
 const CRC32_TABLE = (() => {
   const table = new Uint32Array(256);
   for (let i = 0; i < 256; i++) {

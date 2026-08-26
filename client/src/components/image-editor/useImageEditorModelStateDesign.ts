@@ -236,11 +236,28 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       /** Ids of expendable Fill Sheet copies — the only designs `trimOverflow` may delete. */
       fillIds?: Set<string>;
       /**
+       * How to undo a run that cannot honour `noGrow`: delete exactly these designs from the
+       * sheet as it stands, rather than restoring a layout captured before it started, which
+       * would also revert whatever the customer did while it packed.
+       */
+      revertIds?: Set<string>;
+      /**
        * Forbid the height ladder for this run. Stronger than `trimOverflow`, which only
        * withholds growth on behalf of the listed copies; this withholds it outright, and a
        * run that cannot honour it undoes itself rather than buying film.
        */
       noGrow?: boolean;
+      /**
+       * Skip the auto-shrink that follows a clean pack. For Fill Sheet, whose whole purpose
+       * is to use up the film the customer already has — measuring a half-filled sheet and
+       * cropping it to the artwork is the opposite of filling it.
+       */
+      noShrink?: boolean;
+      /**
+       * Called exactly once when the run ends, however it ends. For callers that pack
+       * repeatedly and need to know what the last pack achieved before deciding on the next.
+       */
+      onSettled?: (outcome: { trimmed: number; reverted: boolean; packed: boolean; frozenMs: number }) => void;
       /** Internal to the arrange hook: a height-ladder step continuing the run in flight. */
       continuation?: boolean;
       /** Internal to the arrange hook: the full-repack retry that precedes a growth step. */

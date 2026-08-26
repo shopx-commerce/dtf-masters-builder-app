@@ -17,6 +17,12 @@ import {
 } from "./utils";
 import { DEFAULT_LAYER_CENTER_NX, DEFAULT_LAYER_CENTER_NY } from "./constants";
 import { classifyArrangeLayout, runArrange } from "@/lib/arrange-core";
+import {
+  MAX_FILL_TOTAL_DESIGNS,
+  estimateFillCount,
+  planNextFillPass,
+  type FillPassOutcome,
+} from "@/lib/fill-sheet";
 import { DEFAULT_SHEET_MARGIN, planBandReseat, planLadderJump, planSheetShrink } from "@/lib/sheet-fit";
 import { isUploadBatchActive } from "@/lib/upload-queue";
 import { keepPositionsNest, type NestMask } from "@/lib/nest-core";
@@ -42,8 +48,14 @@ const GROUP_PREFIX = "group:";
  */
 const IMPORT_RESEAT_POLL_MS = 150;
 
-/** Fill Sheet never pushes the design count past this — the editor has to stay interactive. */
-const MAX_FILL_TOTAL_DESIGNS = 500;
+/**
+ * How long a single fill pass may go without reporting back before the fill gives up on it.
+ *
+ * The arrange it waits on has its own 10s worker timeout and a synchronous fallback behind
+ * that, so reaching this means something failed in a way that never reported — and the cost
+ * of not noticing is a veil that never lifts and a loop that never ends.
+ */
+const FILL_PASS_WATCHDOG_MS = 30_000;
 
 /**
  * The gap the packer falls back to when no margin is chosen — a mirror of
@@ -69,42 +81,9 @@ function pickFillReference(designs: DesignItem[], selectedDesignId: string | nul
   );
 }
 
-/**
- * How many copies of `ref` Fill Sheet should add: exact grid capacity of the
- * sheet in whichever orientation holds more, minus an area-weighted estimate
- * of the slots existing designs consume, plus a 5% overshoot. Deliberately
- * optimistic — the packer beats a naive grid often enough that undercounting
- * leaves visible empty strips, while extra copies cost nothing because the
- * arrange that follows deletes overflowing fill copies (`trimOverflow`).
- */
-function computeFillCount(
-  ref: DesignItem,
-  designs: DesignItem[],
-  gap: number,
-  sheetW: number,
-  sheetH: number,
-): number {
-  const rw = ref.widthInches * ref.transform.s;
-  const rh = getEffectiveHeight(ref);
-  const g = Math.max(0, gap);
-  if (!(rw > 0) || !(rh > 0) || !(sheetW > 0) || !(sheetH > 0)) return 0;
-  const colsN = Math.floor((sheetW + g) / (rw + g));
-  const rowsN = Math.floor((sheetH + g) / (rh + g));
-  let totalCapacity = colsN * rowsN;
-  // Non-square designs may pack better rotated 90°.
-  if (Math.abs(rw - rh) > 0.01) {
-    const colsR = Math.floor((sheetW + g) / (rh + g));
-    const rowsR = Math.floor((sheetH + g) / (rw + g));
-    totalCapacity = Math.max(totalCapacity, colsR * rowsR);
-  }
-  if (totalCapacity <= 0) return 0;
-  const refCellArea = (rw + g) * (rh + g);
-  const consumedSlots = designs.reduce((acc, d) => {
-    const dw = d.widthInches * d.transform.s;
-    const dh = getEffectiveHeight(d);
-    return acc + ((dw + g) * (dh + g)) / refCellArea;
-  }, 0);
-  return Math.max(0, Math.round((totalCapacity - consumedSlots) * 1.05) + 1);
+/** A design as Fill Sheet's capacity arithmetic sees it: a physical footprint in inches. */
+function fillFootprint(d: DesignItem): { w: number; h: number } {
+  return { w: d.widthInches * d.transform.s, h: getEffectiveHeight(d) };
 }
 
 /**
@@ -253,6 +232,15 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
    */
   const arrangeInFlightRef = useRef(false);
   /**
+   * True for the whole of a Fill Sheet operation, which is several packs rather than one.
+   *
+   * Filling is a search: each pass adds copies, packs, and reads off whether they all fit,
+   * so the sheet settles and re-packs a few times before the answer is final. The customer
+   * asked for one thing and should see one busy state, so the veil is held here across the
+   * gaps between passes instead of flickering off with each individual arrange.
+   */
+  const fillActiveRef = useRef(false);
+  /**
    * What the sheet is busy doing, for the indicator over the preview. `null` when idle.
    *
    * This mirrors `arrangeInFlightRef` rather than replacing it. The lock has to be read and
@@ -263,7 +251,7 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
    * with a paint between each, and reporting them separately is what makes one operation look
    * like the editor stuttering three times.
    */
-  const [arrangeStage, setArrangeStage] = useState<'nesting' | 'expanding' | null>(null);
+  const [arrangeStage, setArrangeStage] = useState<'nesting' | 'expanding' | 'filling' | null>(null);
   /**
    * Bumped whenever an arrange commits new positions.
    *
@@ -275,6 +263,30 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
   const [arrangeEpoch, setArrangeEpoch] = useState(0);
   /** Bumped per externally-requested arrange, so a stale result can be recognised and dropped. */
   const arrangeGenerationRef = useRef(0);
+  /**
+   * How an arrange ended, for callers that pack more than once and have to decide what to
+   * do next. See `ArrangeOpts.onSettled`.
+   */
+  type ArrangeOutcome = {
+    /** Expendable fill copies the pack could not place, and this run therefore deleted. */
+    trimmed: number;
+    /** The run gave up and put the sheet back the way it found it. */
+    reverted: boolean;
+    /** The run packed and committed a layout. False for the guard paths that bail early. */
+    packed: boolean;
+    /**
+     * Milliseconds this run spent packing on the main thread, and zero when the worker did
+     * the packing — which is the normal case.
+     *
+     * A main-thread pack happens when there is no worker or one has timed out, and it
+     * blocks the tab for its whole duration: no repaint, so a loading animation freezes
+     * mid-spin, and no timer, so nothing supervising the run can fire until it is over.
+     * Reported so a caller that packs in a loop can budget how much of that it is willing
+     * to put the customer through. It is the pack alone — waiting on a worker that never
+     * answered costs the customer nothing but time, and the page stays alive throughout.
+     */
+    frozenMs: number;
+  };
   type ArrangeOpts = {
     skipSnapshot?: boolean;
     preserveSelection?: boolean;
@@ -284,6 +296,17 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     trimOverflow?: boolean;
     /** Ids of expendable Fill Sheet copies — the only designs `trimOverflow` may delete. */
     fillIds?: Set<string>;
+    /**
+     * How to undo a run that cannot honour `noGrow`: delete exactly these designs from the
+     * sheet as it stands now.
+     *
+     * Without it the run puts back a layout captured before it started, which is only the
+     * same thing if nothing else moved in the meantime. The preview stays live while a pack
+     * runs, so a customer who nudges a design or drops in new artwork during one would have
+     * that work quietly reverted along with the failed pack. Naming what the run added lets
+     * it take back its own contribution and leave everything else alone.
+     */
+    revertIds?: Set<string>;
     /**
      * Forbid the height ladder outright: the sheet the customer is looking at is the sheet
      * they get, whatever the pack comes back with.
@@ -295,6 +318,25 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
      * needs the categorical version.
      */
     noGrow?: boolean;
+    /**
+     * Skip the auto-shrink that normally follows a clean pack.
+     *
+     * For Fill Sheet. Shrinking measures the packed artwork and drops the sheet to the
+     * shortest rung that still holds it — exactly the wrong move for an operation whose
+     * job is to use up the film the customer already has. Left on, an under-filled pass
+     * shrank the sheet instead of filling it, and when a manually chosen height blocked
+     * the shrink it slid the artwork to the top and left the empty band at the bottom.
+     */
+    noShrink?: boolean;
+    /**
+     * Called once when this run reaches an end, whatever kind of end that is.
+     *
+     * Fill Sheet packs repeatedly and each pass has to see what the last one achieved, so
+     * it needs a completion signal rather than fire-and-forget. Continuations forward it
+     * untouched — a ladder step or a repack retry is the same run still going, and firing
+     * on those would report a result the customer never saw.
+     */
+    onSettled?: (outcome: ArrangeOutcome) => void;
     /** Internal: a ladder step continuing the run that is already in flight. */
     continuation?: boolean;
     /** Internal: this run is the full-repack retry that precedes a growth step. */
@@ -322,6 +364,19 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     // untrimmable overflow copies onto the sheet.
     fillIds: a?.fillIds || b?.fillIds
       ? new Set([...(a?.fillIds ?? []), ...(b?.fillIds ?? [])])
+      : undefined,
+    // Unioned too: the coalesced run stands in for both, so undoing it has to take back
+    // everything both of them added rather than stranding one caller's copies on the sheet.
+    revertIds: a?.revertIds || b?.revertIds
+      ? new Set([...(a?.revertIds ?? []), ...(b?.revertIds ?? [])])
+      : undefined,
+    // Unioned in the same safe direction as `noGrow`: the coalesced run stands in for a
+    // fill, so it must not shrink the sheet the fill is trying to use up.
+    noShrink: (a?.noShrink ?? false) || (b?.noShrink ?? false),
+    // Both callers are still waiting, and a fill that never hears back leaves its veil up
+    // and its loop hanging. The run that stands in for both answers both.
+    onSettled: a?.onSettled || b?.onSettled
+      ? (outcome: ArrangeOutcome) => { a?.onSettled?.(outcome); b?.onSettled?.(outcome); }
       : undefined,
   });
   /**
@@ -369,8 +424,10 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     const next = pendingArrangeRef.current;
     pendingArrangeRef.current = null;
     // Only report idle when nothing is queued, or a burst of clicks would flash the
-    // indicator off and straight back on between the packs it coalesced into.
-    setArrangeStage(next ? 'nesting' : null);
+    // indicator off and straight back on between the packs it coalesced into. A fill is
+    // several packs with a paint between them for the same reason, and holds the veil
+    // itself until its last pass lands — see `fillActiveRef`.
+    setArrangeStage(next ? 'nesting' : (fillActiveRef.current ? 'filling' : null));
     if (next) setTimeout(() => handleAutoArrangeRef.current(next), 0);
   };
 
@@ -451,38 +508,30 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     artboardHeight,
   ]);
 
-  const handleAutoArrange = useCallback((opts?: {
-    skipSnapshot?: boolean;
-    preserveSelection?: boolean;
-    /** Ignore multi-selection and pack every design on the sheet. */
-    arrangeAll?: boolean;
-    /**
-     * Pack from scratch and accept the best layout even if that relocates settled designs.
-     * Set this only when the user explicitly asked to re-arrange; leave it off for the
-     * arranges that happen as a side effect of adding or duplicating a design, where
-     * moving everything else is the behaviour users complain about.
-     */
-    fullRepack?: boolean;
-    /** Delete overflowing designs listed in `fillIds` instead of growing the sheet for them. */
-    trimOverflow?: boolean;
-    /** Ids of expendable Fill Sheet copies — the only designs `trimOverflow` may delete. */
-    fillIds?: Set<string>;
-    /**
-     * Forbid the height ladder outright. See the `ArrangeOpts` declaration for why this is
-     * a separate flag from `trimOverflow` rather than a stronger reading of it.
-     */
-    noGrow?: boolean;
-    /** Internal: a ladder step continuing the run that is already in flight. */
-    continuation?: boolean;
-    /** Internal: this run is the full-repack retry that precedes a growth step. */
-    repacked?: boolean;
-  }) => {
+  // Every option is documented on `ArrangeOpts`, which the queue also speaks in. This used
+  // to restate the same shape inline, and the two drifted the moment one gained a flag.
+  const handleAutoArrange = useCallback((opts?: ArrangeOpts) => {
     const currentDesigns = designsRef.current;
+    /**
+     * Release the lock and tell the caller how this ended.
+     *
+     * Every way out of this run has to go through here, including the guards that bail
+     * before any packing happens: a caller that packs in a loop is waiting on the answer,
+     * and one silent exit leaves it waiting forever with the veil over the preview.
+     */
+    const finishArrange = (outcome: ArrangeOutcome) => {
+      opts?.onSettled?.(outcome);
+      settleArrange();
+    };
+    /** Ended without packing anything — a guard, a failure, or a superseded result. */
+    const abandoned: ArrangeOutcome = { trimmed: 0, reverted: false, packed: false, frozenMs: 0 };
+    /** How long this run blocked the page packing. See `ArrangeOutcome.frozenMs`. */
+    let frozenMs = 0;
     if (currentDesigns.length === 0) {
       console.warn('[autoArrange] no designs');
       // Only does anything for a ladder step that arrives to find the sheet cleared; a
       // fresh call has not taken the lock yet and this is a no-op.
-      settleArrange();
+      finishArrange(abandoned);
       return;
     }
     if (currentDesigns.some(d =>
@@ -504,13 +553,13 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
             description: "Your progress is saved, but one design could not be reloaded. Please recover the draft and try again.",
             variant: "destructive",
           });
-          settleArrange();
+          finishArrange(abandoned);
           return;
         }
         handleAutoArrangeRef.current(opts);
       }).catch(error => {
         console.warn("[autoArrange] image rehydration failed", error);
-        settleArrange();
+        finishArrange(abandoned);
         toast({
           title: t("toast.arrangeUnavailable"),
           description: "Your progress is saved, but one design could not be reloaded. Please recover the draft and try again.",
@@ -558,12 +607,12 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         setSelectedDesignIds(new Set());
       }
       // One design left on a sheet sized for many is the clearest case of paying for blank film.
-      setTimeout(() => shrinkSheetToFitRef.current(), 0);
-      settleArrange();
+      if (!opts?.noShrink) setTimeout(() => shrinkSheetToFitRef.current(), 0);
+      finishArrange(abandoned);
       return;
     }
 
-    if (designsToArrange.length < 2) { settleArrange(); return; }
+    if (designsToArrange.length < 2) { finishArrange(abandoned); return; }
 
     const fillCache = contentFillCacheRef.current;
     /**
@@ -774,6 +823,8 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       // point armed for whatever runs next.
       const noGrowRestore = noGrowRestoreRef.current;
       noGrowRestoreRef.current = null;
+      /** Reported to `onSettled`: how many expendable copies this run spent. */
+      let trimmedCount = 0;
       // Fill Sheet deliberately overshoots its copy count and lets this trim
       // settle the difference: copies the packer could not fit are deleted
       // here, before overflow can grow the sheet or raise the "no space"
@@ -796,6 +847,9 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
           setDesigns(prev => prev.filter(d => !removeIds.has(d.id)));
           bestResult = bestResult.filter(p => !removeIds.has(p.id));
           hasOverflow = bestResult.some(p => p.overflows);
+          // A trim is Fill Sheet's stop signal: the packer was handed more copies than the
+          // film could take, which is the only honest evidence that the sheet is full.
+          trimmedCount = removeIds.size;
         }
       }
       // Pack properly before concluding the sheet is full.
@@ -830,7 +884,14 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       // whole operation, which is the one outcome that costs the customer nothing — the
       // sheet goes back to the arrangement they were looking at before they clicked.
       if (hasOverflow && opts?.noGrow) {
-        if (noGrowRestore) {
+        const revertIds = opts.revertIds;
+        if (revertIds && revertIds.size > 0) {
+          // Take back only what this run added. Nothing has been committed yet — the
+          // placement below is what moves designs — so removing those leaves the sheet
+          // exactly as it was, including any change the customer made while it packed.
+          setDesigns(prev => prev.filter(d => !revertIds.has(d.id)));
+          setArrangeEpoch(e => e + 1);
+        } else if (noGrowRestore) {
           setDesigns(noGrowRestore);
           setArrangeEpoch(e => e + 1);
         }
@@ -838,8 +899,14 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
           setSelectedDesignId(null);
           setSelectedDesignIds(new Set());
         }
-        toast({ title: t("toast.noSpace"), description: t("toast.noSpaceDesc"), variant: "destructive" });
-        settleArrange();
+        // A fill hears about this instead of the customer: it still has a rescue to try
+        // (packing with the current layout held rather than from scratch), and if that
+        // fails too it has already-placed copies from earlier passes to keep. Telling
+        // someone the sheet is full while their copies are landing on it is nonsense.
+        if (!opts.onSettled) {
+          toast({ title: t("toast.noSpace"), description: t("toast.noSpaceDesc"), variant: "destructive" });
+        }
+        finishArrange({ trimmed: trimmedCount, reverted: true, packed: false, frozenMs });
         return;
       }
       if (!opts?.noGrow && hasOverflow && artboardHeightRef.current < MAX_ARTBOARD_HEIGHT && ladderStep < maxLadderSteps) {
@@ -897,6 +964,9 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
           // must stay deletable rather than force yet another rung.
           trimOverflow: opts?.trimOverflow,
           fillIds: opts?.fillIds,
+          noShrink: opts?.noShrink,
+          // The climb is still this run: the caller hears once, from whichever rung ends it.
+          onSettled: opts?.onSettled,
           // Keeps the lock held across the climb: a rung is part of this arrange, not a
           // competing one, and releasing here would let a queued request interleave with
           // a half-finished expansion.
@@ -1038,14 +1108,14 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       // whole sizes worth of film. Deferred so it measures the layout we just committed
       // rather than the one it replaced. Never snapshots: whatever asked for this arrange
       // already did, so one undo takes the arrange and the resize back together.
-      if (!hasOverflow) setTimeout(() => shrinkSheetToFitRef.current(), 0);
-      settleArrange();
+      if (!hasOverflow && !opts?.noShrink) setTimeout(() => shrinkSheetToFitRef.current(), 0);
+      finishArrange({ trimmed: trimmedCount, reverted: false, packed: true, frozenMs });
     };
 
     const worker = getArrangeWorker();
     if (fixedRects && fixedRects.length > 0 && !worker) {
       toast({ title: t("toast.arrangeUnavailable"), description: t("toast.arrangeUnavailableDesc"), variant: "destructive" });
-      settleArrange();
+      finishArrange(abandoned);
       return;
     }
     if (worker) {
@@ -1067,11 +1137,11 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         // that kept the lock would stop the editor arranging again for the rest of the
         // session. The unmount check above needs no such treatment: there is nothing left to
         // release once the hook is gone.
-        if (generation !== arrangeGenerationRef.current) { settleArrange(); return; }
+        if (generation !== arrangeGenerationRef.current) { finishArrange(abandoned); return; }
         if (e.data.type === 'error') {
           console.warn('[autoArrange] worker error:', e.data.error);
           toast({ title: "Arrange failed", variant: "destructive" });
-          settleArrange();
+          finishArrange(abandoned);
           return;
         }
         const bestResult: PlacedItem[] = e.data.result;
@@ -1117,6 +1187,9 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     // Synchronous path for when the worker is unavailable or has timed out. It calls the
     // same `runArrange` the worker does, so the two can no longer drift apart.
     function runFallbackArrange() {
+      // Timed around the pack itself. The ten seconds a caller may have spent waiting on a
+      // worker that never answered are not part of it: the page was live for those.
+      const packStartedAt = performance.now();
       const { result, packedExtent, minRequiredHeight } = runArrange({
         type: 'arrange',
         requestId: 0,
@@ -1133,6 +1206,7 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         heightSteps: GANGSHEET_HEIGHTS,
         layoutPreference,
       });
+      frozenMs = performance.now() - packStartedAt;
       applyResult(
         result,
         result.some(p => p.rotation !== 0),
@@ -1144,97 +1218,278 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
   }, [selectedDesignIds, saveSnapshot, toast, t, designGap, GANGSHEET_HEIGHTS, MAX_ARTBOARD_HEIGHT, ensureDesignImagesAvailable, handleAutoArrangeRef]);
 
   /**
-   * True from the moment a fill batch is appended until its arrange request
-   * has been handed off. Together with `arrangeInFlightRef` this serializes
-   * fills: a second batch computed against a design list the first has not
-   * finished settling would double-count the remaining capacity (two clicks
-   * ≈ 1000 designs), and its copies would not be in the in-flight run's
-   * `fillIds` — the packer would treat them as customer originals and grow
-   * the sheet for them, which a fill must never do.
+   * Whether Fill Sheet has anything to try.
+   *
+   * Deliberately no longer a capacity test. It used to disable the button when the estimate
+   * came back below one copy, which made the estimate's pessimism visible as a dead button
+   * on a sheet with room to spare — the customer could see the empty film and could not act
+   * on it. Only the packer knows what fits, so the button's job is to let them ask; a click
+   * on a genuinely full sheet packs one probe copy, finds it does not fit, and says so.
    */
-  const fillPendingRef = useRef(false);
+  const canFill = useMemo(
+    () => designs.length > 0
+      && designs.length < MAX_FILL_TOTAL_DESIGNS
+      && pickFillReference(designs, selectedDesignId) !== null,
+    [designs, selectedDesignId],
+  );
 
   /**
-   * Whether Fill Sheet has anything to do. Mirrors `handleFillEmptySpace`'s
-   * own guards so the button's disabled state and the click behaviour can
-   * never disagree.
-   */
-  const canFill = useMemo(() => {
-    if (designs.length === 0 || designs.length >= MAX_FILL_TOTAL_DESIGNS) return false;
-    const ref = pickFillReference(designs, selectedDesignId);
-    if (!ref) return false;
-    const gap = designGap !== undefined && designGap >= 0 ? designGap : ARRANGE_DEFAULT_GAP;
-    return computeFillCount(ref, designs, gap, artboardWidth, artboardHeight) >= 1;
-  }, [designs, selectedDesignId, designGap, artboardWidth, artboardHeight]);
-
-  /**
-   * Fill Sheet: pack the empty film with copies of the reference design.
+   * Fill Sheet: pack the empty film with copies of the reference design, until it is
+   * genuinely full.
    *
-   * Adds `computeFillCount` clones (stacked at the sheet center — placement
-   * is entirely the packer's job) and runs a whole-sheet arrange that may
-   * delete whichever of those clones do not fit (`trimOverflow` +
-   * `fillIds`). Snapshots once before mutating, so a single undo removes
-   * every copy the fill added. Copies follow the duplicate conventions:
-   * fresh id, stripped groupId, " copy" suffix trimmed. They inherit the
-   * source's `printFileName`, and the capacity arithmetic agrees with that:
-   * `getEffectiveHeight` counts the stamp band for copy and original alike.
+   * Structured as a saturation search rather than a single estimate-and-pack, because the
+   * estimate cannot be right. Capacity depends on how the artwork interlocks, which is
+   * decided by six rectangle heuristics and a bitmap nester run at three gaps and ranked
+   * against each other — no closed-form guess in this file can predict that, and every term
+   * of the guess it did make rounded against the customer. The result was the reported
+   * "there is plenty of space and it doesn't fill it": copies for the space the arithmetic
+   * could account for, and empty film for the rest, with nothing to notice the difference.
    *
-   * The sheet size is fixed for the whole operation. Filling empty film is
-   * not a reason to sell the customer more of it, so the arrange runs with
-   * `noGrow` and this records the layout to fall back to if the pack cannot
-   * honour that — see `noGrowRestoreRef`.
+   * So the packer is asked instead of predicted:
+   *
+   *   1. Append a batch of copies and pack the whole sheet.
+   *   2. If they all fit, the sheet held that many and may hold more — double the copies
+   *      added and pack again.
+   *   3. If any get trimmed, the ceiling has been found and the fill is done. Overshooting
+   *      is free: `trimOverflow` deletes the copies that did not fit before they are ever
+   *      seen, which is also what stops the loop.
+   *
+   * Each pass costs a pack, so a fill takes longer than it used to — deliberately, and with
+   * the veil held up throughout (see `fillActiveRef`). Bounded on three sides by
+   * `planNextFillPass`: total designs, pass count and wall-clock.
+   *
+   * The sheet size never changes. Filling film the customer already bought is not a reason
+   * to sell them more of it (`noGrow`) — nor, less obviously, a reason to sell them less:
+   * `noShrink` keeps the auto-shrink that follows an ordinary arrange from measuring a
+   * half-filled sheet and cropping it to fit, which is its own way of not filling the sheet.
+   *
+   * Copies follow the duplicate conventions: fresh id, stripped groupId, " copy" suffix
+   * trimmed. They inherit the source's `printFileName`, and the capacity arithmetic agrees
+   * with that: `getEffectiveHeight` counts the stamp band for copy and original alike.
+   * One snapshot is taken for the whole operation, so a single undo removes every copy.
    */
   const handleFillEmptySpace = useCallback(() => {
-    // One fill at a time — see `fillPendingRef`. Ignoring the click is safe:
-    // the sheet is being packed full this very moment, so there is nothing
-    // useful a queued second fill could add.
-    if (fillPendingRef.current || arrangeInFlightRef.current) return;
-    const currentDesigns = designsRef.current;
-    const ref = pickFillReference(currentDesigns, selectedDesignId);
+    // One fill at a time, and never on top of another arrange. A second fill computed
+    // against a design list the first has not finished settling would double-count the
+    // remaining capacity, and its copies would be missing from the in-flight run's
+    // `fillIds` — the packer would read them as customer originals and grow the sheet for
+    // them, which a fill must never do. Ignoring the click is safe: the sheet is being
+    // packed full this very moment, so there is nothing useful a second fill could add.
+    if (fillActiveRef.current || arrangeInFlightRef.current) return;
+    const startDesigns = designsRef.current;
+    const ref = pickFillReference(startDesigns, selectedDesignId);
     if (!ref) return;
     const gap = designGap !== undefined && designGap >= 0 ? designGap : ARRANGE_DEFAULT_GAP;
-    const fillCount = Math.min(
-      computeFillCount(ref, currentDesigns, gap, artboardWidthRef.current, artboardHeightRef.current),
-      Math.max(0, MAX_FILL_TOTAL_DESIGNS - currentDesigns.length),
+    const estimate = estimateFillCount(
+      fillFootprint(ref),
+      startDesigns.map(fillFootprint),
+      gap,
+      artboardWidthRef.current,
+      artboardHeightRef.current,
     );
-    if (fillCount < 1) return;
-    // See handleDuplicateDesign for rationale — copies strip the source's
-    // groupId to remain independent (and so the packer never sees them as
-    // part of a group super-item, which would defeat the overflow trim).
-    const { groupId: _dropGid, ...refNoGroup } = ref;
-    const baseName = ref.name.replace(/ copy( \d+)?$/, '');
-    const copies: DesignItem[] = Array.from({ length: fillCount }, () => ({
-      ...refNoGroup,
-      id: crypto.randomUUID(),
-      name: baseName,
-      transform: { ...ref.transform, nx: 0.5, ny: 0.5 },
-    }));
-    fillPendingRef.current = true;
-    saveSnapshot();
-    // Captured before the copies land, and deliberately the array itself rather than a
-    // count or a set of ids: the pack about to run may relocate every original, so putting
-    // the sheet back means restoring their transforms, not just deleting what was added.
-    noGrowRestoreRef.current = currentDesigns;
-    setDesigns(prev => [...prev, ...copies]);
-    requestAnimationFrame(() => {
-      // Cleared before the hand-off: from here `arrangeInFlightRef` takes
-      // over as the gate, and clearing first means a throw inside arrange
-      // cannot leave the fill button dead for the rest of the session.
-      fillPendingRef.current = false;
-      handleAutoArrangeRef.current({
-        skipSnapshot: true,
-        // Selection survives for feedback, but `arrangeAll` keeps the packer
-        // in whole-sheet mode — selected-only mode treats everything else as
-        // fixed obstacles and would stack the new copies into a column.
-        preserveSelection: true,
-        arrangeAll: true,
-        fullRepack: true,
-        trimOverflow: true,
-        noGrow: true,
-        fillIds: new Set(copies.map(c => c.id)),
-      });
+
+    /**
+     * The whole operation's state. Deliberately local to the click rather than a ref on the
+     * hook: one press of the button owns one of these from the first pass to the last, and
+     * nothing else in the editor has any business reading it.
+     */
+    const session = {
+      startedAt: performance.now(),
+      /** Time spent packing on the UI thread — see `ArrangeOutcome.frozenMs`. */
+      frozenMs: 0,
+      /** Packs run so far. */
+      pass: 0,
+      /** Copies appended and still on the sheet. */
+      added: 0,
+      /** Size of the batch the pass in flight appended. */
+      lastBatch: 0,
+      lastBatchIds: [] as string[],
+      usedStableRetry: false,
+      /**
+       * Smallest copy count the packer has already refused. The search's upper bracket —
+       * see `planNextFillPass`.
+       */
+      highFail: null as number | null,
+      /** Every copy this fill has created — the set of designs the trim may delete. */
+      fillIds: new Set<string>(),
+      /**
+       * Counted rather than read back from `designsRef`, which lags a pass by a render and
+       * would let the design cap drift by a whole batch.
+       */
+      baseCount: startDesigns.length,
+      watchdog: null as ReturnType<typeof setTimeout> | null,
+    };
+
+    const firstPlan = planNextFillPass({
+      pass: 0,
+      added: 0,
+      lastBatch: 0,
+      totalDesigns: session.baseCount,
+      elapsedMs: 0,
+      frozenMs: 0,
+      outcome: null,
+      usedStableRetry: false,
+      estimate,
+      highFail: null,
     });
-  }, [selectedDesignId, designGap, saveSnapshot, setDesigns, handleAutoArrangeRef, designsRef, artboardWidthRef, artboardHeightRef]);
+    if (firstPlan.kind !== 'pack') return;
+
+    const makeCopies = (count: number): DesignItem[] => {
+      // See handleDuplicateDesign for rationale — copies strip the source's
+      // groupId to remain independent (and so the packer never sees them as
+      // part of a group super-item, which would defeat the overflow trim).
+      const { groupId: _dropGid, ...refNoGroup } = ref;
+      const baseName = ref.name.replace(/ copy( \d+)?$/, '');
+      return Array.from({ length: count }, () => ({
+        ...refNoGroup,
+        id: crypto.randomUUID(),
+        name: baseName,
+        // Stacked at the sheet centre; placement is entirely the packer's job.
+        transform: { ...ref.transform, nx: 0.5, ny: 0.5 },
+      }));
+    };
+
+    const endFill = () => {
+      if (session.watchdog !== null) clearTimeout(session.watchdog);
+      session.watchdog = null;
+      fillActiveRef.current = false;
+      // The last pass released the arrange lock itself; all that is left is the veil this
+      // loop has been holding up across the gaps between passes.
+      setArrangeStage(stage => (stage === 'filling' ? null : stage));
+      // Silence is the success case — the customer can see the copies. Only a fill that
+      // achieved nothing needs to account for itself, and "already full" is information
+      // rather than a failure, so it is not raised as one.
+      if (session.added <= 0) {
+        toast({ title: t("toast.fillNoRoom"), description: t("toast.fillNoRoomDesc") });
+      }
+    };
+
+    /** Undo the pass in flight, whose copies were never placed anywhere. */
+    const rollBackPass = () => {
+      const stranded = new Set(session.lastBatchIds);
+      if (mountedRef.current) {
+        // Filtered out of the live list rather than restored from a saved one. These copies
+        // are the only thing the pass added, so they are the only thing undoing it may
+        // remove — anything else that changed while the pack ran, a customer nudging a
+        // design or dropping in new artwork, is none of this rollback's business.
+        setDesigns(prev => prev.filter(d => !stranded.has(d.id)));
+        setArrangeEpoch(e => e + 1);
+      }
+      for (const id of stranded) session.fillIds.delete(id);
+      session.added -= session.lastBatch;
+      noGrowRestoreRef.current = null;
+    };
+
+    const onPassSettled = (outcome: ArrangeOutcome) => {
+      if (session.watchdog !== null) clearTimeout(session.watchdog);
+      session.watchdog = null;
+      // A late answer from a pass the watchdog already gave up on.
+      if (!fillActiveRef.current) return;
+
+      // The arrange bailed before packing anything — a broken image, no worker, a
+      // superseded generation. This pass's copies are sitting unplaced on top of each
+      // other in the middle of the sheet, so take them back off and stop.
+      if (!outcome.packed && !outcome.reverted) {
+        rollBackPass();
+        endFill();
+        return;
+      }
+      if (outcome.reverted) {
+        // Not evidence about capacity: the pack fell over on the customer's own designs, so
+        // it says nothing about how many copies the film would take. The bracket stands.
+        for (const id of session.lastBatchIds) session.fillIds.delete(id);
+        session.added -= session.lastBatch;
+      } else if (outcome.trimmed > 0) {
+        // `added` still counts the copies this pass appended, so it is the count the packer
+        // was asked for and refused — the upper bracket of the search.
+        session.highFail = session.added;
+        session.added -= outcome.trimmed;
+      }
+
+      // Charged to a budget of its own, because the loop may keep searching for as long as
+      // it likes when packs are cheap, and must not when each one leaves the customer
+      // looking at a dead page. Zero whenever the worker did the packing.
+      session.frozenMs += outcome.frozenMs;
+
+      const plan = planNextFillPass({
+        pass: session.pass,
+        added: session.added,
+        lastBatch: session.lastBatch,
+        totalDesigns: session.baseCount + session.added,
+        elapsedMs: performance.now() - session.startedAt,
+        frozenMs: session.frozenMs,
+        outcome: { trimmed: outcome.trimmed, reverted: outcome.reverted } satisfies FillPassOutcome,
+        usedStableRetry: session.usedStableRetry,
+        estimate,
+        highFail: session.highFail,
+      });
+      if (plan.kind === 'pack') {
+        if (plan.stable) session.usedStableRetry = true;
+        runPass(plan.batch, plan.stable);
+        return;
+      }
+      endFill();
+    };
+
+    const runPass = (batch: number, stable: boolean) => {
+      const copies = makeCopies(batch);
+      session.pass += 1;
+      session.lastBatch = batch;
+      session.lastBatchIds = copies.map(c => c.id);
+      session.added += batch;
+      for (const c of copies) session.fillIds.add(c.id);
+      setDesigns(prev => [...prev, ...copies]);
+      session.watchdog = setTimeout(() => {
+        if (!fillActiveRef.current) return;
+        console.warn('[fillSheet] pass never reported back; ending fill');
+        // Retire the run before undoing it. An answer that turns up after this would
+        // otherwise commit placements for copies that are on their way off the sheet;
+        // failing the generation check makes it drop its result and release the lock.
+        arrangeGenerationRef.current++;
+        rollBackPass();
+        endFill();
+      }, FILL_PASS_WATCHDOG_MS);
+      requestAnimationFrame(() => {
+        // Nothing saved to put back: a pass that cannot honour `noGrow` undoes itself by
+        // deleting the copies it added, which leaves the copies earlier passes placed —
+        // and anything the customer did meanwhile — untouched. See `revertIds`.
+        noGrowRestoreRef.current = null;
+        handleAutoArrangeRef.current({
+          skipSnapshot: true,
+          // Selection survives for feedback, but `arrangeAll` keeps the packer
+          // in whole-sheet mode — selected-only mode treats everything else as
+          // fixed obstacles and would stack the new copies into a column.
+          preserveSelection: true,
+          arrangeAll: true,
+          fullRepack: !stable,
+          // A stable rescue must not be talked out of being stable: the repack retry inside
+          // `applyResult` exists to check a stable pack's overflow against a fresh one, and
+          // a fresh pack is exactly what just failed to place the customer's own designs.
+          repacked: stable,
+          trimOverflow: true,
+          noGrow: true,
+          noShrink: true,
+          // Cumulative, not just this batch. A later pass re-packs everything, and a copy
+          // from an earlier pass that no longer fits has to stay expendable — treated as a
+          // customer original it would revert the pass instead of simply being trimmed.
+          fillIds: new Set(session.fillIds),
+          // Only this pass's copies. Everything the fill has placed so far has earned its
+          // spot on the film and a failure here is not a reason to take it back.
+          revertIds: new Set(session.lastBatchIds),
+          onSettled: onPassSettled,
+        });
+      });
+    };
+
+    fillActiveRef.current = true;
+    setArrangeStage('filling');
+    saveSnapshot();
+    runPass(firstPlan.batch, firstPlan.stable);
+  }, [
+    selectedDesignId, designGap, saveSnapshot, setDesigns, setArrangeEpoch, toast, t,
+    handleAutoArrangeRef, designsRef, artboardWidthRef, artboardHeightRef, mountedRef,
+    arrangeGenerationRef,
+  ]);
 
   /**
    * `skipSnapshot` is for the expansion path only, where a single Auto-Arrange can grow the

@@ -1,4 +1,4 @@
-import { makePngChunk, pngHeaderParts, stripRangesFor } from "./png-stream";
+import { filterRowAdaptive, makePngChunk, pngHeaderParts, stripRangesFor } from "./png-stream";
 import { drawPrintLabel, labelReadsUpsideDown, type PrintLabelLayout } from "./print-label";
 
 interface DesignExportData {
@@ -425,100 +425,6 @@ async function drawDesignsOnStrip(
     const drawX = Math.round(p.centerX) - p.pivotX;
     const drawY = Math.round(p.centerY) - stripY - p.pivotY;
     ctx.drawImage(stamp, drawX, drawY);
-  }
-}
-
-function paethPredictor(a: number, b: number, c: number): number {
-  const p = a + b - c;
-  const pa = p >= a ? p - a : a - p;
-  const pb = p >= b ? p - b : b - p;
-  const pc = p >= c ? p - c : c - p;
-  if (pa <= pb && pa <= pc) return a;
-  if (pb <= pc) return b;
-  return c;
-}
-
-/**
- * Distance between scored bytes when choosing a row's filter.
- *
- * Coprime with the 4-byte pixel on purpose, so consecutive samples land on
- * different channels. A multiple of 4 scores red and never looks at alpha,
- * which is where most of the structure in cutout artwork lives: on halftone
- * art a stride of 16 came out 1.2% smaller than scoring everything while 17
- * came out level, but on gradients 16 cost 3% and 17 cost 1%.
- */
-const FILTER_SCORE_STRIDE = 17;
-
-/**
- * Pick a PNG row filter (None/Sub/Up/Average/Paeth) and write the filtered row.
- *
- * The five predictors are scored on a sample of the row rather than on every
- * byte, and only the winner is then computed in full. Scoring all five for
- * every byte of a 67 MB strip was two thirds of this worker's non-compression
- * time; sampling measured 2.6-2.9x faster on sheet-sized strips for 0.1-1%
- * more compressed bytes.
- *
- * Sampling cannot change a single output pixel. The filter type is per-row
- * metadata and the decoder reverses whichever one it finds, so a worse guess
- * costs bytes, never fidelity.
- */
-function filterRowAdaptive(
-  cur: Uint8ClampedArray,
-  prev: Uint8Array,
-  bpp: number,
-  rowBytes: number,
-  out: Uint8Array,
-  outOff: number,
-) {
-  let sNone = 0, sSub = 0, sUp = 0, sAvg = 0, sPaeth = 0;
-  for (let i = 0; i < rowBytes; i += FILTER_SCORE_STRIDE) {
-    const x = cur[i];
-    const a = i >= bpp ? cur[i - bpp] : 0;
-    const b = prev[i];
-    const c = i >= bpp ? prev[i - bpp] : 0;
-
-    sNone += x < 128 ? x : 256 - x;
-
-    const vs = (x - a) & 0xff; sSub += vs < 128 ? vs : 256 - vs;
-    const vu = (x - b) & 0xff; sUp += vu < 128 ? vu : 256 - vu;
-    const vg = (x - ((a + b) >> 1)) & 0xff; sAvg += vg < 128 ? vg : 256 - vg;
-    const vp = (x - paethPredictor(a, b, c)) & 0xff; sPaeth += vp < 128 ? vp : 256 - vp;
-  }
-
-  let best = 0, bestSum = sNone;
-  if (sSub < bestSum) { best = 1; bestSum = sSub; }
-  if (sUp < bestSum) { best = 2; bestSum = sUp; }
-  if (sAvg < bestSum) { best = 3; bestSum = sAvg; }
-  if (sPaeth < bestSum) { best = 4; }
-
-  out[outOff] = best;
-  const d = outOff + 1;
-  switch (best) {
-    case 0:
-      out.set(cur, d);
-      break;
-    case 1:
-      for (let i = 0; i < rowBytes; i++) {
-        out[d + i] = (cur[i] - (i >= bpp ? cur[i - bpp] : 0)) & 0xff;
-      }
-      break;
-    case 2:
-      for (let i = 0; i < rowBytes; i++) {
-        out[d + i] = (cur[i] - prev[i]) & 0xff;
-      }
-      break;
-    case 3:
-      for (let i = 0; i < rowBytes; i++) {
-        out[d + i] = (cur[i] - (((i >= bpp ? cur[i - bpp] : 0) + prev[i]) >> 1)) & 0xff;
-      }
-      break;
-    default:
-      for (let i = 0; i < rowBytes; i++) {
-        const a = i >= bpp ? cur[i - bpp] : 0;
-        const c = i >= bpp ? prev[i - bpp] : 0;
-        out[d + i] = (cur[i] - paethPredictor(a, prev[i], c)) & 0xff;
-      }
-      break;
   }
 }
 
