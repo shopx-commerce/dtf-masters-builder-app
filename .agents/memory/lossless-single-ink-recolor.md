@@ -12,3 +12,11 @@ Recolor the authoritative PNG bytes directly, never pixels that have passed thro
 Bind apply to the analyzed source *before* spending CPU, not only before committing: hold the identity of the source that eligibility was proven against and refuse the run when the design's current print source differs. Print-resolution PNG work is seconds long, so abandoning a job must terminate its worker, an in-flight guard may only be released by the job that still owns the active token, and recoloring to the colour already present must short-circuit instead of rewriting the print source.
 
 **Why:** A post-work identity check recolors bytes eligibility never proved; a stale job's cleanup otherwise unlocks the job that replaced it; and a no-op rewrite still costs a decode/encode, a history entry, and a fresh upload at checkout.
+
+## Job guards and the start helper
+
+A helper that starts a new job by superseding the previous one must release the old in-flight claim *before* the new job claims it — claim after the call, never before.
+
+**Why:** claiming first reads as correct and is silently undone by the very call that starts the protected job, so a double click still starts two print-resolution decodes. The ordering cannot be settled by reading the code — only by a test that actually double-clicks.
+
+**How to apply:** whenever a start/supersede helper both aborts the previous job and resets shared guards, order every caller as: check the guard, start the job, then claim. Release the claim in cleanup only when the finishing job still owns the current token.

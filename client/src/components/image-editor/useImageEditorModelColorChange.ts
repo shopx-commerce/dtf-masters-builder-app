@@ -193,9 +193,12 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
     // The status check above reads a render-old value, so a double click can
     // otherwise start two print-resolution jobs against the same design.
     if (applyInFlightRef.current) return;
-    applyInFlightRef.current = true;
 
     const { token, signal } = beginJob();
+    // Claim the guard *after* beginJob, never before: beginJob releases the
+    // previous job's claim, so an earlier claim would be wiped by the very call
+    // that starts the job it was meant to protect.
+    applyInFlightRef.current = true;
     setColorChangeState(previous => ({ ...previous, status: "applying", message: undefined }));
     try {
       const source = design.imageInfo.exportBlob ?? design.imageInfo.file;

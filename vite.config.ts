@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import fs from "fs";
 import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
+import { moduleAliases } from "./vite.aliases.ts";
 
 /**
  * Serve pdf.js's CMap tables and standard-font data from our own origin.
@@ -104,13 +105,9 @@ export default defineConfig({
         ]
       : []),
   ],
-  resolve: {
-    alias: {
-      "@": path.resolve(import.meta.dirname, "client", "src"),
-      "@shared": path.resolve(import.meta.dirname, "shared"),
-      "@assets": path.resolve(import.meta.dirname, "attached_assets"),
-    },
-  },
+  // Shared with `vitest.config.ts` so a path that resolves in the app cannot
+  // fail to resolve in a test.
+  resolve: { alias: moduleAliases },
   root: path.resolve(import.meta.dirname, "client"),
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),

@@ -30,3 +30,4 @@
 - [Edit-split row identity](edit-split-row-identity.md) — 3-segment row keys must match at every consumer; uniform edits never stamp; applySnapshot spreads live designs, restore tags explicitly.
 - [Mobile contextual sheet dismissal](mobile-context-sheet-dismissal.md) — hiding selection tools must preserve canvas selection and reset when the full selection changes.
 - [Lossless single-ink recolor](lossless-single-ink-recolor.md) — recolor authoritative PNG bytes only; require exact visible RGB equality and preserve alpha plus pHYs metadata.
+- [Client test harness](client-test-harness.md) — Vitest + jsdom for hook ordering bugs; stub blob URLs/image loads and mock worker-backed modules.
