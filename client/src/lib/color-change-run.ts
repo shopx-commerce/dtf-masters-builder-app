@@ -19,6 +19,7 @@
 import { analyzeColorChangePng, recolorPng } from "./color-change-core";
 import type { ColorChangeAnalysis, ColorChangeReason, RgbColor, SourceCrop } from "./color-change-core";
 import { COLOR_CHANGE_MAX_SOURCE_BYTES } from "./color-change-limits";
+import type { InkModel } from "./ink-model";
 import { canStreamRecolor, streamAnalyzePng, streamRecolorPng } from "./png-recolor-stream";
 
 /**
@@ -60,9 +61,11 @@ export async function runColorChangeRecolor(
   target: RgbColor,
   crop?: SourceCrop,
   options?: ColorChangeRunOptions,
+  /** The model a prior analysis of this same source resolved, when there is one. */
+  model?: InkModel,
 ): Promise<ColorChangeRecolorResult> {
   if (canStreamRecolor()) {
-    const streamed = await streamRecolorPng(blob, target, crop, options);
+    const streamed = await streamRecolorPng(blob, target, crop, options, model);
     if (streamed) return streamed;
   }
   if (blob.size > COLOR_CHANGE_MAX_SOURCE_BYTES) return { ok: false, reason: "image-too-large" };

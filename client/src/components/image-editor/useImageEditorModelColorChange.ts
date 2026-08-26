@@ -4,6 +4,7 @@ import type { ColorChangeReason, RgbColor } from "@/lib/color-change-core";
 import { analyzeColorChangeBlob, isColorChangeAbort, recolorPngBlob } from "@/lib/color-change-client";
 import { capRestoredPreview } from "@/lib/draft-preview-cap";
 import { stampEditSplit } from "@/lib/edit-split";
+import { inkCoverage, type InkModel } from "@/lib/ink-model";
 import { revokeThumbnailCacheEntry } from "@/lib/thumbnail-cache";
 
 export type ColorChangeStatus = "closed" | "checking" | "ready" | "applying" | "ineligible" | "error";
@@ -17,6 +18,15 @@ export interface ColorChangeState {
   message?: string;
   /** Rows processed, 0 to 1, while checking or applying. */
   progress?: number;
+  /** What the artwork was found to be, and how much of it is that one ink. */
+  model?: InkModel | null;
+  dominance?: number;
+  /**
+   * A mask whose alpha is coverage rather than the artwork's own alpha, for
+   * artwork with soft edges. Only set when the two differ, so flat artwork
+   * keeps using the preview the editor already has.
+   */
+  coverageMaskSrc?: string;
 }
 
 const CLOSED_STATE: ColorChangeState = {
@@ -27,6 +37,7 @@ const CLOSED_STATE: ColorChangeState = {
   // the artwork's own colour is what makes the swatch a starting point rather
   // than an arbitrary colour one stray click would commit.
   targetHex: "",
+  model: null,
 };
 
 function imageFromBlob(blob: Blob): Promise<HTMLImageElement> {
@@ -59,22 +70,75 @@ function colorToHex(color: RgbColor): string {
  * keeps destination alpha and replaces the colour) produces exactly the image
  * the full decode would have produced, at a few hundred kilopixels.
  */
-async function maskRecolorPreview(source: HTMLImageElement, target: RgbColor): Promise<HTMLImageElement | null> {
+async function maskRecolorPreview(
+  source: HTMLImageElement,
+  target: RgbColor,
+  model: InkModel | null,
+): Promise<HTMLImageElement | null> {
+  const canvas = coverageCanvas(source, model);
+  if (!canvas) return null;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  context.globalCompositeOperation = "source-in";
+  context.fillStyle = colorToHex(target);
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/png"));
+  if (!blob) return null;
+  return imageFromBlob(blob);
+}
+
+/**
+ * Draws the artwork with coverage in the alpha channel.
+ *
+ * For flat artwork this is just the artwork: coverage is 1 everywhere, and the
+ * alpha bytes already say everything. Where the artwork has soft edges or
+ * shading, alpha alone would paint every edge pixel at full strength — the same
+ * hard-edged result the old flat fill gave, and not what the print will be. So
+ * each pixel's alpha is scaled by how much ink is actually in it, exactly as the
+ * recolour engines do it.
+ *
+ * This runs on the editor's display-size preview rather than the print source,
+ * which is what keeps it cheap enough to do while a customer drags a colour
+ * picker. It is faithful because coverage is a plane through RGB: averaging
+ * pixels and then taking coverage gives the same answer as taking coverage and
+ * then averaging, so a downscaled preview shows the same softness the
+ * full-resolution engine will produce.
+ */
+function coverageCanvas(source: HTMLImageElement, model: InkModel | null): HTMLCanvasElement | null {
   const width = source.naturalWidth || 0;
   const height = source.naturalHeight || 0;
   if (!width || !height) return null;
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
-  const context = canvas.getContext("2d");
+  const context = canvas.getContext("2d", { willReadFrequently: true });
   if (!context) return null;
   context.drawImage(source, 0, 0);
-  context.globalCompositeOperation = "source-in";
-  context.fillStyle = colorToHex(target);
-  context.fillRect(0, 0, width, height);
+  if (!model || model.kind !== "blend") return canvas;
+  const pixels = context.getImageData(0, 0, width, height);
+  const data = pixels.data;
+  for (let offset = 0; offset < data.length; offset += 4) {
+    const alpha = data[offset + 3];
+    if (alpha === 0) continue;
+    data[offset + 3] = Math.round(
+      alpha * inkCoverage(model, data[offset], data[offset + 1], data[offset + 2]),
+    );
+  }
+  context.putImageData(pixels, 0, 0);
+  return canvas;
+}
+
+/**
+ * A mask the dialog can paint any colour through, built once when the artwork
+ * is read rather than per keystroke: the customer drags a colour picker, and
+ * re-deriving coverage on every frame would make the preview lag the picker.
+ */
+async function buildCoverageMask(source: HTMLImageElement | undefined, model: InkModel): Promise<string | null> {
+  if (!source || model.kind !== "blend") return null;
+  const canvas = coverageCanvas(source, model);
+  if (!canvas) return null;
   const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/png"));
-  if (!blob) return null;
-  return imageFromBlob(blob);
+  return blob ? URL.createObjectURL(blob) : null;
 }
 
 /** Within this much of the output's aspect ratio, the preview frames the same artwork. */
@@ -86,6 +150,7 @@ async function buildRecoloredPreview(
   target: RgbColor,
   output: { width: number; height: number },
   preserveCleanAlpha: boolean,
+  model: InkModel | null,
 ): Promise<HTMLImageElement> {
   const width = currentPreview?.naturalWidth ?? 0;
   const height = currentPreview?.naturalHeight ?? 0;
@@ -95,7 +160,7 @@ async function buildRecoloredPreview(
   // the decode.
   if (currentPreview && width > 0 && height > 0 &&
       Math.abs(width / height - outputAspect) <= PREVIEW_ASPECT_TOLERANCE * outputAspect) {
-    const masked = await maskRecolorPreview(currentPreview, target).catch(() => null);
+    const masked = await maskRecolorPreview(currentPreview, target, model).catch(() => null);
     if (masked) return masked;
   }
   const decoded = await imageFromBlob(recolored);
@@ -136,6 +201,18 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
    * recolored on trust rather than on analysis.
    */
   const analyzedSourceRef = useRef<{ designId: string; imageInfo: object } | null>(null);
+  /**
+   * The coverage mask currently on screen. Held outside state so it can be
+   * released without waiting for a render: it is a full-size preview PNG, and
+   * reopening the dialog on design after design would otherwise leak one each
+   * time.
+   */
+  const coverageMaskRef = useRef<string | null>(null);
+
+  const releaseCoverageMask = useCallback(() => {
+    if (coverageMaskRef.current) URL.revokeObjectURL(coverageMaskRef.current);
+    coverageMaskRef.current = null;
+  }, []);
 
   /**
    * Turns the worker's row reports into dialog progress.
@@ -179,12 +256,15 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
     jobAbortRef.current = null;
     applyInFlightRef.current = false;
     analyzedSourceRef.current = null;
+    releaseCoverageMask();
     setColorChangeState(CLOSED_STATE);
-  }, []);
+  }, [releaseCoverageMask]);
 
   useEffect(() => () => {
     jobAbortRef.current?.abort();
     jobAbortRef.current = null;
+    if (coverageMaskRef.current) URL.revokeObjectURL(coverageMaskRef.current);
+    coverageMaskRef.current = null;
   }, []);
 
   const setColorChangeTarget = useCallback((targetHex: string) => {
@@ -235,14 +315,26 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
           ...previous,
           status: "ineligible",
           reason: analysis.reason,
+          dominance: analysis.dominance,
         }));
         return;
       }
+      const model = analysis.model;
+      const coverageMaskSrc = await buildCoverageMask(design.imageInfo.image, model).catch(() => null);
+      if (token !== jobTokenRef.current) {
+        if (coverageMaskSrc) URL.revokeObjectURL(coverageMaskSrc);
+        return;
+      }
+      releaseCoverageMask();
+      coverageMaskRef.current = coverageMaskSrc;
       setColorChangeState(previous => ({
         ...previous,
         status: "ready",
         sourceColor: analysis.sourceColor,
         targetHex: colorToHex(analysis.sourceColor),
+        model,
+        dominance: model.dominance,
+        coverageMaskSrc: coverageMaskSrc ?? undefined,
       }));
     } catch (error) {
       if (token !== jobTokenRef.current || isColorChangeAbort(error)) return;
@@ -252,7 +344,7 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
         message: error instanceof Error ? error.message : "Color analysis failed.",
       }));
     }
-  }, [beginJob, designsRef, makeProgressReporter, selectedDesignId, selectedDesignIds]);
+  }, [beginJob, designsRef, makeProgressReporter, releaseCoverageMask, selectedDesignId, selectedDesignIds]);
 
   const applyColorChange = useCallback(async () => {
     const designId = colorChangeState.designId;
@@ -296,6 +388,7 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
         design.imageInfo.exportCrop,
         signal,
         makeProgressReporter(token),
+        colorChangeState.model ?? undefined,
       );
       if (token !== jobTokenRef.current) return;
       if (!result.ok) {
@@ -309,6 +402,7 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
         target,
         result,
         !!design.alphaThresholded,
+        colorChangeState.model ?? null,
       );
       if (token !== jobTokenRef.current) {
         if (previewImage.src.startsWith("blob:")) URL.revokeObjectURL(previewImage.src);
@@ -353,6 +447,7 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
       ));
       if (selectedDesignId === designId) setImageInfo(nextInfo);
       analyzedSourceRef.current = null;
+      releaseCoverageMask();
       setColorChangeState(CLOSED_STATE);
       toast({
         title: t("editor.colorChangeDone"),
@@ -379,6 +474,7 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
     contentFillCacheRef,
     designsRef,
     makeProgressReporter,
+    releaseCoverageMask,
     saveSnapshot,
     selectedDesignId,
     setDesigns,

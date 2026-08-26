@@ -248,10 +248,14 @@ describe("streaming PNG recolor", () => {
   it("refuses artwork with a second visible ink", async () => {
     const width = 12, height = 12;
     const samples = inkSamples(width, height, [0, 0, 0]);
-    // One stray opaque pixel of another colour is enough to make the recolour
-    // ambiguous, which is the whole premise of the feature.
-    const stray = (7 * width + 5) * 4;
-    samples[stray] = 255; samples[stray + 1] = 0; samples[stray + 2] = 0; samples[stray + 3] = 255;
+    // A quarter of the artwork in another colour is a design decision, not
+    // noise: there is no one colour to change, so the recolour is refused.
+    for (let y = 0; y < 3; y++) {
+      for (let x = 0; x < width; x++) {
+        const at = (y * width + x) * 4;
+        samples[at] = 220; samples[at + 1] = 20; samples[at + 2] = 20; samples[at + 3] = 255;
+      }
+    }
     const png = buildPng({ width, height, colorType: 6, samples });
 
     await expect(streamAnalyzePng(png)).resolves.toMatchObject({
@@ -262,6 +266,28 @@ describe("streaming PNG recolor", () => {
       ok: false,
       reason: "multiple-visible-colors",
     });
+  });
+
+  it("sweeps a stray contaminated pixel into the new color", async () => {
+    const width = 12, height = 12;
+    const samples = inkSamples(width, height, [0, 0, 0]);
+    // Real files carry dust: a single off-colour pixel from a bad key or a
+    // resave. Refusing the whole artwork over it is what customers were hitting.
+    const stray = (7 * width + 5) * 4;
+    samples[stray] = 255; samples[stray + 1] = 0; samples[stray + 2] = 0; samples[stray + 3] = 255;
+    const png = buildPng({ width, height, colorType: 6, samples });
+
+    const analysis = await streamAnalyzePng(png);
+    expect(analysis?.eligible).toBe(true);
+
+    const result = await streamRecolorPng(png, TARGET);
+    expect(result?.ok).toBe(true);
+    if (!result?.ok) return;
+    const decoded = await decodeBlob(result.blob);
+    const at = (7 * width + 5) * 4;
+    expect([decoded.data[at], decoded.data[at + 1], decoded.data[at + 2]])
+      .toEqual([TARGET.r, TARGET.g, TARGET.b]);
+    expect(decoded.data[at + 3]).toBeGreaterThan(0);
   });
 
   it("judges only the cropped region", async () => {
@@ -450,6 +476,71 @@ describe("streaming PNG recolor", () => {
     const fromStream = (await decodeBlob(streamed.blob)).data as Uint8Array;
     const fromLegacy = decode(legacy.png).data as Uint8Array;
     expect(Array.from(fromStream)).toEqual(Array.from(fromLegacy));
+  });
+
+  it("matches the whole-image decoder on soft-edged artwork", async () => {
+    // Parity on flat artwork only proves the easy half. Coverage is where the
+    // two engines could drift: the stream works it out from a plane per pixel,
+    // the fallback from the decoded buffer, and a customer must not be able to
+    // tell which one produced their print.
+    const { recolorPng } = await import("./color-change-core");
+    const width = 24, height = 24;
+    const samples = new Uint8Array(width * height * 4);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        // A black mark fading out to white paper across the row.
+        const level = Math.min(255, Math.round((x / (width - 1)) * 200));
+        const at = (y * width + x) * 4;
+        samples[at] = level; samples[at + 1] = level; samples[at + 2] = level; samples[at + 3] = 255;
+      }
+    }
+    const png = buildPng({ width, height, colorType: 6, samples });
+
+    const streamed = await streamRecolorPng(png, TARGET);
+    const legacy = recolorPng(new Uint8Array(await png.arrayBuffer()), TARGET);
+    expect(streamed?.ok).toBe(true);
+    expect(legacy.ok).toBe(true);
+    if (!streamed?.ok || !legacy.ok) return;
+
+    const fromStream = (await decodeBlob(streamed.blob)).data as Uint8Array;
+    const fromLegacy = decode(legacy.png).data as Uint8Array;
+    expect(Array.from(fromStream)).toEqual(Array.from(fromLegacy));
+    // And the softness survived rather than being flattened to a hard edge.
+    const alphas = new Set<number>();
+    for (let offset = 3; offset < fromStream.length; offset += 4) alphas.add(fromStream[offset]);
+    expect(alphas.size).toBeGreaterThan(4);
+  });
+
+  it("re-measures the artwork when the offered model does not belong to it", async () => {
+    // The apply pass can be handed the analysis the dialog already ran, which
+    // saves reading a print-resolution file twice. A model from a different
+    // image would silently print the wrong ink density, so anything that does
+    // not match this exact output is thrown away and the artwork measured again.
+    const width = 16, height = 16;
+    const samples = inkSamples(width, height, [0x40, 0x40, 0x40]);
+    const png = buildPng({ width, height, colorType: 6, samples });
+    const stale = {
+      kind: "blend" as const,
+      ink: { r: 0, g: 0, b: 0 },
+      paper: { r: 255, g: 255, b: 255 },
+      dominance: 1,
+      // Measured from some other, larger design.
+      width: 999,
+      height: 999,
+      cr: -1 / 255, cg: 0, cb: 0, c0: 1,
+    };
+
+    const result = await streamRecolorPng(png, TARGET, undefined, undefined, stale);
+    expect(result?.ok).toBe(true);
+    if (!result?.ok) return;
+    // Measured afresh, the artwork is one flat ink, so every alpha byte is
+    // untouched — had the stale blend model been applied, coverage would have
+    // thinned each of them against a paper colour this artwork does not have.
+    const decoded = await decodeBlob(result.blob);
+    const alphas = Array.from(decoded.data).filter((_, index) => index % 4 === 3);
+    const sourceAlphas = Array.from(samples).filter((_, index) => index % 4 === 3);
+    expect(alphas).toEqual(sourceAlphas);
+    expect(result.sourceColor).toEqual({ r: 0x40, g: 0x40, b: 0x40 });
   });
 
   it("reports progress and finishes at one", async () => {

@@ -1,6 +1,7 @@
 import ColorChangeWorker from "./color-change-worker?worker";
 import type { ColorChangeAnalysis, RgbColor, SourceCrop } from "./color-change-core";
 import type { ColorChangeRecolorResult } from "./color-change-run";
+import type { InkModel } from "./ink-model";
 import type {
   ColorChangeWorkerRequest,
   ColorChangeWorkerResponse,
@@ -53,7 +54,13 @@ async function runWorker(
     return {
       id: request.id,
       kind: "recolor",
-      result: await run.runColorChangeRecolor(request.blob, request.target, request.crop, { signal, onProgress }),
+      result: await run.runColorChangeRecolor(
+        request.blob,
+        request.target,
+        request.crop,
+        { signal, onProgress },
+        request.model,
+      ),
     };
   }
 
@@ -118,8 +125,10 @@ export async function recolorPngBlob(
   crop?: SourceCrop,
   signal?: AbortSignal,
   onProgress?: ColorChangeProgress,
+  /** Reuses the analysis the dialog already ran on this source, when it has one. */
+  model?: InkModel,
 ): Promise<ColorChangeRecolorResult> {
-  const request: ColorChangeWorkerRequest = { id: nextJobId++, kind: "recolor", blob, crop, target };
+  const request: ColorChangeWorkerRequest = { id: nextJobId++, kind: "recolor", blob, crop, target, model };
   const response = await runWorker(request, signal, onProgress);
   if (response.kind !== "recolor") throw new Error("Unexpected color change response.");
   return response.result;

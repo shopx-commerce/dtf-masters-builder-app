@@ -29,7 +29,7 @@
 - [Production file recovery](production-file-recovery.md) — 404 gangsheet + live cart preview = never generated; rebuild from public state JSON + layer assets by mirroring export-worker math.
 - [Edit-split row identity](edit-split-row-identity.md) — 3-segment row keys must match at every consumer; uniform edits never stamp; applySnapshot spreads live designs, restore tags explicitly.
 - [Mobile contextual sheet dismissal](mobile-context-sheet-dismissal.md) — hiding selection tools must preserve canvas selection and reset when the full selection changes.
-- [Lossless single-ink recolor](lossless-single-ink-recolor.md) — recolor authoritative PNG bytes only; require exact visible RGB equality and preserve alpha plus pHYs metadata.
+- [Single-ink recolor](lossless-single-ink-recolor.md) — read artwork as one ink plus coverage (not byte-identical RGB); measure every row; decide the model once per image.
 - [Client test harness](client-test-harness.md) — Vitest + jsdom for hook ordering bugs; stub blob URLs/image loads and mock worker-backed modules.
 - [Fill Sheet capacity search](fill-sheet-capacity-search.md) — measure capacity by repacking to saturation, never estimate once; a fill neither grows nor shrinks the sheet.
 - [Large PNG pixel edits](large-png-pixel-edits.md) — stream rows through native compression codecs instead of decoding whole images; caps belong only on the fallback decoder.

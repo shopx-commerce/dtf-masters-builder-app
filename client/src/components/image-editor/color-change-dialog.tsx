@@ -62,6 +62,19 @@ export default function ColorChangeDialog({
     ? `#${[state.sourceColor.r, state.sourceColor.g, state.sourceColor.b].map(value => value.toString(16).padStart(2, "0")).join("")}`
     : null;
   const unchanged = !!sourceHex && validHex && state.targetHex.toLowerCase() === sourceHex.toLowerCase();
+  // Artwork with soft edges is previewed through a mask whose alpha is coverage,
+  // so what the customer sees here is what the print will be. Flat artwork has
+  // no such mask and keeps using the editor's own preview.
+  const maskSrc = state.coverageMaskSrc || imageSrc;
+  const softEdges = state.model?.kind === "blend";
+  // Rounded down, so a design reported as 97% is at least 97%.
+  const dominancePercent = typeof state.dominance === "number"
+    ? Math.floor(state.dominance * 100)
+    : null;
+  const refusedShare = state.reason === "multiple-visible-colors" && dominancePercent !== null;
+  const refusalMessage = refusedShare
+    ? t("editor.colorChangeMultipleColorsShare", { percent: dominancePercent })
+    : t(REASON_KEYS[state.reason || ""] || "editor.colorChangeUnsupported");
 
   return (
     <div
@@ -108,7 +121,7 @@ export default function ColorChangeDialog({
 
           {(state.status === "ineligible" || state.status === "error") && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-              {state.message || t(REASON_KEYS[state.reason || ""] || "editor.colorChangeUnsupported")}
+              {state.message || refusalMessage}
             </div>
           )}
 
@@ -123,13 +136,13 @@ export default function ColorChangeDialog({
                   backgroundPosition: "0 0,0 10px,10px -10px,-10px 0",
                 }}
               >
-                {imageSrc && validHex && (
+                {maskSrc && validHex && (
                   <div
                     className="absolute inset-3"
                     style={{
                       backgroundColor: state.targetHex,
-                      WebkitMaskImage: `url("${imageSrc}")`,
-                      maskImage: `url("${imageSrc}")`,
+                      WebkitMaskImage: `url("${maskSrc}")`,
+                      maskImage: `url("${maskSrc}")`,
                       WebkitMaskRepeat: "no-repeat",
                       maskRepeat: "no-repeat",
                       WebkitMaskPosition: "center",
@@ -159,7 +172,18 @@ export default function ColorChangeDialog({
               </div>
               {!validHex && <p className="text-xs font-medium text-red-600">{t("editor.colorChangeInvalidHex")}</p>}
               {unchanged && <p className="text-xs font-medium text-slate-500">{t("editor.colorChangeSameColor")}</p>}
-              <p className="text-xs leading-5 text-slate-500">{t("editor.colorChangeExactNote")}</p>
+              {/* Say what was actually found rather than promising something
+                  the artwork cannot deliver: flat artwork is untouched apart
+                  from its colour, soft artwork keeps its softness, and artwork
+                  carrying a few stray pixels says so before it is committed. */}
+              <p className="text-xs leading-5 text-slate-500">
+                {softEdges ? t("editor.colorChangeSoftEdgeNote") : t("editor.colorChangeExactNote")}
+              </p>
+              {dominancePercent !== null && dominancePercent < 100 && (
+                <p className="text-xs leading-5 text-slate-500">
+                  {t("editor.colorChangeMostlyOneColor", { percent: dominancePercent })}
+                </p>
+              )}
             </>
           )}
         </div>

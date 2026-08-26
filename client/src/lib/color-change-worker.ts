@@ -4,6 +4,7 @@ import {
   type ColorChangeRecolorResult,
 } from "./color-change-run";
 import type { ColorChangeAnalysis, RgbColor, SourceCrop } from "./color-change-core";
+import type { InkModel } from "./ink-model";
 
 /**
  * The request carries the source as a Blob, not as bytes.
@@ -15,7 +16,20 @@ import type { ColorChangeAnalysis, RgbColor, SourceCrop } from "./color-change-c
  */
 export type ColorChangeWorkerRequest =
   | { id: number; kind: "analyze"; blob: Blob; crop?: SourceCrop }
-  | { id: number; kind: "recolor"; blob: Blob; crop?: SourceCrop; target: RgbColor };
+  | {
+      id: number;
+      kind: "recolor";
+      blob: Blob;
+      crop?: SourceCrop;
+      target: RgbColor;
+      /**
+       * What the analysis pass already worked out about this exact source.
+       * Plain data, so it survives the trip. Passing it back saves reading a
+       * print-resolution file a second time; it is re-derived if it does not
+       * match what the recolour is about to produce.
+       */
+      model?: InkModel;
+    };
 
 export type ColorChangeWorkerResponse =
   | { id: number; kind: "analyze"; result: ColorChangeAnalysis }
@@ -42,7 +56,13 @@ self.onmessage = (event: MessageEvent<ColorChangeWorkerRequest>) => {
         : {
             id: request.id,
             kind: "recolor",
-            result: await runColorChangeRecolor(request.blob, request.target, request.crop, { onProgress }),
+            result: await runColorChangeRecolor(
+              request.blob,
+              request.target,
+              request.crop,
+              { onProgress },
+              request.model,
+            ),
           };
       self.postMessage(response);
     } catch (error) {

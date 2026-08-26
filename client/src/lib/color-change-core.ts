@@ -1,11 +1,12 @@
 /**
- * Lossless single-ink PNG recolouring. The pixels are decoded and re-encoded
- * (so the PNG byte stream itself is not retained), but alpha samples are copied
- * without calculation. A visible source is deliberately restricted to one RGB
- * ink: every visible pixel must have exactly the same straight RGB samples.
- * Any variation is ambiguous shading, a matte, or more than one ink. Neutral
- * inks (black, white, and gray) are valid; only variation within an ink is
- * ambiguous.
+ * Single-ink PNG recolouring, whole-image path.
+ *
+ * This is the fallback for sources the streaming engine cannot walk (interlaced
+ * files, or environments without a decompression codec). It must reach the same
+ * verdict and produce the same pixels as the stream, so both read the artwork
+ * through the same ink model: one ink, and a coverage per pixel that says how
+ * much of it is there. Soft edges and shading stay soft; artwork that is
+ * genuinely more than one colour is refused rather than flattened.
  */
 import { convertIndexedToRgb, decode, encode } from "fast-png";
 import type { DecodedPng } from "fast-png";
@@ -13,12 +14,16 @@ import {
   COLOR_CHANGE_MAX_DECODED_PIXELS,
   COLOR_CHANGE_MAX_SOURCE_BYTES,
 } from "./color-change-limits";
+import {
+  accumulateInkPixel,
+  createInkStats,
+  inkCoverage,
+  resolveInkModel,
+  type InkModel,
+} from "./ink-model";
 
-export interface RgbColor {
-  r: number;
-  g: number;
-  b: number;
-}
+export type { RgbColor } from "./ink-model";
+import type { RgbColor } from "./ink-model";
 
 export interface SourceCrop {
   x: number;
@@ -44,6 +49,8 @@ export type ColorChangeReason =
 export interface ColorChangeIneligible {
   eligible: false;
   reason: ColorChangeReason;
+  /** Share of the artwork that was one ink, when that is what refused it. */
+  dominance?: number;
   width?: number;
   height?: number;
 }
@@ -51,6 +58,7 @@ export interface ColorChangeIneligible {
 export interface ColorChangeEligible {
   eligible: true;
   sourceColor: RgbColor;
+  model: InkModel;
   width: number;
   height: number;
 }
@@ -181,20 +189,33 @@ export function decodeColorChangePng(bytes: Uint8Array, crop?: SourceCrop): Deco
 }
 
 function analyzeDecoded(decoded: DecodedColorChangePng): ColorChangeAnalysis {
-  let source: RgbColor | undefined;
-  for (let offset = 0; offset < decoded.data.length; offset += 4) {
-    if (decoded.data[offset + 3] === 0) continue; // RGB below zero alpha is not visible.
-    const color = { r: decoded.data[offset], g: decoded.data[offset + 1], b: decoded.data[offset + 2] };
-    if (!source) source = color;
-    else if (color.r !== source.r || color.g !== source.g || color.b !== source.b) {
-      return { eligible: false, reason: "multiple-visible-colors", width: decoded.width, height: decoded.height };
-    }
+  const stats = createInkStats();
+  const data = decoded.data;
+  for (let offset = 0; offset < data.length; offset += 4) {
+    const alpha = data[offset + 3];
+    // RGB below zero alpha is not visible, and says nothing about the ink.
+    if (alpha !== 0) accumulateInkPixel(stats, data[offset], data[offset + 1], data[offset + 2], alpha);
   }
-  if (!source) return { eligible: false, reason: "no-visible-pixels", width: decoded.width, height: decoded.height };
-  return { eligible: true, sourceColor: source, width: decoded.width, height: decoded.height };
+  const resolved = resolveInkModel(stats, decoded.width, decoded.height);
+  if (!resolved.ok) {
+    return {
+      eligible: false,
+      reason: resolved.reason,
+      dominance: resolved.dominance,
+      width: decoded.width,
+      height: decoded.height,
+    };
+  }
+  return {
+    eligible: true,
+    sourceColor: resolved.model.ink,
+    model: resolved.model,
+    width: decoded.width,
+    height: decoded.height,
+  };
 }
 
-/** Determines whether all non-transparent pixels are one unambiguous RGB ink. */
+/** Works out which single ink the artwork is made of, and how much of it fits. */
 export function analyzeColorChangePng(bytes: Uint8Array, crop?: SourceCrop): ColorChangeAnalysis {
   const decoded = decodeColorChangePng(bytes, crop);
   return "eligible" in decoded ? decoded : analyzeDecoded(decoded);
@@ -225,7 +246,14 @@ function preservePhysicalResolution(source: Uint8Array, encoded: Uint8Array): Ui
   return output;
 }
 
-/** Replaces RGB on every visible pixel, preserving each crop alpha byte exactly. */
+/**
+ * Rewrites every visible pixel to `target`, keeping each pixel's coverage.
+ *
+ * On artwork that is one flat colour the alpha bytes are copied untouched, so
+ * the result is the same file with a different ink. Where the artwork has soft
+ * edges or shading, coverage rides on alpha instead — a half-strength pixel
+ * becomes half-strength of the new colour rather than a hard edge.
+ */
 export function recolorPng(bytes: Uint8Array, target: RgbColor, crop?: SourceCrop): RecolorPngResult {
   if (![target.r, target.g, target.b].every(value => Number.isInteger(value) && value >= 0 && value <= 255)) {
     throw new RangeError("Target color channels must be integers from 0 through 255.");
@@ -234,12 +262,19 @@ export function recolorPng(bytes: Uint8Array, target: RgbColor, crop?: SourceCro
   if ("eligible" in decoded) return { ok: false, reason: decoded.reason };
   const analysis = analyzeDecoded(decoded);
   if (!analysis.eligible) return { ok: false, reason: analysis.reason };
+  const model = analysis.model;
+  const flat = model.kind !== "blend";
   const output = new Uint8Array(decoded.data);
   for (let offset = 0; offset < output.length; offset += 4) {
-    if (output[offset + 3] !== 0) {
+    const alpha = output[offset + 3];
+    if (alpha !== 0) {
+      const coverage = flat
+        ? 1
+        : inkCoverage(model, output[offset], output[offset + 1], output[offset + 2]);
       output[offset] = target.r;
       output[offset + 1] = target.g;
       output[offset + 2] = target.b;
+      if (!flat) output[offset + 3] = Math.round(alpha * coverage);
     }
   }
   return {

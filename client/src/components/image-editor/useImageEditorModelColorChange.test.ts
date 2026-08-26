@@ -47,6 +47,22 @@ function deferred<T>() {
 const SOURCE_COLOR = { r: 0x12, g: 0x34, b: 0x56 };
 
 /**
+ * Flat artwork: one ink, full coverage everywhere. The bookkeeping under test
+ * is the same whatever the artwork turns out to be, and this is the shape that
+ * needs no canvas — a soft-edged model would send the hook off to build a
+ * coverage mask, which jsdom cannot rasterise.
+ */
+const FLAT_MODEL = {
+  kind: "uniform" as const,
+  ink: SOURCE_COLOR,
+  paper: null,
+  dominance: 1,
+  width: 64,
+  height: 64,
+  cr: 0, cg: 0, cb: 0, c0: 1,
+};
+
+/**
  * A real 1x1 PNG. The commit path decodes what the recolor returns, and the
  * image stub reads the PNG header for its dimensions, so handing it plausible
  * junk would have the test bless bytes no browser could display.
@@ -136,7 +152,7 @@ async function openToReady(view: ReturnType<typeof setup>["view"]) {
     void view.result.current.openColorChange();
   });
   await act(async () => {
-    analysis.resolve({ eligible: true, sourceColor: SOURCE_COLOR });
+    analysis.resolve({ eligible: true, sourceColor: SOURCE_COLOR, model: FLAT_MODEL });
   });
   await waitFor(() => expect(view.result.current.colorChangeState.status).toBe("ready"));
 }
