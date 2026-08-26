@@ -11,6 +11,7 @@ import {
   Droplets,
   Eraser,
   Grid2x2Plus,
+  Group,
   SlidersHorizontal,
   Sparkles,
   LayoutGrid,
@@ -21,6 +22,7 @@ import {
   ShoppingCart,
   Trash2,
   Undo2,
+  Ungroup,
   Unlink,
   WandSparkles,
   Palette,
@@ -66,6 +68,15 @@ export type EditorActionToolbarProps = {
   handleDeleteDesign: (id: string) => void;
   handleDeleteMulti: (ids: Set<string>) => void;
   handleDuplicateAndArrange: (count: number) => void;
+  /**
+   * Grouping, mirrored from the right-click menu onto the desktop toolbar.
+   * Customers who lean on auto-arrange still want a few designs kept together,
+   * and a hidden context menu is not where they look for it.
+   */
+  handleGroupSelected: () => void;
+  handleUngroupSelected: () => void;
+  /** True when any selected design already belongs to a group. */
+  selectedHasGroup: boolean;
   canFill: boolean;
   handleFillEmptySpace: () => void;
   designGap: number | undefined;
@@ -155,6 +166,9 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
     handleDeleteDesign,
     handleDeleteMulti,
     handleDuplicateAndArrange,
+    handleGroupSelected,
+    handleUngroupSelected,
+    selectedHasGroup,
     canFill,
     handleFillEmptySpace,
     designGap,
@@ -230,6 +244,20 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
   // used before it moved here.
   const wandTolerance = useWandTolerance();
   const { setWandTolerance } = useToolActions();
+
+  /**
+   * Same rule the right-click menu uses: two or more designs and none of them
+   * already in a group. Selecting one member expands the selection to the whole
+   * group, so without that second condition the button would silently rebuild
+   * the group the customer already has.
+   */
+  const canGroupSelection = selectedDesignIds.size >= 2 && !selectedHasGroup;
+  /**
+   * Both grouping handlers act on the selected-ID set, so the cluster keys off
+   * that set alone: with only an active design and an empty set there is
+   * nothing either button could do, and two dead buttons read worse than none.
+   */
+  const hasSelection = selectedDesignIds.size > 0;
 
   /** Mirrors the phone's Design-tools list for the three tools that moved off
    *  the sidebar, plus the two Pixel Clean actions that moved out of their own
@@ -613,6 +641,48 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
       )}
       {!isMobile && (
         <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
+          {/* Grouping sits immediately left of duplication because that is the
+              order customers work in: keep a few designs together, then
+              duplicate and auto-arrange them as one unit. The right-click menu
+              still offers the same two actions with their shortcuts; these are
+              deliberately secondary (outline, not filled) so they do not
+              compete with Duplicate & Arrange, Fill Sheet, or Auto-Arrange.
+              The pair only appears once something is selected — grouping is
+              meaningless otherwise, and this row is already dense. Both stay
+              visible (one greyed) as soon as there is a selection, so the
+              feature is discoverable without opening the right-click menu. */}
+          {hasSelection && (
+          <div className="flex items-center gap-1">
+            <button
+              onClick={handleGroupSelected}
+              disabled={!canGroupSelection}
+              className={`flex items-center gap-1 px-2 py-1 lg:px-3 lg:py-2 rounded-md transition-all whitespace-nowrap ${lang !== 'en' ? 'text-[11px] lg:text-sm' : 'text-[12px] lg:text-sm'} font-semibold min-h-[36px] coarse:min-h-[44px] ${
+                canGroupSelection
+                  ? 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-300'
+                  : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+              }`}
+              title={t("editor.groupSelectedTitle")}
+              data-testid="button-group-selected"
+            >
+              <Group className="w-3 h-3 lg:w-4 lg:h-4 flex-shrink-0" />
+              {t("editor.groupSelected")}
+            </button>
+            <button
+              onClick={handleUngroupSelected}
+              disabled={!selectedHasGroup}
+              className={`flex items-center gap-1 px-2 py-1 lg:px-3 lg:py-2 rounded-md transition-all whitespace-nowrap ${lang !== 'en' ? 'text-[11px] lg:text-sm' : 'text-[12px] lg:text-sm'} font-semibold min-h-[36px] coarse:min-h-[44px] ${
+                selectedHasGroup
+                  ? 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-300'
+                  : 'bg-gray-200 text-gray-500 opacity-30 pointer-events-none'
+              }`}
+              title={t("editor.ungroupSelectedTitle")}
+              data-testid="button-ungroup-selected"
+            >
+              <Ungroup className="w-3 h-3 lg:w-4 lg:h-4 flex-shrink-0" />
+              {t("editor.ungroupSelected")}
+            </button>
+          </div>
+          )}
           {/* Copies + Duplicate & Arrange moved down from Row 1 so duplication
               sits in the same row as Auto-Arrange. */}
           <div className="flex items-center gap-1">

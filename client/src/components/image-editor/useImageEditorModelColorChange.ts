@@ -1,7 +1,7 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ImageEditorBagAfterHalftone } from "./image-editor-hook-bag.types";
 import type { ColorChangeReason, RgbColor } from "@/lib/color-change-core";
-import { analyzeColorChangeBlob, recolorPngBlob } from "@/lib/color-change-client";
+import { analyzeColorChangeBlob, isColorChangeAbort, recolorPngBlob } from "@/lib/color-change-client";
 import { capRestoredPreview } from "@/lib/draft-preview-cap";
 import { stampEditSplit } from "@/lib/edit-split";
 import { revokeThumbnailCacheEntry } from "@/lib/thumbnail-cache";
@@ -21,7 +21,10 @@ const CLOSED_STATE: ColorChangeState = {
   status: "closed",
   designId: null,
   sourceColor: null,
-  targetHex: "#ff2d95",
+  // Filled in from the analyzed ink once the design has been read. Opening on
+  // the artwork's own colour is what makes the swatch a starting point rather
+  // than an arbitrary colour one stray click would commit.
+  targetHex: "",
 };
 
 function imageFromBlob(blob: Blob): Promise<HTMLImageElement> {
@@ -64,10 +67,42 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
   } = bag;
   const [colorChangeState, setColorChangeState] = useState<ColorChangeState>(CLOSED_STATE);
   const jobTokenRef = useRef(0);
+  const jobAbortRef = useRef<AbortController | null>(null);
+  const applyInFlightRef = useRef(false);
+  /**
+   * The exact print source that eligibility was proven against. Apply is only
+   * ever allowed to rewrite this revision: anything else (an upscale, a
+   * background removal, a crop landing between Ready and Apply) would be
+   * recolored on trust rather than on analysis.
+   */
+  const analyzedSourceRef = useRef<{ designId: string; imageInfo: object } | null>(null);
+
+  /**
+   * Ignoring a stale result is not enough: a print-resolution decode and
+   * re-encode is seconds of CPU, so an abandoned job has to actually stop or it
+   * competes with the one the customer is waiting on.
+   */
+  const beginJob = useCallback(() => {
+    jobAbortRef.current?.abort();
+    // A superseded job must never clear a guard the new job now owns.
+    applyInFlightRef.current = false;
+    const controller = new AbortController();
+    jobAbortRef.current = controller;
+    return { token: ++jobTokenRef.current, signal: controller.signal };
+  }, []);
 
   const closeColorChange = useCallback(() => {
     jobTokenRef.current++;
+    jobAbortRef.current?.abort();
+    jobAbortRef.current = null;
+    applyInFlightRef.current = false;
+    analyzedSourceRef.current = null;
     setColorChangeState(CLOSED_STATE);
+  }, []);
+
+  useEffect(() => () => {
+    jobAbortRef.current?.abort();
+    jobAbortRef.current = null;
   }, []);
 
   const setColorChangeTarget = useCallback((targetHex: string) => {
@@ -93,7 +128,7 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
       return;
     }
 
-    const token = ++jobTokenRef.current;
+    const { token, signal } = beginJob();
     setColorChangeState(previous => ({
       ...previous,
       status: "checking",
@@ -104,8 +139,9 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
     }));
     try {
       const source = design.imageInfo.exportBlob ?? design.imageInfo.file;
-      const analysis = await analyzeColorChangeBlob(source, design.imageInfo.exportCrop);
+      const analysis = await analyzeColorChangeBlob(source, design.imageInfo.exportCrop, signal);
       if (token !== jobTokenRef.current) return;
+      analyzedSourceRef.current = analysis.eligible ? { designId: design.id, imageInfo: design.imageInfo } : null;
       if (!analysis.eligible) {
         setColorChangeState(previous => ({
           ...previous,
@@ -118,17 +154,17 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
         ...previous,
         status: "ready",
         sourceColor: analysis.sourceColor,
-        targetHex: previous.targetHex || colorToHex(analysis.sourceColor),
+        targetHex: colorToHex(analysis.sourceColor),
       }));
     } catch (error) {
-      if (token !== jobTokenRef.current) return;
+      if (token !== jobTokenRef.current || isColorChangeAbort(error)) return;
       setColorChangeState(previous => ({
         ...previous,
         status: "error",
         message: error instanceof Error ? error.message : "Color analysis failed.",
       }));
     }
-  }, [designsRef, selectedDesignId, selectedDesignIds]);
+  }, [beginJob, designsRef, selectedDesignId, selectedDesignIds]);
 
   const applyColorChange = useCallback(async () => {
     const designId = colorChangeState.designId;
@@ -136,12 +172,34 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
     if (!designId || !target || colorChangeState.status !== "ready") return;
     const design = designsRef.current.find(item => item.id === designId);
     if (!design || design.halftoned) return;
+    // Refuse before spending any CPU if the print source moved on since it was
+    // analyzed; the post-work identity check alone would recolor unproven bytes.
+    const analyzed = analyzedSourceRef.current;
+    if (!analyzed || analyzed.designId !== designId || analyzed.imageInfo !== design.imageInfo) {
+      setColorChangeState(previous => ({
+        ...previous,
+        status: "error",
+        message: t("editor.colorChangeSourceChanged"),
+      }));
+      return;
+    }
+    // Rewriting the print source to the colour it already has would still cost
+    // a full decode/encode, a history entry, and a fresh upload at checkout.
+    const sourceColor = colorChangeState.sourceColor;
+    if (sourceColor && sourceColor.r === target.r && sourceColor.g === target.g && sourceColor.b === target.b) {
+      closeColorChange();
+      return;
+    }
+    // The status check above reads a render-old value, so a double click can
+    // otherwise start two print-resolution jobs against the same design.
+    if (applyInFlightRef.current) return;
+    applyInFlightRef.current = true;
 
-    const token = ++jobTokenRef.current;
+    const { token, signal } = beginJob();
     setColorChangeState(previous => ({ ...previous, status: "applying", message: undefined }));
     try {
       const source = design.imageInfo.exportBlob ?? design.imageInfo.file;
-      const result = await recolorPngBlob(source, target, design.imageInfo.exportCrop);
+      const result = await recolorPngBlob(source, target, design.imageInfo.exportCrop, signal);
       if (token !== jobTokenRef.current) return;
       if (!result.ok) {
         setColorChangeState(previous => ({ ...previous, status: "ineligible", reason: result.reason }));
@@ -193,21 +251,29 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
         "color",
       ));
       if (selectedDesignId === designId) setImageInfo(nextInfo);
+      analyzedSourceRef.current = null;
       setColorChangeState(CLOSED_STATE);
       toast({
         title: t("editor.colorChangeDone"),
         description: t("editor.colorChangeDoneDescription", { color: colorChangeState.targetHex.toUpperCase() }),
       });
     } catch (error) {
-      if (token !== jobTokenRef.current) return;
+      if (token !== jobTokenRef.current || isColorChangeAbort(error)) return;
       setColorChangeState(previous => ({
         ...previous,
         status: "error",
         message: error instanceof Error ? error.message : "Color change failed.",
       }));
+    } finally {
+      // Only the job that still owns the token may release the guard; a job
+      // aborted while its preview decode was pending must not unlock the one
+      // that replaced it.
+      if (token === jobTokenRef.current) applyInFlightRef.current = false;
     }
   }, [
     assetDataUrlCacheRef,
+    beginJob,
+    closeColorChange,
     colorChangeState,
     contentFillCacheRef,
     designsRef,

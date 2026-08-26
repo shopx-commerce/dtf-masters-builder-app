@@ -21,12 +21,34 @@ import { inlineDecodeMegapixelBudget } from "@/lib/image-budget";
 import {
   isSelectedDetailReady,
   planSelectedDetailRaster,
+  type SelectedDetailWorkerRequest,
   type SelectedDetailWorkerResponse,
 } from "@/lib/selected-detail-preview";
 import SelectedDetailWorker from "@/lib/selected-detail-worker?worker";
 
 const BASE_DPI_SCALE = 2;
 const HIGH_QUALITY_DETAIL_ZOOM = 3;
+/**
+ * Zoom floor for sharpening ordinary raster artwork from its retained print
+ * source.
+ *
+ * Lower than the halftone threshold on purpose. Halftones need zoom 3 because
+ * the overlay there is a 1:1 nearest-neighbour raster that only makes sense
+ * once the dots are large on screen. Ordinary artwork is resampled to exactly
+ * the pixels the screen can show, and `planSelectedDetailRaster` already
+ * refuses to allocate anything unless it beats the sheet canvas by a visible
+ * margin — so the useful range starts as soon as the design is magnified at
+ * all. This floor only keeps the decode lane quiet around fit-to-view.
+ */
+const ORDINARY_DETAIL_MIN_ZOOM = 1.5;
+/**
+ * How long a *re-decode* waits for the zoom to settle. Selecting a design
+ * requests immediately: that delay would be latency the customer asked for
+ * nothing.
+ */
+const ORDINARY_DETAIL_REDECODE_DELAY_MS = 180;
+/** A worker that never answers is dropped rather than pinning the decode lane. */
+const ORDINARY_DETAIL_WATCHDOG_MS = 10_000;
 const HIGH_QUALITY_DETAIL_MAX_AREA = 4_000_000;
 const HIGH_QUALITY_DETAIL_MAX_EDGE = 4096;
 // The preview canvas is inset inside the zoom wrapper and draws its border
@@ -321,15 +343,127 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     topAlignRef.current = isMobile;
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const detailCanvasRef = useRef<HTMLCanvasElement>(null);
-    const ordinaryDetailBitmapRef = useRef<{
+    /**
+     * The decoded full-detail bitmap for the selected design.
+     *
+     * Held in state rather than a ref: a render decides whether the overlay is
+     * showable, and the paint effect then draws whatever it decided on. With a
+     * mutable ref an async decode could swap (and close) the bitmap between
+     * those two points, so the effect painted a different — or already closed —
+     * image than the render approved. The ref below only mirrors the published
+     * value so unmount and replacement can close the previous bitmap without
+     * closing one that is still on screen.
+     */
+    const [ordinaryDetailReady, setOrdinaryDetailReady] = useState<{
       bitmap: ImageBitmap;
       designId: string;
       source: Blob;
       requestKey: string;
     } | null>(null);
+    const ordinaryDetailReadyRef = useRef<typeof ordinaryDetailReady>(null);
     const ordinaryDetailRequestIdRef = useRef(0);
-    const [ordinaryDetailVersion, setOrdinaryDetailVersion] = useState(0);
-    void ordinaryDetailVersion;
+    const ordinaryDetailPendingRef = useRef<{
+      requestId: number;
+      designId: string;
+      source: Blob;
+      requestKey: string;
+    } | null>(null);
+    const ordinaryDetailWorkerRef = useRef<Worker | null>(null);
+    const ordinaryDetailWatchdogRef = useRef<number | null>(null);
+    const publishOrdinaryDetail = useCallback(
+      (next: NonNullable<typeof ordinaryDetailReady>) => {
+        const previous = ordinaryDetailReadyRef.current;
+        if (previous && previous.bitmap !== next.bitmap) previous.bitmap.close();
+        ordinaryDetailReadyRef.current = next;
+        setOrdinaryDetailReady(next);
+      },
+      [],
+    );
+    const releaseOrdinaryDetail = useCallback(() => {
+      const previous = ordinaryDetailReadyRef.current;
+      if (!previous) return;
+      previous.bitmap.close();
+      ordinaryDetailReadyRef.current = null;
+      setOrdinaryDetailReady(null);
+    }, []);
+    const clearOrdinaryDetailWatchdog = useCallback(() => {
+      if (ordinaryDetailWatchdogRef.current == null) return;
+      window.clearTimeout(ordinaryDetailWatchdogRef.current);
+      ordinaryDetailWatchdogRef.current = null;
+    }, []);
+    const teardownOrdinaryDetailWorker = useCallback(() => {
+      ordinaryDetailWorkerRef.current?.terminate();
+      ordinaryDetailWorkerRef.current = null;
+      ordinaryDetailPendingRef.current = null;
+      clearOrdinaryDetailWatchdog();
+    }, [clearOrdinaryDetailWatchdog]);
+    const armOrdinaryDetailWatchdog = useCallback(() => {
+      clearOrdinaryDetailWatchdog();
+      ordinaryDetailWatchdogRef.current = window.setTimeout(() => {
+        ordinaryDetailWatchdogRef.current = null;
+        teardownOrdinaryDetailWorker();
+      }, ORDINARY_DETAIL_WATCHDOG_MS);
+    }, [clearOrdinaryDetailWatchdog, teardownOrdinaryDetailWorker]);
+    /**
+     * One worker, reused. Building and tearing one down per request paid the
+     * module's startup cost on every zoom bucket, on the exact path whose whole
+     * purpose is to feel immediate.
+     */
+    const ensureOrdinaryDetailWorker = useCallback((): Worker | null => {
+      if (ordinaryDetailWorkerRef.current) return ordinaryDetailWorkerRef.current;
+      let worker: Worker;
+      try {
+        worker = new SelectedDetailWorker();
+      } catch {
+        return null;
+      }
+      worker.onmessage = (event: MessageEvent<SelectedDetailWorkerResponse>) => {
+        const response = event.data;
+        const pending = ordinaryDetailPendingRef.current;
+        if (
+          !pending ||
+          response.requestId !== pending.requestId ||
+          response.requestId !== ordinaryDetailRequestIdRef.current
+        ) {
+          if (response.type === "result") response.bitmap.close();
+          return;
+        }
+        ordinaryDetailPendingRef.current = null;
+        clearOrdinaryDetailWatchdog();
+        if (response.type !== "result") return;
+        publishOrdinaryDetail({
+          bitmap: response.bitmap,
+          designId: pending.designId,
+          source: pending.source,
+          requestKey: pending.requestKey,
+        });
+      };
+      worker.onerror = () => {
+        teardownOrdinaryDetailWorker();
+      };
+      ordinaryDetailWorkerRef.current = worker;
+      return worker;
+    }, [
+      clearOrdinaryDetailWatchdog,
+      publishOrdinaryDetail,
+      teardownOrdinaryDetailWorker,
+    ]);
+    /**
+     * Bumped whenever a gesture finishes.
+     *
+     * Gesture state lives in refs so the sheet can repaint without re-rendering,
+     * but the detail overlay is *suppressed* during a gesture and has to come
+     * back once one ends. Clearing a ref schedules no render, so after a wheel
+     * zoom settled the overlay could stay suppressed indefinitely — the single
+     * most common way to reach high zoom never sharpened until something else
+     * happened to re-render. This tick is that missing signal.
+     */
+    const [gestureSettleTick, setGestureSettleTick] = useState(0);
+    const notifyGestureSettled = useCallback(() => {
+      setGestureSettleTick(tick => tick + 1);
+    }, []);
+    const notifyGestureSettledRef = useRef(notifyGestureSettled);
+    notifyGestureSettledRef.current = notifyGestureSettled;
     const containerRef = useRef<HTMLDivElement>(null);
     const resizeLimitToastRef = useRef(0);
     const zoomMax = Math.max(10, Math.ceil(artboardHeight / Math.max(artboardWidth, 0.1)) * 3);
@@ -1095,6 +1229,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         if (e.code === 'Space') {
           spaceDownRef.current = false;
           isPanningRef.current = false;
+          notifyGestureSettledRef.current();
           if (canvasAreaRef.current && !selectionZoomActiveRef.current) {
             canvasAreaRef.current.style.cursor = getIdleCursor();
           }
@@ -2401,6 +2536,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         // mid-gesture frame stayed on screen — which for a group drag left
         // the companions at ghost alpha after the pointer came up.
         if (wasGroupInteracting) setInteractionEpoch(e => e + 1);
+        notifyGestureSettledRef.current();
         if (wasGroupInteracting) onInteractionEnd?.();
         return;
       }
@@ -2417,6 +2553,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       if (wasInteracting) onTransformChangeRef.current?.(transformRef.current);
       if (canvasAreaRef.current) canvasAreaRef.current.style.cursor = getIdleCursor();
       checkPixelOverlap();
+      notifyGestureSettledRef.current();
       if (wasInteracting) onInteractionEnd?.();
     }, [checkPixelOverlap, onInteractionEnd, designs, artboardWidth, artboardHeight, onMultiSelect, stopBottomGlow, stopAutoPan]);
     handleInteractionEndRef.current = handleInteractionEnd;
@@ -2577,6 +2714,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       if (isPanningRef.current) {
         isPanningRef.current = false;
         setPreviewCursor(spaceDownRef.current ? 'grab' : getIdleCursor());
+        notifyGestureSettledRef.current();
         return;
       }
       handleInteractionEnd();
@@ -2826,10 +2964,12 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const handleTouchEnd = useCallback(() => {
       if (isPinchingRef.current) {
         isPinchingRef.current = false;
+        notifyGestureSettledRef.current();
         return;
       }
       if (isPanningRef.current) {
         isPanningRef.current = false;
+        notifyGestureSettledRef.current();
         return;
       }
       handleInteractionEnd();
@@ -3058,6 +3198,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           if (canvasAreaRef.current) {
             canvasAreaRef.current.style.cursor = getIdleCursor();
           }
+          notifyGestureSettledRef.current();
           return;
         }
         handleInteractionEndRef.current?.();
@@ -3116,7 +3257,12 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           if (wandDeleteActiveRef.current) onWandDeactivateRef.current?.();
           isWheelZoomingRef.current = true;
           if (wheelTimeoutRef.current) clearTimeout(wheelTimeoutRef.current);
-          wheelTimeoutRef.current = setTimeout(() => { isWheelZoomingRef.current = false; }, 200);
+          wheelTimeoutRef.current = setTimeout(() => {
+            isWheelZoomingRef.current = false;
+            // Re-render so the suppressed detail overlay can plan again; the
+            // flag above is a ref and clearing it schedules nothing.
+            notifyGestureSettledRef.current();
+          }, 200);
 
           const oldZoom = zoomRef.current;
           const factor = e.deltaY > 0 ? 1 / ZOOM_WHEEL_FACTOR : ZOOM_WHEEL_FACTOR;
@@ -3638,8 +3784,26 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     const singleDetailSelection =
       selectedDesignIds.size === 1 &&
       Boolean(selectedDesignId && selectedDesignIds.has(selectedDesignId));
+    /**
+     * The fluorescent spot preview pulses over the selected design on the main
+     * canvas, underneath this overlay. The halftone overlay leaves a 6px ring
+     * for it; ordinary detail covers the design outright, which would silently
+     * swallow the cue — so a design being previewed for spot inks keeps the
+     * existing path.
+     */
+    const spotPulseCoversSelection = Boolean(
+      spotPreviewData?.enabled &&
+        spotPreviewData.colors?.some(
+          color =>
+            color.spotFluorY ||
+            color.spotFluorM ||
+            color.spotFluorG ||
+            color.spotFluorOrange,
+        ),
+    );
     const ordinaryDetailSource =
       !isMobile &&
+      !spotPulseCoversSelection &&
       singleDetailSelection &&
       !selectedDetailDesign?.halftoned &&
       !selectedDetailDesign?.alphaThresholded &&
@@ -3657,16 +3821,21 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       ?? ordinaryDetailCrop?.height
       ?? selectedDetailDesign?.imageInfo.originalHeight
       ?? 0;
+    // Read for its dependency, not its value: gesture state lives in refs, and
+    // this tick is the re-render that a finished gesture schedules so the
+    // suppressed overlay is reconsidered.
+    void gestureSettleTick;
     const detailGestureActive =
       isInteractionActive() ||
       isMarqueeRef.current ||
       isWheelZoomingRef.current;
+    const ordinaryDetailZoomActive = zoom >= ORDINARY_DETAIL_MIN_ZOOM;
     const detailCanvasScale =
       previewDims.width > 0 && lastCanvasDimsRef.current.width > 0
         ? lastCanvasDimsRef.current.width / previewDims.width
         : BASE_DPI_SCALE * zoomDpiTier;
     const ordinaryDetailPlan =
-      highQualityDetailZoomActive &&
+      ordinaryDetailZoomActive &&
       !detailGestureActive &&
       selectedDetailRect &&
       selectedDetailImage &&
@@ -3700,20 +3869,35 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           ].join(":")
         : null;
 
+    // Release the retained bitmap as soon as it can no longer be shown —
+    // deselection, a different design, an edited source, mobile, multi-select,
+    // or zooming back out. Holding a hidden 4 MP bitmap costs ~16 MB for
+    // nothing.
     useEffect(() => {
-      const current = ordinaryDetailBitmapRef.current;
-      const sourceStillMatches =
-        current &&
-        current.designId === selectedDetailDesign?.id &&
-        current.source === ordinaryDetailSource;
-      if (sourceStillMatches && highQualityDetailZoomActive) return;
+      const current = ordinaryDetailReadyRef.current;
       if (!current) return;
-      current.bitmap.close();
-      ordinaryDetailBitmapRef.current = null;
-      setOrdinaryDetailVersion(version => version + 1);
+      const stillUsable =
+        current.designId === selectedDetailDesign?.id &&
+        current.source === ordinaryDetailSource &&
+        ordinaryDetailZoomActive;
+      // A key that no longer matches means this bitmap is aimed at a size
+      // nobody will ask for again — it is already hidden, so holding it is
+      // pure memory. The one exception is a gesture in progress, which nulls
+      // the plan on purpose: keep the bitmap so the overlay returns instantly
+      // on settle. A null key with no gesture means the plan found no benefit,
+      // and that bitmap is never coming back on screen.
+      const awaitingGestureEnd =
+        ordinaryDetailRequestKey === null && detailGestureActive;
+      const supersededBySize =
+        !awaitingGestureEnd && ordinaryDetailRequestKey !== current.requestKey;
+      if (stillUsable && !supersededBySize) return;
+      releaseOrdinaryDetail();
     }, [
-      highQualityDetailZoomActive,
+      detailGestureActive,
+      ordinaryDetailRequestKey,
+      ordinaryDetailZoomActive,
       ordinaryDetailSource,
+      releaseOrdinaryDetail,
       selectedDetailDesign?.id,
     ]);
 
@@ -3728,70 +3912,76 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         return;
       }
 
-      let worker: Worker | null = null;
+      // An identical decode is already in flight. Bumping the request id here
+      // would orphan its result and post the same work twice on one worker.
+      const inFlight = ordinaryDetailPendingRef.current;
+      if (
+        inFlight &&
+        // Cleanup advances the request id whenever this effect re-runs (a
+        // gesture starting is enough). A pending request left behind by that
+        // bump can no longer be accepted by the response handler, so treating
+        // it as a live duplicate would mean no decode is ever posted again.
+        inFlight.requestId === ordinaryDetailRequestIdRef.current &&
+        inFlight.requestKey === ordinaryDetailRequestKey &&
+        inFlight.source === ordinaryDetailSource
+      ) {
+        return;
+      }
+      if (inFlight) {
+        // Superseded: the id bump below already makes its result unusable, so
+        // drop the bookkeeping too. Left in place, a later request for that
+        // same key would be mistaken for a duplicate and never posted.
+        ordinaryDetailPendingRef.current = null;
+        clearOrdinaryDetailWatchdog();
+      }
+
       let cancelled = false;
       const requestId = ++ordinaryDetailRequestIdRef.current;
-      // Match the zoom-tier debounce: wheel/pinch changes should settle before
-      // the only full-source decode lane starts work.
-      const timer = window.setTimeout(() => {
-        if (cancelled) return;
-        try {
-          worker = new SelectedDetailWorker();
-        } catch {
-          return;
-        }
-        worker.onmessage = (
-          event: MessageEvent<SelectedDetailWorkerResponse>,
-        ) => {
-          const response = event.data;
-          if (
-            response.requestId !== requestId ||
-            requestId !== ordinaryDetailRequestIdRef.current
-          ) {
-            if (response.type === "result") response.bitmap.close();
-            return;
-          }
-          if (response.type !== "result") {
-            worker?.terminate();
-            worker = null;
-            return;
-          }
-          const previous = ordinaryDetailBitmapRef.current;
-          if (previous?.bitmap !== response.bitmap) previous?.bitmap.close();
-          ordinaryDetailBitmapRef.current = {
-            bitmap: response.bitmap,
+      // Only a *re-decode* waits for the zoom to settle. Selecting a design is
+      // a deliberate, one-shot request, and making the customer wait out a
+      // debounce they did not cause is the difference between the sheet
+      // feeling sharp and feeling slow. Work already aimed at this design —
+      // shown or still decoding — counts, so a zoom that walks through several
+      // plans does not fire a decode per step.
+      const alreadyTargetingThisDesign =
+        ordinaryDetailReadyRef.current?.designId === selectedDetailDesign.id ||
+        inFlight?.designId === selectedDetailDesign.id;
+      const timer = window.setTimeout(
+        () => {
+          if (cancelled) return;
+          const worker = ensureOrdinaryDetailWorker();
+          if (!worker) return;
+          ordinaryDetailPendingRef.current = {
+            requestId,
             designId: selectedDetailDesign.id,
             source: ordinaryDetailSource,
             requestKey: ordinaryDetailRequestKey,
           };
-          setOrdinaryDetailVersion(version => version + 1);
-          worker?.terminate();
-          worker = null;
-        };
-        worker.onerror = () => {
-          worker?.terminate();
-          worker = null;
-        };
-        worker.postMessage({
-          type: "decode",
-          requestId,
-          blob: ordinaryDetailSource,
-          crop: ordinaryDetailCrop,
-          width: ordinaryDetailPlan.width,
-          height: ordinaryDetailPlan.height,
-        });
-      }, 180);
+          armOrdinaryDetailWatchdog();
+          worker.postMessage({
+            type: "decode",
+            requestId,
+            blob: ordinaryDetailSource,
+            crop: ordinaryDetailCrop,
+            width: ordinaryDetailPlan.width,
+            height: ordinaryDetailPlan.height,
+          } satisfies SelectedDetailWorkerRequest);
+        },
+        alreadyTargetingThisDesign ? ORDINARY_DETAIL_REDECODE_DELAY_MS : 0,
+      );
 
       return () => {
         cancelled = true;
         window.clearTimeout(timer);
-        worker?.terminate();
         if (ordinaryDetailRequestIdRef.current === requestId) {
           ordinaryDetailRequestIdRef.current++;
         }
       };
     }, [
+      armOrdinaryDetailWatchdog,
+      clearOrdinaryDetailWatchdog,
       detailGestureActive,
+      ensureOrdinaryDetailWorker,
       ordinaryDetailCrop,
       ordinaryDetailPlan?.height,
       ordinaryDetailPlan?.width,
@@ -3802,11 +3992,17 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
     useEffect(() => () => {
       ordinaryDetailRequestIdRef.current++;
-      ordinaryDetailBitmapRef.current?.bitmap.close();
-      ordinaryDetailBitmapRef.current = null;
+      ordinaryDetailPendingRef.current = null;
+      if (ordinaryDetailWatchdogRef.current != null) {
+        window.clearTimeout(ordinaryDetailWatchdogRef.current);
+        ordinaryDetailWatchdogRef.current = null;
+      }
+      ordinaryDetailWorkerRef.current?.terminate();
+      ordinaryDetailWorkerRef.current = null;
+      ordinaryDetailReadyRef.current?.bitmap.close();
+      ordinaryDetailReadyRef.current = null;
     }, []);
 
-    const ordinaryDetailReady = ordinaryDetailBitmapRef.current;
     const showOrdinaryHighQualityDetail = isSelectedDetailReady(
       ordinaryDetailReady,
       {
@@ -3827,7 +4023,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       if (!canvas || !showHighQualityDetail || !selectedDetailDesign || !selectedDetailImage) return;
 
       if (showOrdinaryHighQualityDetail) {
-        const detail = ordinaryDetailBitmapRef.current;
+        const detail = ordinaryDetailReady;
         if (!detail) return;
         canvas.width = detail.bitmap.width;
         canvas.height = detail.bitmap.height;
@@ -3860,7 +4056,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     }, [
       showHighQualityDetail,
       showOrdinaryHighQualityDetail,
-      ordinaryDetailReady?.requestKey,
+      ordinaryDetailReady,
       selectedDetailDesign?.id,
       selectedDetailImage,
       selectedDetailImage?.naturalWidth,
@@ -4474,7 +4670,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         : doRender;
       renderRef.current = render;
       render();
-    }, [imageInfo, resizeSettings, previewDims.height, previewDims.width, artboardWidth, artboardHeight, designTransform, designs, selectedDesignId, selectedDesignIds, drawSingleDesign, overlappingDesigns, previewBgColor, zoomDpiTier, isMobile, interactionEpoch]);
+    }, [imageInfo, resizeSettings, previewDims.height, previewDims.width, artboardWidth, artboardHeight, designTransform, designs, selectedDesignId, selectedDesignIds, drawSingleDesign, overlappingDesigns, previewBgColor, zoomDpiTier, isMobile, interactionEpoch,
+      // The selected design's draw source and clip depend on the detail
+      // overlay, so the sheet must repaint whenever that state flips —
+      // otherwise the ring keeps whatever the last unrelated repaint left.
+      showHighQualityDetail, showOrdinaryHighQualityDetail, ordinaryDetailReady]);
 
     const drawImageWithResizePreview = (ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number) => {
       if (!imageInfo) return;
@@ -4497,13 +4697,21 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       ctx.rotate((t.rotation * Math.PI) / 180);
       ctx.scale(t.flipX ? -1 : 1, t.flipY ? -1 : 1);
       // The HD detail overlay canvas (when active) draws the selected image on
-      // top with `imageRendering: pixelated` and an `inset(6px)` clip that
-      // keeps the handles visible. Drawing the whole image on the main canvas
-      // as well caused a doubled/ghost seam (two differently-filtered rasters
-      // stacked), but skipping it entirely left the 6px clip ring EMPTY — the
-      // selected design looked cropped. Compromise: when the overlay is
-      // active, clip the main-canvas draw to just that perimeter ring so the
-      // overlay exclusively owns the interior and the edge artwork is intact.
+      // top of this one, so the two must not both paint the same pixels.
+      //
+      // The halftone overlay is a nearest-neighbour 1:1 raster clipped by
+      // `inset(6px)` to keep the handles legible, so the main canvas still owns
+      // that 6px perimeter ring — drawing nothing there leaves it empty and the
+      // design looks cropped, drawing everything stacks two differently
+      // filtered rasters and seams.
+      //
+      // The ring must stay: the selection handles and the print label are
+      // painted into THIS canvas below, under the overlay's layer, so an
+      // overlay that reaches the edge would bury the chrome the customer
+      // grabs. What used to seam was the ring's *source* — a smoothed upscale
+      // of the working image against a crisp interior, reading as a soft halo
+      // on photographic art. Painting the ring from the same detail bitmap the
+      // overlay shows makes the two sides identical pixels.
       {
         ctx.save();
         if (showHighQualityDetail) {
@@ -4519,9 +4727,16 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           );
           ctx.clip('evenodd');
         }
-        const drawSrc = selDesign?.alphaThresholded
-          ? imageInfo.image
-          : getPreviewDrawSource(imageInfo.image, rect.width, rect.height);
+        const detailSource =
+          showOrdinaryHighQualityDetail && ordinaryDetailReady
+            ? ordinaryDetailReady.bitmap
+            : null;
+        if (detailSource) ctx.imageSmoothingQuality = 'high';
+        const drawSrc =
+          detailSource ??
+          (selDesign?.alphaThresholded
+            ? imageInfo.image
+            : getPreviewDrawSource(imageInfo.image, rect.width, rect.height));
         ctx.drawImage(drawSrc, -rect.width / 2, -rect.height / 2, rect.width, rect.height);
         ctx.restore();
       }
@@ -5012,9 +5227,11 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                           transformOrigin: 'center',
                           transform: `rotate(${selectedDetailDesign.transform.rotation}deg) scale(${selectedDetailDesign.transform.flipX ? -1 : 1}, ${selectedDetailDesign.transform.flipY ? -1 : 1})`,
                           imageRendering: showOrdinaryHighQualityDetail ? 'auto' : 'pixelated',
-                          // Leave the edge chrome exposed so the existing
-                          // resize/rotate handles remain visible above the
-                          // focused pixel-preserving layer.
+                          // Stop 6px short of the edge so the selection
+                          // handles and print label — painted into the sheet
+                          // canvas below this layer — stay visible. The main
+                          // canvas fills that ring from this same bitmap, so
+                          // there is no filtering seam at the boundary.
                           clipPath: 'inset(6px)',
                         }}
                       />

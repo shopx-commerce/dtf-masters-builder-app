@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Loader2, Palette, X } from "lucide-react";
 import type { ColorChangeState } from "./useImageEditorModelColorChange";
 
@@ -34,14 +35,42 @@ export default function ColorChangeDialog({
   onApply: () => void;
   onClose: () => void;
 }) {
-  if (state.status === "closed") return null;
+  const hexInputRef = useRef<HTMLInputElement>(null);
+  const open = state.status !== "closed";
+  const ready = state.status === "ready";
+
+  // Escape is how every other overlay in the editor closes, and here it also
+  // aborts the running PNG job rather than leaving it to burn CPU.
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [open, onClose]);
+
+  useEffect(() => {
+    if (ready) hexInputRef.current?.focus();
+  }, [ready]);
+
+  if (!open) return null;
   const validHex = /^#[0-9a-f]{6}$/i.test(state.targetHex);
   const sourceHex = state.sourceColor
     ? `#${[state.sourceColor.r, state.sourceColor.g, state.sourceColor.b].map(value => value.toString(16).padStart(2, "0")).join("")}`
     : null;
+  const unchanged = !!sourceHex && validHex && state.targetHex.toLowerCase() === sourceHex.toLowerCase();
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-3" role="dialog" aria-modal="true" aria-labelledby="color-change-title">
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-3"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="color-change-title"
+      onPointerDown={event => { if (event.target === event.currentTarget) onClose(); }}
+    >
       <div className="w-full max-w-md overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
           <div className="flex items-center gap-2">
@@ -106,11 +135,12 @@ export default function ColorChangeDialog({
                   <p className="mb-1 text-xs font-semibold text-slate-600">{t("editor.colorChangeNew")}</p>
                   <div className="flex h-10 items-center gap-2 rounded-md border border-slate-200 px-2">
                     <input type="color" value={validHex ? state.targetHex : "#000000"} onChange={event => onTargetChange(event.target.value)} className="h-7 w-8 cursor-pointer border-0 bg-transparent p-0" />
-                    <input value={state.targetHex} onChange={event => onTargetChange(event.target.value)} className="min-w-0 flex-1 bg-transparent text-xs font-mono uppercase outline-none" aria-label={t("editor.colorChangeHex")} />
+                    <input ref={hexInputRef} value={state.targetHex} onChange={event => onTargetChange(event.target.value)} className="min-w-0 flex-1 bg-transparent text-xs font-mono uppercase outline-none" aria-label={t("editor.colorChangeHex")} />
                   </div>
                 </div>
               </div>
               {!validHex && <p className="text-xs font-medium text-red-600">{t("editor.colorChangeInvalidHex")}</p>}
+              {unchanged && <p className="text-xs font-medium text-slate-500">{t("editor.colorChangeSameColor")}</p>}
               <p className="text-xs leading-5 text-slate-500">{t("editor.colorChangeExactNote")}</p>
             </>
           )}
@@ -119,7 +149,7 @@ export default function ColorChangeDialog({
         <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3">
           <button type="button" onClick={onClose} className="min-h-10 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700">{t("editor.colorChangeCancel")}</button>
           {state.status === "ready" && (
-            <button type="button" onClick={onApply} disabled={!validHex} className="min-h-10 rounded-md bg-violet-600 px-4 text-sm font-bold text-white hover:bg-violet-700 disabled:opacity-40">{t("editor.colorChangeApply")}</button>
+            <button type="button" onClick={onApply} disabled={!validHex || unchanged} className="min-h-10 rounded-md bg-violet-600 px-4 text-sm font-bold text-white hover:bg-violet-700 disabled:opacity-40">{t("editor.colorChangeApply")}</button>
           )}
         </div>
       </div>
