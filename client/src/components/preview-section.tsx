@@ -25,6 +25,10 @@ import {
   type SelectedDetailWorkerResponse,
 } from "@/lib/selected-detail-preview";
 import SelectedDetailWorker from "@/lib/selected-detail-worker?worker";
+import {
+  selectedDetailClipInsetCssPx,
+  selectedDetailInsetCssPx,
+} from "@/lib/selected-detail-overlay";
 
 const BASE_DPI_SCALE = 2;
 const HIGH_QUALITY_DETAIL_ZOOM = 3;
@@ -466,7 +470,20 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     notifyGestureSettledRef.current = notifyGestureSettled;
     const containerRef = useRef<HTMLDivElement>(null);
     const resizeLimitToastRef = useRef(0);
-    const zoomMax = Math.max(10, Math.ceil(artboardHeight / Math.max(artboardWidth, 0.1)) * 3);
+    /**
+     * Extra magnification on top of the ceiling the sheet's own proportions set.
+     *
+     * The base ceiling is about being able to reach any part of a tall sheet, not about how
+     * closely someone may inspect their artwork. Customers check fine detail — thin strokes,
+     * small type, the edge quality of a cut-out — before committing a sheet to film, and the
+     * base ceiling stops short of that on a normal-shaped sheet. Nothing downstream is bound
+     * by the zoom value: the sheet is CSS-scaled, the preview's backing store has its own
+     * area cap, and the selected-design overlay is sized from its own budget.
+     */
+    const ZOOM_MAX_HEADROOM = 1.2;
+    const zoomMax =
+      Math.max(10, Math.ceil(artboardHeight / Math.max(artboardWidth, 0.1)) * 3) *
+      ZOOM_MAX_HEADROOM;
     const zoomMaxRef = useRef(zoomMax);
     zoomMaxRef.current = zoomMax;
     const [zoom, setZoom] = useState(1);
@@ -494,6 +511,35 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         }
       };
     }, [zoom, zoomDpiTier]);
+    /**
+     * The zoom the detail overlay's clip is sized from — the last one that held
+     * still, not the live one.
+     *
+     * The clip and the ring the sheet canvas paints into it are two halves of
+     * one seam, and the sheet canvas deliberately does *not* repaint while zoom
+     * changes; it is CSS-scaled instead. Sizing the clip from live zoom while
+     * the ring underneath still holds the value it was painted at would open a
+     * gap between them — a transparent band around the artwork, which reads as
+     * the design being cut. Both halves read this, so they cannot disagree, and
+     * the worst a stale value can do is hold the band at the wrong width for a
+     * moment during a gesture, while the artwork is moving anyway.
+     */
+    const [settledZoom, setSettledZoom] = useState(1);
+    const settledZoomTimerRef = useRef<number | null>(null);
+    useEffect(() => {
+      if (zoom === settledZoom && settledZoomTimerRef.current == null) return;
+      if (settledZoomTimerRef.current != null) window.clearTimeout(settledZoomTimerRef.current);
+      settledZoomTimerRef.current = window.setTimeout(() => {
+        settledZoomTimerRef.current = null;
+        setSettledZoom(zoomRef.current);
+      }, 160);
+      return () => {
+        if (settledZoomTimerRef.current != null) {
+          window.clearTimeout(settledZoomTimerRef.current);
+          settledZoomTimerRef.current = null;
+        }
+      };
+    }, [zoom, settledZoom]);
     const highQualityDetailZoomActive = zoom >= HIGH_QUALITY_DETAIL_ZOOM;
     const [panX, setPanX] = useState(0);
     const [panY, setPanY] = useState(0);
@@ -3765,7 +3811,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     // its size caps. Large 300-DPI halftones would otherwise be nearest-
     // neighbor DOWNSCALED into the overlay canvas, shredding the dot pattern
     // (looks washed out / speckled while selected) — and combined with the
-    // inset(6px) clip the design also looked cropped. For oversized rasters,
+    // overlay's clip inset the design also looked cropped. For oversized rasters,
     // skip the overlay entirely: the main-canvas path renders the halftone
     // exactly like the deselected composite does.
     const detailSourceWidth = selectedDetailImage?.naturalWidth || selectedDetailImage?.width || 0;
@@ -3786,8 +3832,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       Boolean(selectedDesignId && selectedDesignIds.has(selectedDesignId));
     /**
      * The fluorescent spot preview pulses over the selected design on the main
-     * canvas, underneath this overlay. The halftone overlay leaves a 6px ring
-     * for it; ordinary detail covers the design outright, which would silently
+     * canvas, underneath this overlay. The halftone overlay leaves a perimeter
+     * band for it; ordinary detail covers the design outright, which would silently
      * swallow the cue — so a design being previewed for spot inks keeps the
      * existing path.
      */
@@ -4014,6 +4060,36 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     );
     const showHighQualityDetail =
       showHalftoneHighQualityDetail || showOrdinaryHighQualityDetail;
+    /**
+     * The band of the selected design the HD overlay leaves to the sheet canvas,
+     * in preview CSS px. The overlay clips itself by this much and the sheet
+     * canvas paints exactly this much — one number, read twice, so the two can
+     * never leave a gap or overlap each other.
+     *
+     * Sized from the selection chrome it exists to keep visible, which is drawn
+     * at a fixed size *on screen*; see `selectedDetailInsetCssPx`.
+     */
+    const detailInsetCssPx = selectedDetailInsetCssPx(
+      settledZoom,
+      // The full handle, not the half of it that falls inside the design: the
+      // selection outline carries an 8 CSS px accent glow inwards from the same
+      // edge, and clipping that off would dim the cue that says "selected".
+      isMobile ? TOUCH_HANDLE_FULL_PX : DESKTOP_HANDLE_FULL_PX,
+    );
+    /**
+     * The inset the sheet canvas was last *painted* with.
+     *
+     * The band and the clip change in the same render, but the band is painted
+     * from an effect and the clip lands with the DOM commit, and neither is
+     * guaranteed to reach the screen first. Recording what was actually painted
+     * lets the clip be chosen so that the disagreement is always the harmless
+     * one — see `selectedDetailClipInsetCssPx`.
+     */
+    const [paintedDetailInsetCssPx, setPaintedDetailInsetCssPx] = useState(detailInsetCssPx);
+    const detailClipInsetCssPx = selectedDetailClipInsetCssPx(
+      detailInsetCssPx,
+      paintedDetailInsetCssPx,
+    );
 
     // Render only the selected binary-raster design at source resolution (within
     // a bounded area). The whole-sheet canvas remains capped and fast; this
@@ -4670,11 +4746,23 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         : doRender;
       renderRef.current = render;
       render();
+      // Pull the overlay's clip onto the band that was *just* painted, in the
+      // same synchronous block that painted it. React's own value for this
+      // property is only ever the safe side of the disagreement
+      // (`selectedDetailClipInsetCssPx`); this line closes the disagreement
+      // outright, so no interleaving of commit and repaint can be caught with a
+      // clip reaching past the band. Publishing the value keeps React's copy
+      // from widening it again on the next render.
+      const detailOverlayCanvas = detailCanvasRef.current;
+      if (detailOverlayCanvas) {
+        detailOverlayCanvas.style.clipPath = `inset(${detailInsetCssPx}px)`;
+      }
+      setPaintedDetailInsetCssPx(prev => (prev === detailInsetCssPx ? prev : detailInsetCssPx));
     }, [imageInfo, resizeSettings, previewDims.height, previewDims.width, artboardWidth, artboardHeight, designTransform, designs, selectedDesignId, selectedDesignIds, drawSingleDesign, overlappingDesigns, previewBgColor, zoomDpiTier, isMobile, interactionEpoch,
       // The selected design's draw source and clip depend on the detail
       // overlay, so the sheet must repaint whenever that state flips —
       // otherwise the ring keeps whatever the last unrelated repaint left.
-      showHighQualityDetail, showOrdinaryHighQualityDetail, ordinaryDetailReady]);
+      showHighQualityDetail, showOrdinaryHighQualityDetail, ordinaryDetailReady, detailInsetCssPx]);
 
     const drawImageWithResizePreview = (ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number) => {
       if (!imageInfo) return;
@@ -4697,26 +4785,29 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       ctx.rotate((t.rotation * Math.PI) / 180);
       ctx.scale(t.flipX ? -1 : 1, t.flipY ? -1 : 1);
       // The HD detail overlay canvas (when active) draws the selected image on
-      // top of this one, so the two must not both paint the same pixels.
+      // top of this one, so the two must not both paint the same pixels. Not a
+      // matter of taste: artwork with soft or antialiased edges would composite
+      // its own alpha twice and print-preview denser than it prints.
       //
-      // The halftone overlay is a nearest-neighbour 1:1 raster clipped by
-      // `inset(6px)` to keep the handles legible, so the main canvas still owns
-      // that 6px perimeter ring — drawing nothing there leaves it empty and the
-      // design looks cropped, drawing everything stacks two differently
-      // filtered rasters and seams.
+      // So the overlay clips itself back by `detailInsetCssPx` and this canvas
+      // owns exactly that perimeter band — drawing nothing there leaves it
+      // empty and the design looks cropped.
       //
-      // The ring must stay: the selection handles and the print label are
+      // The band must stay: the selection handles and the print label are
       // painted into THIS canvas below, under the overlay's layer, so an
       // overlay that reaches the edge would bury the chrome the customer
-      // grabs. What used to seam was the ring's *source* — a smoothed upscale
-      // of the working image against a crisp interior, reading as a soft halo
-      // on photographic art. Painting the ring from the same detail bitmap the
-      // overlay shows makes the two sides identical pixels.
+      // grabs. What it must not do is grow. The band is drawn from this
+      // canvas's backing store, which is area-capped and then CSS-scaled by the
+      // zoom, so every pixel of it is softer than the overlay beside it; a band
+      // measured in sheet px multiplies that softness by the magnification,
+      // which is how a fixed 6px inset turned into a 70px blurred frame around
+      // the artwork at high zoom. `detailInsetCssPx` holds it to the chrome's
+      // constant on-screen size instead.
       {
         ctx.save();
         if (showHighQualityDetail) {
-          // 6 CSS px (the overlay's clip inset) converted to canvas pixels.
-          const insetPx = 6 * (canvasWidth / Math.max(1, previewDims.width));
+          // The overlay's clip inset, converted from preview CSS px to canvas pixels.
+          const insetPx = detailInsetCssPx * (canvasWidth / Math.max(1, previewDims.width));
           ctx.beginPath();
           ctx.rect(-rect.width / 2, -rect.height / 2, rect.width, rect.height);
           ctx.rect(
@@ -4732,9 +4823,15 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
             ? ordinaryDetailReady.bitmap
             : null;
         if (detailSource) ctx.imageSmoothingQuality = 'high';
+        // The halftone overlay paints its interior from the full-size image at
+        // 1:1 with nearest-neighbour sampling. The ring has to come off the same
+        // image the same way, or the boundary puts a smoothed mip level against
+        // a crisp one and the dot pattern visibly changes character at the edge.
+        const halftoneRing = !detailSource && showHighQualityDetail;
+        if (halftoneRing) ctx.imageSmoothingEnabled = false;
         const drawSrc =
           detailSource ??
-          (selDesign?.alphaThresholded
+          (selDesign?.alphaThresholded || halftoneRing
             ? imageInfo.image
             : getPreviewDrawSource(imageInfo.image, rect.width, rect.height));
         ctx.drawImage(drawSrc, -rect.width / 2, -rect.height / 2, rect.width, rect.height);
@@ -5227,12 +5324,14 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                           transformOrigin: 'center',
                           transform: `rotate(${selectedDetailDesign.transform.rotation}deg) scale(${selectedDetailDesign.transform.flipX ? -1 : 1}, ${selectedDetailDesign.transform.flipY ? -1 : 1})`,
                           imageRendering: showOrdinaryHighQualityDetail ? 'auto' : 'pixelated',
-                          // Stop 6px short of the edge so the selection
-                          // handles and print label — painted into the sheet
-                          // canvas below this layer — stay visible. The main
-                          // canvas fills that ring from this same bitmap, so
-                          // there is no filtering seam at the boundary.
-                          clipPath: 'inset(6px)',
+                          // Stop short of the edge so the selection handles and
+                          // print label — painted into the sheet canvas below
+                          // this layer — stay visible. The sheet canvas fills
+                          // exactly the band this leaves and nothing more (see
+                          // `detailInsetCssPx`), and overwrites this property
+                          // with the band it actually painted; what React puts
+                          // here is the value that is safe until it does.
+                          clipPath: `inset(${detailClipInsetCssPx}px)`,
                         }}
                       />
                     );
