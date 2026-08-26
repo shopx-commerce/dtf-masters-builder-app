@@ -316,6 +316,8 @@ export function useImageEditorModelHalftone(bag: ImageEditorBagAfterUploadCrop) 
           file: sourceFile,
           exportBlob: croppedSourceImage.blob,
           exportCrop: undefined,
+          exportPixelWidth: croppedSourceImage.image.naturalWidth,
+          exportPixelHeight: croppedSourceImage.image.naturalHeight,
           svgSource: undefined,
           originalPdfData: undefined,
           vectorInkBox: undefined,

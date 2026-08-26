@@ -175,6 +175,8 @@ export function useImageEditorModelColorChange(bag: ImageEditorBagAfterHalftone)
         originalHeight: result.height,
         exportBlob: blob,
         exportCrop: undefined,
+        exportPixelWidth: result.width,
+        exportPixelHeight: result.height,
         isPDF: false,
         originalPdfData: undefined,
         svgSource: undefined,

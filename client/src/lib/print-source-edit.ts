@@ -324,6 +324,8 @@ export function printSourceFieldsAfterEdit(edited: EditedPrintSource): Partial<I
     file: edited.printSourceFile,
     exportBlob: edited.exportBlob,
     exportCrop: undefined,
+    exportPixelWidth: edited.sourceWidth,
+    exportPixelHeight: edited.sourceHeight,
     svgSource: undefined,
     originalPdfData: undefined,
     vectorInkBox: undefined,

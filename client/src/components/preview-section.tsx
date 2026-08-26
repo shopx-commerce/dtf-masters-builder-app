@@ -17,6 +17,13 @@ import {
   type PrintLabelLayout,
 } from "@/lib/print-label";
 import { getDesignLabel, getStampExtraAtSize } from "./image-editor/utils";
+import { inlineDecodeMegapixelBudget } from "@/lib/image-budget";
+import {
+  isSelectedDetailReady,
+  planSelectedDetailRaster,
+  type SelectedDetailWorkerResponse,
+} from "@/lib/selected-detail-preview";
+import SelectedDetailWorker from "@/lib/selected-detail-worker?worker";
 
 const BASE_DPI_SCALE = 2;
 const HIGH_QUALITY_DETAIL_ZOOM = 3;
@@ -314,6 +321,15 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     topAlignRef.current = isMobile;
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const detailCanvasRef = useRef<HTMLCanvasElement>(null);
+    const ordinaryDetailBitmapRef = useRef<{
+      bitmap: ImageBitmap;
+      designId: string;
+      source: Blob;
+      requestKey: string;
+    } | null>(null);
+    const ordinaryDetailRequestIdRef = useRef(0);
+    const [ordinaryDetailVersion, setOrdinaryDetailVersion] = useState(0);
+    void ordinaryDetailVersion;
     const containerRef = useRef<HTMLDivElement>(null);
     const resizeLimitToastRef = useRef(0);
     const zoomMax = Math.max(10, Math.ceil(artboardHeight / Math.max(artboardWidth, 0.1)) * 3);
@@ -3579,6 +3595,19 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       ? designs.find(design => design.id === selectedDesignId) ?? null
       : null;
     const selectedDetailImage = selectedDetailDesign?.imageInfo.image ?? null;
+    const selectedDetailRect = selectedDetailDesign && selectedDetailImage
+      ? computeLayerRect(
+          selectedDetailImage.naturalWidth || selectedDetailImage.width || 1,
+          selectedDetailImage.naturalHeight || selectedDetailImage.height || 1,
+          selectedDetailDesign.transform,
+          previewDims.width,
+          previewDims.height,
+          artboardWidth,
+          artboardHeight,
+          selectedDetailDesign.widthInches,
+          selectedDetailDesign.heightInches,
+        )
+      : null;
     // The pixel-preserving overlay canvas exists to keep halftone dot patterns
     // crisp at high zoom (its render path uses imageRendering: pixelated).
     // Alpha-thresholded (transparent-PNG sticker) designs do NOT need the
@@ -3600,11 +3629,195 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       detailSourceHeight > 0 &&
       detailSourceWidth * detailSourceHeight <= HIGH_QUALITY_DETAIL_MAX_AREA &&
       Math.max(detailSourceWidth, detailSourceHeight) <= HIGH_QUALITY_DETAIL_MAX_EDGE;
-    const showHighQualityDetail =
+    const showHalftoneHighQualityDetail =
       highQualityDetailZoomActive &&
       Boolean(selectedDetailDesign?.halftoned) &&
       Boolean(selectedDetailImage?.complete) &&
       detailOverlayLossless;
+
+    const singleDetailSelection =
+      selectedDesignIds.size === 1 &&
+      Boolean(selectedDesignId && selectedDesignIds.has(selectedDesignId));
+    const ordinaryDetailSource =
+      !isMobile &&
+      singleDetailSelection &&
+      !selectedDetailDesign?.halftoned &&
+      !selectedDetailDesign?.alphaThresholded &&
+      !selectedDetailDesign?.imageInfo.isPDF &&
+      !selectedDetailDesign?.imageInfo.originalPdfData &&
+      !selectedDetailDesign?.imageInfo.svgSource
+        ? selectedDetailDesign?.imageInfo.exportBlob ?? null
+        : null;
+    const ordinaryDetailCrop = selectedDetailDesign?.imageInfo.exportCrop;
+    const ordinaryDetailSourceWidth = selectedDetailDesign?.imageInfo.exportPixelWidth
+      ?? ordinaryDetailCrop?.width
+      ?? selectedDetailDesign?.imageInfo.originalWidth
+      ?? 0;
+    const ordinaryDetailSourceHeight = selectedDetailDesign?.imageInfo.exportPixelHeight
+      ?? ordinaryDetailCrop?.height
+      ?? selectedDetailDesign?.imageInfo.originalHeight
+      ?? 0;
+    const detailGestureActive =
+      isInteractionActive() ||
+      isMarqueeRef.current ||
+      isWheelZoomingRef.current;
+    const detailCanvasScale =
+      previewDims.width > 0 && lastCanvasDimsRef.current.width > 0
+        ? lastCanvasDimsRef.current.width / previewDims.width
+        : BASE_DPI_SCALE * zoomDpiTier;
+    const ordinaryDetailPlan =
+      highQualityDetailZoomActive &&
+      !detailGestureActive &&
+      selectedDetailRect &&
+      selectedDetailImage &&
+      ordinaryDetailSource
+        ? planSelectedDetailRaster({
+            cssWidth: selectedDetailRect.width,
+            cssHeight: selectedDetailRect.height,
+            zoom,
+            devicePixelRatio:
+              typeof window === "undefined" ? 1 : window.devicePixelRatio || 1,
+            sourceWidth: ordinaryDetailSourceWidth,
+            sourceHeight: ordinaryDetailSourceHeight,
+            workingWidth:
+              selectedDetailImage.naturalWidth || selectedDetailImage.width,
+            workingHeight:
+              selectedDetailImage.naturalHeight || selectedDetailImage.height,
+            canvasPixelsPerCssPixel: detailCanvasScale,
+            maxSourceMegapixels: inlineDecodeMegapixelBudget(),
+          })
+        : null;
+    const ordinaryDetailRequestKey =
+      ordinaryDetailPlan && selectedDetailDesign
+        ? [
+            selectedDetailDesign.id,
+            ordinaryDetailCrop?.x ?? 0,
+            ordinaryDetailCrop?.y ?? 0,
+            ordinaryDetailCrop?.width ?? ordinaryDetailSourceWidth,
+            ordinaryDetailCrop?.height ?? ordinaryDetailSourceHeight,
+            ordinaryDetailPlan.width,
+            ordinaryDetailPlan.height,
+          ].join(":")
+        : null;
+
+    useEffect(() => {
+      const current = ordinaryDetailBitmapRef.current;
+      const sourceStillMatches =
+        current &&
+        current.designId === selectedDetailDesign?.id &&
+        current.source === ordinaryDetailSource;
+      if (sourceStillMatches && highQualityDetailZoomActive) return;
+      if (!current) return;
+      current.bitmap.close();
+      ordinaryDetailBitmapRef.current = null;
+      setOrdinaryDetailVersion(version => version + 1);
+    }, [
+      highQualityDetailZoomActive,
+      ordinaryDetailSource,
+      selectedDetailDesign?.id,
+    ]);
+
+    useEffect(() => {
+      if (
+        !ordinaryDetailPlan ||
+        !ordinaryDetailRequestKey ||
+        !ordinaryDetailSource ||
+        !selectedDetailDesign ||
+        detailGestureActive
+      ) {
+        return;
+      }
+
+      let worker: Worker | null = null;
+      let cancelled = false;
+      const requestId = ++ordinaryDetailRequestIdRef.current;
+      // Match the zoom-tier debounce: wheel/pinch changes should settle before
+      // the only full-source decode lane starts work.
+      const timer = window.setTimeout(() => {
+        if (cancelled) return;
+        try {
+          worker = new SelectedDetailWorker();
+        } catch {
+          return;
+        }
+        worker.onmessage = (
+          event: MessageEvent<SelectedDetailWorkerResponse>,
+        ) => {
+          const response = event.data;
+          if (
+            response.requestId !== requestId ||
+            requestId !== ordinaryDetailRequestIdRef.current
+          ) {
+            if (response.type === "result") response.bitmap.close();
+            return;
+          }
+          if (response.type !== "result") {
+            worker?.terminate();
+            worker = null;
+            return;
+          }
+          const previous = ordinaryDetailBitmapRef.current;
+          if (previous?.bitmap !== response.bitmap) previous?.bitmap.close();
+          ordinaryDetailBitmapRef.current = {
+            bitmap: response.bitmap,
+            designId: selectedDetailDesign.id,
+            source: ordinaryDetailSource,
+            requestKey: ordinaryDetailRequestKey,
+          };
+          setOrdinaryDetailVersion(version => version + 1);
+          worker?.terminate();
+          worker = null;
+        };
+        worker.onerror = () => {
+          worker?.terminate();
+          worker = null;
+        };
+        worker.postMessage({
+          type: "decode",
+          requestId,
+          blob: ordinaryDetailSource,
+          crop: ordinaryDetailCrop,
+          width: ordinaryDetailPlan.width,
+          height: ordinaryDetailPlan.height,
+        });
+      }, 180);
+
+      return () => {
+        cancelled = true;
+        window.clearTimeout(timer);
+        worker?.terminate();
+        if (ordinaryDetailRequestIdRef.current === requestId) {
+          ordinaryDetailRequestIdRef.current++;
+        }
+      };
+    }, [
+      detailGestureActive,
+      ordinaryDetailCrop,
+      ordinaryDetailPlan?.height,
+      ordinaryDetailPlan?.width,
+      ordinaryDetailRequestKey,
+      ordinaryDetailSource,
+      selectedDetailDesign?.id,
+    ]);
+
+    useEffect(() => () => {
+      ordinaryDetailRequestIdRef.current++;
+      ordinaryDetailBitmapRef.current?.bitmap.close();
+      ordinaryDetailBitmapRef.current = null;
+    }, []);
+
+    const ordinaryDetailReady = ordinaryDetailBitmapRef.current;
+    const showOrdinaryHighQualityDetail = isSelectedDetailReady(
+      ordinaryDetailReady,
+      {
+        eligible: Boolean(ordinaryDetailPlan) && !detailGestureActive,
+        designId: selectedDetailDesign?.id,
+        source: ordinaryDetailSource,
+        requestKey: ordinaryDetailRequestKey,
+      },
+    );
+    const showHighQualityDetail =
+      showHalftoneHighQualityDetail || showOrdinaryHighQualityDetail;
 
     // Render only the selected binary-raster design at source resolution (within
     // a bounded area). The whole-sheet canvas remains capped and fast; this
@@ -3612,6 +3825,20 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     useEffect(() => {
       const canvas = detailCanvasRef.current;
       if (!canvas || !showHighQualityDetail || !selectedDetailDesign || !selectedDetailImage) return;
+
+      if (showOrdinaryHighQualityDetail) {
+        const detail = ordinaryDetailBitmapRef.current;
+        if (!detail) return;
+        canvas.width = detail.bitmap.width;
+        canvas.height = detail.bitmap.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(detail.bitmap, 0, 0);
+        return;
+      }
 
       const sourceWidth = selectedDetailImage.naturalWidth || selectedDetailImage.width;
       const sourceHeight = selectedDetailImage.naturalHeight || selectedDetailImage.height;
@@ -3632,6 +3859,8 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
       ctx.drawImage(selectedDetailImage, 0, 0, rasterWidth, rasterHeight);
     }, [
       showHighQualityDetail,
+      showOrdinaryHighQualityDetail,
+      ordinaryDetailReady?.requestKey,
       selectedDetailDesign?.id,
       selectedDetailImage,
       selectedDetailImage?.naturalWidth,
@@ -4767,33 +4996,22 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                     pointerEvents: 'none',
                   }}
                 />
-                {showHighQualityDetail && selectedDetailDesign && (
+                {showHighQualityDetail && selectedDetailDesign && selectedDetailRect && (
                   (() => {
-                    const detailRect = computeLayerRect(
-                      selectedDetailImage?.naturalWidth || selectedDetailImage?.width || 1,
-                      selectedDetailImage?.naturalHeight || selectedDetailImage?.height || 1,
-                      selectedDetailDesign.transform,
-                      previewDims.width,
-                      previewDims.height,
-                      artboardWidth,
-                      artboardHeight,
-                      selectedDetailDesign.widthInches,
-                      selectedDetailDesign.heightInches,
-                    );
                     return (
                       <canvas
-                        key={`${selectedDetailDesign.id}:${selectedDetailImage?.src || ''}`}
+                        key={`${selectedDetailDesign.id}:${selectedDetailImage?.src || ''}:${showOrdinaryHighQualityDetail ? 'source' : 'halftone'}`}
                         ref={detailCanvasRef}
                         aria-hidden="true"
                         className="absolute z-20 pointer-events-none block"
                         style={{
-                          left: PREVIEW_SURFACE_ORIGIN + detailRect.x,
-                          top: PREVIEW_SURFACE_ORIGIN + detailRect.y,
-                          width: detailRect.width,
-                          height: detailRect.height,
+                          left: PREVIEW_SURFACE_ORIGIN + selectedDetailRect.x,
+                          top: PREVIEW_SURFACE_ORIGIN + selectedDetailRect.y,
+                          width: selectedDetailRect.width,
+                          height: selectedDetailRect.height,
                           transformOrigin: 'center',
                           transform: `rotate(${selectedDetailDesign.transform.rotation}deg) scale(${selectedDetailDesign.transform.flipX ? -1 : 1}, ${selectedDetailDesign.transform.flipY ? -1 : 1})`,
-                          imageRendering: 'pixelated',
+                          imageRendering: showOrdinaryHighQualityDetail ? 'auto' : 'pixelated',
                           // Leave the edge chrome exposed so the existing
                           // resize/rotate handles remain visible above the
                           // focused pixel-preserving layer.

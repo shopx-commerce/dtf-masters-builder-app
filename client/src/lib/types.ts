@@ -28,6 +28,13 @@ export interface ImageInfo {
   /** Content box within `exportBlob`, in source pixels, when the blob is an
    *  uncropped original. Absent when `exportBlob` is already cropped. */
   exportCrop?: { x: number; y: number; width: number; height: number };
+  /**
+   * Pixel dimensions represented by `exportBlob` after `exportCrop` is
+   * applied. Kept separately because `originalWidth` / `originalHeight`
+   * describe the memory-capped editor preview.
+   */
+  exportPixelWidth?: number;
+  exportPixelHeight?: number;
 }
 
 export interface ResizeSettings {

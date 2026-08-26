@@ -129,6 +129,8 @@ async function cropPrintSourceFields(
   if (composed) {
     return {
       exportCrop: composed.rect,
+      exportPixelWidth: composed.rect.width,
+      exportPixelHeight: composed.rect.height,
       dpi: scaleDpi(info.dpi, composed.rect.width / composed.baseWidth),
     };
   }
@@ -358,6 +360,8 @@ export default function CropModal({
       originalWidth: croppedImg.naturalWidth,
       originalHeight: croppedImg.naturalHeight,
       ...printSource,
+      exportPixelWidth: printSource.exportPixelWidth ?? croppedImg.naturalWidth,
+      exportPixelHeight: printSource.exportPixelHeight ?? croppedImg.naturalHeight,
     };
     onCrop(newInfo);
     onClose();

@@ -567,6 +567,8 @@ async function restoreStoredDesignImage(
         originalPdfData: vector.originalPdfData,
         svgSource: vector.svgSource,
         exportBlob: capped.exportBlob,
+        exportPixelWidth: sourcePixelWidth,
+        exportPixelHeight: sourcePixelHeight,
         vectorInkBox: stored.vectorInkBox,
       },
       sourcePixelWidth,

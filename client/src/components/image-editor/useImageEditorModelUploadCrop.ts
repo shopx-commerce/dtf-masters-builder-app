@@ -152,8 +152,8 @@ function printDpiFor(info: ImageInfo, widthInches: number, heightInches: number)
       heightInches / Math.max(0.01, box?.h ?? 1),
     );
   }
-  const sourceW = info.exportCrop?.width ?? info.image.naturalWidth ?? info.image.width;
-  const sourceH = info.exportCrop?.height ?? info.image.naturalHeight ?? info.image.height;
+  const sourceW = info.exportPixelWidth ?? info.exportCrop?.width ?? info.image.naturalWidth ?? info.image.width;
+  const sourceH = info.exportPixelHeight ?? info.exportCrop?.height ?? info.image.naturalHeight ?? info.image.height;
   return Math.max(1, Math.round(Math.min(
     sourceW / Math.max(0.01, widthInches),
     sourceH / Math.max(0.01, heightInches),
@@ -400,6 +400,8 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
         // design printed from the editor preview.
         exportBlob: prepared?.sourceBlob ?? (await ownUploadedBytes(file)),
         exportCrop: box ?? undefined,
+        exportPixelWidth: sourcePxW,
+        exportPixelHeight: sourcePxH,
       },
       widthInches,
       heightInches,
@@ -641,6 +643,8 @@ export function useImageEditorModelUploadCrop(bag: ImageEditorBagAfterArrange) {
         dpi,
         exportBlob,
         exportCrop,
+        exportPixelWidth: inchWidthPx,
+        exportPixelHeight: inchHeightPx,
       };
       applyImageDirectly(newImageInfo, widthInches, heightInches, cleanAlpha);
       if (isMobile) setMobilePanel("preview");
