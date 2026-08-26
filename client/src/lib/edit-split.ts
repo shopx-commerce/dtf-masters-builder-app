@@ -37,7 +37,7 @@ export const rowKeyOf = (d: DesignItem): string =>
  * operations (move, rotate, flip) deliberately never split: they are cheap
  * reversible toggles on the same pixels, not a different-looking design.
  */
-export type EditSplitTool = "halftone" | "upscale" | "clean" | "crop";
+export type EditSplitTool = "halftone" | "upscale" | "clean" | "crop" | "color";
 
 /** Row-badge translation key per tool — parenthesized labels in the same style as `editor.resized`. */
 export const EDIT_SPLIT_BADGE_KEYS: Record<EditSplitTool, string> = {
@@ -45,12 +45,13 @@ export const EDIT_SPLIT_BADGE_KEYS: Record<EditSplitTool, string> = {
   upscale: "editor.editUpscaled",
   clean: "editor.editCleaned",
   crop: "editor.editCropped",
+  color: "editor.editRecolored",
 };
 
 /** Which tool split this design out, for the row badge. `undefined` for never-split designs or unknown tags. */
 export function editSplitToolOf(tag: string | undefined): EditSplitTool | undefined {
   const tool = tag ? tag.split(":", 1)[0] : undefined;
-  return tool === "halftone" || tool === "upscale" || tool === "clean" || tool === "crop"
+  return tool === "halftone" || tool === "upscale" || tool === "clean" || tool === "crop" || tool === "color"
     ? tool
     : undefined;
 }

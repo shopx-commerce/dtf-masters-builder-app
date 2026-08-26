@@ -23,6 +23,7 @@ import {
   Undo2,
   Unlink,
   WandSparkles,
+  Palette,
 } from "lucide-react";
 import { CenterHorizontalIcon, CenterVerticalIcon } from "./center-axis-icons";
 import { HalftoneIcon } from "./halftone-icon";
@@ -123,6 +124,7 @@ export type EditorActionToolbarProps = {
   setHalftoneStrength?: (strength: HalftoneStrength) => void;
   halftoneTopColors?: Array<{ hex: string; name?: string; r: number; g: number; b: number }>;
   handleApplyHalftone?: (designId: string, r: number, g: number, b: number, strength: HalftoneStrength) => void;
+  openColorChange?: () => void;
 };
 
 function EditorActionToolbar(props: EditorActionToolbarProps) {
@@ -199,6 +201,7 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
     setHalftoneStrength,
     halftoneTopColors = [],
     handleApplyHalftone,
+    openColorChange,
   } = props;
   const metric = useMetric(lang);
   const maxGangsheetHeight = GANGSHEET_HEIGHTS.length > 0
@@ -219,7 +222,7 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
   const [alignRotateOpen, setAlignRotateOpen] = useState(false);
   const [designToolsOpen, setDesignToolsOpen] = useState(false);
   /** The tool last picked from the Design tools dropdown, offered again as a pill — same idea as the phone bar. */
-  const [lastDesignToolId, setLastDesignToolId] = useState<"cleanSelected" | "cleanAll" | "whiteBg" | "wand" | "halftone" | null>(null);
+  const [lastDesignToolId, setLastDesignToolId] = useState<"cleanSelected" | "cleanAll" | "whiteBg" | "wand" | "halftone" | "colorChange" | null>(null);
   const alignRotateRef = useRef<HTMLDivElement>(null);
   const designToolsRef = useRef<HTMLDivElement>(null);
   // Wand tolerance lives in the Zustand tool store (not props) so slider
@@ -251,6 +254,16 @@ function EditorActionToolbar(props: EditorActionToolbarProps) {
       pillTone: "border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100",
       disabled: designs.length === 0,
       run: () => { handleThresholdAlphaAll(); },
+    },
+    {
+      id: "colorChange" as const,
+      label: t("editor.colorChange"),
+      title: t("editor.colorChangeTitle"),
+      Icon: Palette,
+      menuTone: "text-violet-700",
+      pillTone: "border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100",
+      disabled: (!selectedDesignId && selectedDesignIds.size !== 1) || selectedDesignIds.size > 1,
+      run: () => { openColorChange?.(); },
     },
     {
       id: "whiteBg" as const,

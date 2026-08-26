@@ -5,6 +5,7 @@ import { useImageEditorModelStateDesign } from "./useImageEditorModelStateDesign
 import { useImageEditorModelArrangeKeyboard } from "./useImageEditorModelArrangeKeyboard";
 import { useImageEditorModelUploadCrop } from "./useImageEditorModelUploadCrop";
 import { useImageEditorModelHalftone } from "./useImageEditorModelHalftone";
+import { useImageEditorModelColorChange } from "./useImageEditorModelColorChange";
 import { useImageEditorModelExport } from "./useImageEditorModelExport";
 import { useImageEditorModelCart } from "./useImageEditorModelCart";
 import { useCartPreviewUploader } from "./use-cart-preview-uploader";
@@ -102,7 +103,8 @@ function useImageEditorModel(props: ImageEditorProps) {
   const p1 = useImageEditorModelArrangeKeyboard(p0);
   const p2 = useImageEditorModelUploadCrop({ ...p0, ...p1 });
   const p3 = useImageEditorModelHalftone({ ...p0, ...p1, ...p2 });
-  const p4 = useImageEditorModelExport({ ...p0, ...p1, ...p2, ...p3 });
+  const colorChange = useImageEditorModelColorChange({ ...p0, ...p1, ...p2, ...p3 });
+  const p4 = useImageEditorModelExport({ ...p0, ...p1, ...p2, ...p3, ...colorChange });
   // Hand-picked fields rather than the accumulated bag: this hook's inputs are narrow and explicit,
   // so what it actually depends on stays readable at the call site.
   const cartPreview = useCartPreviewUploader({
@@ -115,7 +117,7 @@ function useImageEditorModel(props: ImageEditorProps) {
     shellConfigReady: p0.shellConfigReady,
   });
   const p5 = useImageEditorModelCart({ ...p0, ...p1, ...p2, ...p3, ...p4, ...cartPreview });
-  const bag = { ...p0, ...p1, ...p2, ...p3, ...p4, ...p5, ...cartPreview };
+  const bag = { ...p0, ...p1, ...p2, ...p3, ...colorChange, ...p4, ...p5, ...cartPreview };
 
   // These three handlers used to be plain function declarations recreated
   // on every provider render — which meant every child that received them

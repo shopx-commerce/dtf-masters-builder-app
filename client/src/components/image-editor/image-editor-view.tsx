@@ -3,6 +3,7 @@ import { useMemo, useRef, useState, useEffect, useCallback } from "react";
 import PreviewSection from "../preview-section";
 import ControlsSection from "../controls-section";
 import CropModal from "../crop-modal";
+import ColorChangeDialog from "./color-change-dialog";
 import SizeInput from "./size-input";
 import EditorActionToolbar from "./editor-action-toolbar";
 import MobileToolSheet from "./mobile-tool-sheet";
@@ -16,7 +17,7 @@ import { useWandTolerance, useToolActions } from "@/state/tool-store";
 import {
   ArrowDownLeft, ArrowDownRight, ArrowUpLeft, ArrowUpRight, Copy,
   Droplets, Eraser, FlipHorizontal2, FlipVertical2, Grid2x2Plus, Group, Layers, LayoutGrid, Link, Loader2, Minus, Plus, Redo2, RotateCw,
-  SlidersHorizontal, Sparkles, Trash2, Undo2, Ungroup, Unlink, WandSparkles, X, XCircle,
+  Palette, SlidersHorizontal, Sparkles, Trash2, Undo2, Ungroup, Unlink, WandSparkles, X, XCircle,
 } from "lucide-react";
 import { CenterHorizontalIcon, CenterVerticalIcon } from "./center-axis-icons";
 import { HalftoneIcon } from "./halftone-icon";
@@ -52,7 +53,8 @@ type DesignToolId =
   | "upscale"
   | "halftone"
   | "autoArrange"
-  | "fillSheet";
+  | "fillSheet"
+  | "colorChange";
 
 interface DesignTool {
   id: DesignToolId;
@@ -94,7 +96,8 @@ export default function ImageEditorView() {
     handleThresholdAlphaAll, handleCropDesign, handleCropApply, handleDownload, handleAddToCart,
     handleApplyHalftone, handleOpenHalftoneMenu, halftoneStrength, setHalftoneStrength,
     halftoneMenuOpen, setHalftoneMenuOpen, halftoneTopColors,
-    handleRemoveWhiteBackground, handleWandDelete,
+    handleRemoveWhiteBackground, handleWandDelete, colorChangeState, openColorChange,
+    closeColorChange, setColorChangeTarget, applyColorChange,
     handleCanvasContextMenu, handleInteractionEnd, handleUndo, handleRedo, canUndo, canRedo,
     handleIncreaseQuality, isUpscaling, upscaleProgress, canIncreaseQuality,
     handleAutoArrangeRef, beginArrangeRef, actionToolbarProps, getLayerThumbnail, setDesignGap, setDuplicateCount,
@@ -478,6 +481,16 @@ export default function ImageEditorView() {
         setDesignToolsOpen(true);
         setLayersOpen(false);
       },
+    },
+    {
+      id: "colorChange",
+      label: t("editor.colorChange"),
+      title: t("editor.colorChangeTitle"),
+      Icon: Palette,
+      tone: "border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100",
+      pillTone: "border-violet-300 bg-violet-50 text-violet-700",
+      disabled: (!selectedDesignId && selectedDesignIds.size !== 1) || selectedDesignIds.size > 1,
+      run: openColorChange,
     },
     {
       id: "whiteBg",
@@ -928,6 +941,7 @@ export default function ImageEditorView() {
             setHalftoneStrength={setHalftoneStrength}
             halftoneTopColors={halftoneTopColors}
             handleApplyHalftone={handleApplyHalftone}
+            openColorChange={openColorChange}
           />
         )}
 
@@ -1731,6 +1745,15 @@ export default function ImageEditorView() {
           />
         ) : null;
       })()}
+
+      <ColorChangeDialog
+        state={colorChangeState}
+        imageSrc={colorChangeState.designId ? designs.find(design => design.id === colorChangeState.designId)?.imageInfo.image.src : undefined}
+        t={t}
+        onTargetChange={setColorChangeTarget}
+        onApply={applyColorChange}
+        onClose={closeColorChange}
+      />
 
       {/* Processing Modal — covers downloads, edit-link restore, and add-to-cart/update */}
       {isProcessing && (
