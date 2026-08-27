@@ -36,6 +36,7 @@ import {
 } from "@/lib/contour-worker-manager";
 import { calculateShapeDimensions } from "@/lib/shape-outline";
 import { cropImageToContent, getImageBounds } from "./image-crop";
+import { useLanguage } from "@/lib/i18n";
 
 interface PreviewSectionProps {
   imageInfo: ImageInfo | null;
@@ -116,6 +117,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     },
     ref,
   ) => {
+    const { t } = useLanguage();
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const [zoom, setZoom] = useState(0.95);
@@ -958,12 +960,12 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     };
 
     const BG_SWATCHES = [
-      { value: "transparent", label: "Transparent" },
-      { value: "#ffffff", label: "White" },
-      { value: "#f3f4f6", label: "Light Gray" },
-      { value: "#9ca3af", label: "Gray" },
-      { value: "#1f2937", label: "Dark Gray" },
-      { value: "#000000", label: "Black" },
+      { value: "transparent", label: t("dieCut.preview.transparent") },
+      { value: "#ffffff", label: t("dieCut.preview.white") },
+      { value: "#f3f4f6", label: t("dieCut.preview.lightGray") },
+      { value: "#9ca3af", label: t("dieCut.preview.gray") },
+      { value: "#1f2937", label: t("dieCut.preview.darkGray") },
+      { value: "#000000", label: t("dieCut.preview.black") },
     ];
 
     return (
@@ -984,7 +986,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                   <button
                     onClick={() => onResizeChange({ maintainAspectRatio: !resizeSettings.maintainAspectRatio })}
                     className={`p-0.5 rounded transition-colors ${resizeSettings.maintainAspectRatio ? 'text-indigo-500 hover:text-indigo-600' : 'text-gray-300 hover:text-gray-400'}`}
-                    title={resizeSettings.maintainAspectRatio ? 'Unlock aspect ratio' : 'Lock aspect ratio'}
+                    title={resizeSettings.maintainAspectRatio ? t("dieCut.preview.unlockRatio") : t("dieCut.preview.lockRatio")}
                   >
                     {resizeSettings.maintainAspectRatio ? <Link2 size={12} /> : <Unlink2 size={12} />}
                   </button>
@@ -1010,9 +1012,9 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                         }
                       }}
                     >
-                      <option value="" disabled className="text-gray-700 bg-white">Size</option>
+                      <option value="" disabled className="text-gray-700 bg-white">{t("dieCut.preview.size")}</option>
                       {[2, 3, 4, 5, 6, 8, 10].map(size => (
-                        <option key={size} value={size} className="text-gray-700 bg-white">{size}" sticker</option>
+                        <option key={size} value={size} className="text-gray-700 bg-white">{t("dieCut.preview.sticker", { size })}</option>
                       ))}
                     </select>
                     <svg className="absolute right-1 top-1/2 -translate-y-1/2 w-3 h-3 text-white/70 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9" /></svg>
@@ -1024,7 +1026,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                   onClick={onUndo}
                   disabled={!canUndo}
                   className={`p-1 rounded transition-colors ${canUndo ? 'text-gray-500 hover:text-indigo-600 hover:bg-indigo-50' : 'text-gray-200 cursor-default'}`}
-                  title="Undo"
+                  title={t("editor.undoShort")}
                 >
                   <Undo2 size={13} />
                 </button>
@@ -1032,13 +1034,13 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                   onClick={onRedo}
                   disabled={!canRedo}
                   className={`p-1 rounded transition-colors ${canRedo ? 'text-gray-500 hover:text-indigo-600 hover:bg-indigo-50' : 'text-gray-200 cursor-default'}`}
-                  title="Redo"
+                  title={t("editor.redoShort")}
                 >
                   <Redo2 size={13} />
                 </button>
               </div>
               <div className="flex items-center gap-1.5 ml-auto flex-shrink-0">
-                <span className="text-[10px] text-gray-400 font-medium hidden sm:inline">BG:</span>
+                <span className="text-[10px] text-gray-400 font-medium hidden sm:inline">{t("dieCut.preview.background")}</span>
                 {BG_SWATCHES.map(opt => (
                   <button
                     key={opt.value}
@@ -1094,10 +1096,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                     <div className="text-center">
                       <ImageIcon className="w-16 h-16 text-gray-300 mx-auto mb-4" />
                       <p className="text-gray-500 mb-4">
-                        Upload an image to see preview
+                        {t("dieCut.preview.uploadPrompt")}
                       </p>
                       <p className="preview-coming-text text-2xl font-extrabold tracking-wide">
-                        ✨ Preview coming up! ✨
+                        {t("dieCut.previewComing")}
                       </p>
                     </div>
                   </div>
@@ -1108,7 +1110,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                     <div className="text-center">
                       <Loader2 className="w-8 h-8 text-white mx-auto mb-2 animate-spin" />
                       <p className="text-white text-sm">
-                        Processing... {processingProgress}%
+                        {t("dieCut.preview.processing", { percent: processingProgress })}
                       </p>
                     </div>
                   </div>
@@ -1207,12 +1209,12 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                 {isProcessing ? (
                   <span className="text-[10px] font-medium px-2 py-0.5 rounded-full flex items-center gap-1" style={{ backgroundColor: "#FFF7ED", color: "#EA580C", border: "1px solid #FDBA74" }}>
                     <Loader2 className="w-3 h-3 animate-spin" />
-                    Updating cutline...
+                    {t("dieCut.preview.updatingCutline")}
                   </span>
                 ) : (
                   <span className="text-[10px] font-medium px-2 py-0.5 rounded-full flex items-center gap-1" style={{ backgroundColor: "#F0FDF4", color: "#16A34A", border: "1px solid #BBF7D0" }}>
                     <Check className="w-3 h-3" />
-                    Cutline ready
+                    {t("dieCut.preview.cutlineReady")}
                   </span>
                 )}
               </div>
@@ -1224,7 +1226,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                     onClick={() => setZoom((prev) => Math.max(prev - 0.1, 0.2))}
                     className="h-7 w-7 flex items-center justify-center rounded-md transition-all text-sm"
                     style={{ backgroundColor: "#F1F5F9", border: "1px solid #CBD5E1", color: "#6B7280" }}
-                    title="Zoom Out"
+                    title={t("preview.zoomOut")}
                   >
                     <ZoomOut className="h-3.5 w-3.5" />
                   </button>
@@ -1237,7 +1239,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                     onClick={() => setZoom((prev) => Math.min(prev + 0.1, 3))}
                     className="h-7 w-7 flex items-center justify-center rounded-md transition-all text-sm"
                     style={{ backgroundColor: "#F1F5F9", border: "1px solid #CBD5E1", color: "#6B7280" }}
-                    title="Zoom In"
+                    title={t("preview.zoomIn")}
                   >
                     <ZoomIn className="h-3.5 w-3.5" />
                   </button>
@@ -1248,18 +1250,18 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
                     onClick={fitToView}
                     className="h-7 px-2 flex items-center gap-1 rounded-md transition-all text-[11px] font-bold"
                     style={{ backgroundColor: "#F1F5F9", border: "1px solid #CBD5E1", color: "#6B7280" }}
-                    title="Fit to View"
+                    title={t("preview.fitToView")}
                   >
-                    <Maximize2 className="h-3 w-3" /> Fit
+                    <Maximize2 className="h-3 w-3" /> {t("dieCut.preview.fit")}
                   </button>
 
                   <button
                     onClick={resetView}
                     className="h-7 px-2 flex items-center gap-1 rounded-md transition-all text-[11px] font-bold"
                     style={{ backgroundColor: "#F1F5F9", border: "1px solid #CBD5E1", color: "#6B7280" }}
-                    title="Reset"
+                    title={t("preview.reset")}
                   >
-                    <RotateCcw className="h-3 w-3" /> Reset
+                    <RotateCcw className="h-3 w-3" /> {t("preview.reset")}
                   </button>
                 </div>
               </div>
