@@ -3,10 +3,13 @@ import { uploadProductionToR2, canUseShellRelay } from "@/lib/r2-direct-upload";
 import { designProductionObjectKey } from "@/lib/design-object-keys";
 import { EXPORT_DPI, EXPORT_TIMEOUT_MS } from "./constants";
 import {
+  BLANK_EXPORT_MESSAGE,
   canUseMemoryEfficientPngExport,
+  canvasHasInk,
   decodePrintSourceAtSize,
   assertExportCanvasNotBlank,
   assertPrintSourcesReadable,
+  assertValidPdfBytes,
   exportPngWithWorker,
   getDesignLabel,
   getExportMemoryWarning,
@@ -564,6 +567,13 @@ export function useImageEditorModelCart(
         const decodedByKey = new Map<string, ImageBitmap | null>();
         const sourceKeys = new WeakMap<Blob, number>();
         let sourceKeyCounter = 0;
+        /**
+         * Whether ANY design contributed visible pixels. Accumulated rather than asserted per
+         * design, matching the PNG paths' semantics: the failure worth catching is "the sheet
+         * rendered nothing", and a single legitimately transparent design must not fail the export.
+         * Checked once after the loop.
+         */
+        let sawInk = false;
         for (const design of exportDesignsSource) {
           const drawW = Math.max(1, Math.round(design.widthInches * design.transform.s * exportDpi));
           const drawH = Math.max(1, Math.round(design.heightInches * design.transform.s * exportDpi));
@@ -615,6 +625,10 @@ export function useImageEditorModelCart(
             ctx.scale(design.transform.flipX ? -1 : 1, design.transform.flipY ? -1 : 1);
             ctx.drawImage(hdImg, 0, 0, drawW, drawH);
             ctx.restore();
+
+            // Must run before the canvas is released below. Skipped once ink has been seen, so a
+            // healthy sheet pays for one scan and the full sweep only happens when it is blank.
+            if (!sawInk && canvasHasInk(canvas)) sawInk = true;
 
             const dataUrl = canvas.toDataURL("image/png");
             canvas.width = 0;
@@ -682,7 +696,13 @@ export function useImageEditorModelCart(
         }
         for (const bitmap of decodedByKey.values()) bitmap?.close();
 
-        return new Blob([await pdfDoc.save()], { type: "application/pdf" });
+        // The PDF path had no output verification at all while every PNG path had one, so a blank
+        // or truncated fluorescent print file uploaded silently. These two cover different
+        // failures: no visible pixels, and a container the writer could not finish.
+        if (exportDesignsSource.length > 0 && !sawInk) throw new Error(BLANK_EXPORT_MESSAGE);
+        const pdfBytes = await pdfDoc.save();
+        assertValidPdfBytes(pdfBytes);
+        return new Blob([pdfBytes], { type: "application/pdf" });
       };
 
       // Skip re-export/re-upload on update when nothing rendered has actually changed.

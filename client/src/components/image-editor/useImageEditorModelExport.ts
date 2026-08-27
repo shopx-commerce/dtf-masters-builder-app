@@ -3,7 +3,10 @@ import { EXPORT_DPI, EXPORT_TIMEOUT_MS } from "./constants";
 import {
   assertExportCanvasNotBlank,
   assertPrintSourcesReadable,
+  assertValidPdfBytes,
+  BLANK_EXPORT_MESSAGE,
   canUseMemoryEfficientPngExport,
+  canvasHasInk,
   decodePrintSourceAtSize,
   exportPngWithWorker,
   getDesignLabel,
@@ -110,6 +113,13 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
         const pdfDoc = await PDFDocument.create();
         const page = pdfDoc.addPage([pageWidthPt, pageHeightPt]);
 
+        /**
+         * Whether ANY design contributed visible pixels. Accumulated rather than asserted per
+         * design, matching the PNG paths' semantics: the failure worth catching is "the sheet
+         * rendered nothing", and a single legitimately transparent design must not fail the export.
+         * Checked once after the loop.
+         */
+        let sawInk = false;
         for (const design of exportDesigns) {
           const drawW = Math.round(design.widthInches * design.transform.s * exportDpi);
           const drawH = Math.round(design.heightInches * design.transform.s * exportDpi);
@@ -135,6 +145,9 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
           } else {
             cctx.drawImage(img, 0, 0, drawW, drawH);
           }
+          // Must run before the canvas is released below. Skipped once ink has been seen, so a
+          // healthy sheet pays for one scan and the full sweep only happens when it is blank.
+          if (!sawInk && canvasHasInk(cvs)) sawInk = true;
           let pngDataUrl: string;
           try {
             pngDataUrl = cvs.toDataURL('image/png');
@@ -206,7 +219,9 @@ export function useImageEditorModelExport(bag: ImageEditorBagAfterUploadCrop) {
           decoded?.close();
         }
 
+        if (exportDesigns.length > 0 && !sawInk) throw new Error(BLANK_EXPORT_MESSAGE);
         const pdfBytes = await pdfDoc.save();
+        assertValidPdfBytes(pdfBytes);
         const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
         triggerDownload(pdfBlob, `${firstName}.pdf`);
       } else {
