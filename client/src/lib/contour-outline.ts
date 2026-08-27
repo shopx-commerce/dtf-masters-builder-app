@@ -1715,8 +1715,8 @@ export function getContourPath(
       }
     }
     
-    // Bleed disabled
-    const bleedInches = 0;
+    // Add bleed to dimensions so expanded background fits within page
+    const bleedInches = 0.10;
     const widthInches = dilatedWidth / effectiveDPI + (bleedInches * 2);
     const heightInches = dilatedHeight / effectiveDPI + (bleedInches * 2);
     

@@ -13,7 +13,6 @@ import {
 import { createTrueContour } from "@/lib/true-contour";
 import { createCTContour } from "@/lib/ctcontour";
 import { checkCadCutBounds, type CadCutBounds } from "@/lib/cadcut-bounds";
-import { downloadZipPackage } from "@/lib/zip-download";
 import {
   downloadContourPDF,
   type CachedContourData,
