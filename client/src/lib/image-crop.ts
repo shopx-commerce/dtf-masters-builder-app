@@ -270,6 +270,27 @@ export function boundedImageCopyCanvas(image: HTMLImageElement): HTMLCanvasEleme
   return canvas;
 }
 
+/**
+ * Adds a transparent frame around a cropped canvas, matching the 3px pad the
+ * Sticker Outline app's crop bakes in. PDF embedding depends on it: a tight crop
+ * of fully opaque artwork contains no transparent pixel, so the embedded PNG
+ * carries no alpha channel and the print file arrives flattened. Applied at the
+ * die-cut PDF call sites only, so the shared crop keeps returning exact bounds.
+ */
+export function padCroppedCanvasForPDF(
+  canvas: HTMLCanvasElement | null,
+  pad: number = 3,
+): HTMLCanvasElement | null {
+  if (!canvas || canvas.width <= 0 || canvas.height <= 0) return canvas;
+  const padded = document.createElement('canvas');
+  padded.width = canvas.width + pad * 2;
+  padded.height = canvas.height + pad * 2;
+  const ctx = padded.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return canvas;
+  ctx.drawImage(canvas, pad, pad);
+  return padded;
+}
+
 export function cropImageToContent(image: HTMLImageElement): HTMLCanvasElement | null {
   try {
     const srcW = image.naturalWidth || image.width;

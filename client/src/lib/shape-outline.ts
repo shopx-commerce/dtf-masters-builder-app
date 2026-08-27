@@ -1,6 +1,6 @@
 import type { ShapeSettings, ResizeSettings } from "@/lib/types";
 import { PDFDocument, PDFName, PDFArray, PDFDict, type PDFImage } from 'pdf-lib';
-import { cropImageToContent, boundedImageCopyCanvas } from './image-crop';
+import { cropImageToContent, boundedImageCopyCanvas, padCroppedCanvasForPDF } from './image-crop';
 import { simplifyPathForPDF, buildSmoothPdfPath, type SpotColorInput } from './contour-outline';
 import { addSpotColorVectorsToPDF } from './spot-color-vectors';
 import { triggerDownload } from './download-file';
@@ -31,7 +31,7 @@ async function createClippedShapeImage(
   }
   clipCtx.clip();
   
-  const croppedCanvas = cropImageToContent(image);
+  const croppedCanvas = padCroppedCanvasForPDF(cropImageToContent(image));
   const sourceImage = croppedCanvas || image;
   const imgW = resizeSettings.widthInches * clipDPI;
   const imgH = resizeSettings.heightInches * clipDPI;
@@ -145,7 +145,7 @@ export function generateShapePathPointsInches(
     shapeSettings.offset
   );
 
-  const bleedInches = 0;
+  const bleedInches = 0.10;
   const totalWidthInches = shapeDims.widthInches + bleedInches * 2;
   const totalHeightInches = shapeDims.heightInches + bleedInches * 2;
 
@@ -238,7 +238,7 @@ export async function downloadShapePDF(
     shapeSettings.offset
   );
   
-  const bleedInches = 0; // Bleed disabled
+  const bleedInches = 0.10; // 0.10" bleed around the shape
   const bleedPts = bleedInches * 72;
   
   // Page size includes bleed area
@@ -256,7 +256,7 @@ export async function downloadShapePDF(
   const cx = widthPts / 2;
   const cy = heightPts / 2;
   
-  const croppedCanvas = cropImageToContent(image);
+  const croppedCanvas = padCroppedCanvasForPDF(cropImageToContent(image));
   let imageCanvas: HTMLCanvasElement;
   
   if (croppedCanvas) {
@@ -587,7 +587,7 @@ export async function generateShapePDFBase64(
   const cx = widthPts / 2;
   const cy = heightPts / 2;
   
-  const croppedCanvas = cropImageToContent(image);
+  const croppedCanvas = padCroppedCanvasForPDF(cropImageToContent(image));
   let imageCanvas: HTMLCanvasElement;
   
   if (croppedCanvas) {
