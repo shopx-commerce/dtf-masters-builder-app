@@ -125,7 +125,7 @@ self.onmessage = function(e: MessageEvent<WorkerMessage>) {
           y: p.y - rescaledImgY
         }));
 
-        const bleedInches = 0;
+        const bleedInches = 0.10;
         const spXs = smoothPts.map(p => p.x);
         const spYs = smoothPts.map(p => p.y);
         const spMinX = Math.min(...spXs);
@@ -490,8 +490,8 @@ function processContour(
   const userOffsetPixels = Math.round(strokeSettings.width * effectiveDPI);
   const totalOffsetPixels = baseOffsetPixels + userOffsetPixels;
   
-  // Bleed disabled
-  const bleedInches = 0;
+  // Add bleed to padding so expanded background isn't clipped
+  const bleedInches = 0.10;
   const bleedPixels = Math.round(bleedInches * effectiveDPI);
   const padding = totalOffsetPixels + bleedPixels + 10;
   const canvasWidth = width + (padding * 2);
@@ -4521,8 +4521,9 @@ function drawContourToData(
   // Parse background color - default to white if undefined
   const bgColorHex = backgroundColorHex || '#ffffff';
   
-  // Bleed disabled
-  const bleedInches = 0;
+  // CRITICAL: Use exact same bleed calculation as PDF export
+  // The bleed must be 0.10 inches regardless of preview DPI
+  const bleedInches = 0.10;
   
   // The path is in pixel coordinates at effectiveDPI scale
   // bleedPixels must be relative to the same scale
@@ -4625,7 +4626,7 @@ function drawContourToDataWithExtendedEdge(
   extendedImageOffsetX: number,
   extendedImageOffsetY: number
 ): void {
-  const bleedInches = 0;
+  const bleedInches = 0.10;
   const bleedPixels = Math.round(bleedInches * effectiveDPI);
   
   const offscreen = new OffscreenCanvas(width, height);
