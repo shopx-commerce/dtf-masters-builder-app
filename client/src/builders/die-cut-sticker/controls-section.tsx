@@ -23,6 +23,7 @@ import {
   runDieCutCheckout,
   type DieCutShopifyVariant,
 } from "./die-cut-checkout";
+import { useLanguage } from "@/lib/i18n";
 import {
   ChevronLeft,
   ChevronRight,
@@ -103,9 +104,9 @@ interface ControlsSectionProps {
 type WizardStep = 1 | 2 | 3;
 
 const STEPS = [
-  { number: 1, label: "Upload", icon: Upload },
-  { number: 2, label: "Size & Qty", icon: Ruler },
-  { number: 3, label: "Design", icon: Shapes },
+  { number: 1, labelKey: "dieCut.steps.upload", icon: Upload },
+  { number: 2, labelKey: "dieCut.steps.sizeQty", icon: Ruler },
+  { number: 3, labelKey: "dieCut.steps.design", icon: Shapes },
 ];
 
 const CelebrationAnimation = () => {
@@ -176,6 +177,7 @@ const PricingDisplay = ({
   lamination: string;
   variants?: DieCutShopifyVariant[];
 }) => {
+  const { t } = useLanguage();
   const total = computeDieCutDisplayTotal(shopStickerSettings, {
     widthInches,
     heightInches,
@@ -192,25 +194,25 @@ const PricingDisplay = ({
         ${total.toFixed(2)}
       </p>
       <p className="text-sm font-semibold mt-2.5" style={{ color: "#6B7280" }}>
-        {quantity} Stickers ({widthInches}" × {heightInches}")
+        {t("dieCut.stickerSummary", { quantity, width: widthInches, height: heightInches })}
       </p>
       <p className="text-xs mt-1.5" style={{ color: "#9CA3AF" }}>
-        ${(total / Math.max(1, quantity)).toFixed(2)} per sticker
+        {t("dieCut.perSticker", { price: (total / Math.max(1, quantity)).toFixed(2) })}
       </p>
 
       <p className="text-xs font-semibold mt-4" style={{ color: "#22C55E" }}>
         <Clock className="w-3 h-3 inline mr-1" style={{ color: "#22C55E" }} />
-        Order today for next-day production.
+        {t("dieCut.orderToday")}
       </p>
 
       <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 mt-3 text-[11px] font-bold" style={{ color: "#6B7280" }}>
         <span className="flex items-center gap-1">
           <Zap className="w-3 h-3" style={{ color: "#2563EB" }} />
-          24–48hr Production
+          {t("dieCut.productionTime")}
         </span>
         <span className="flex items-center gap-1">
           <Truck className="w-3 h-3" style={{ color: "#2563EB" }} />
-          Local Pickup
+          {t("dieCut.localPickup")}
         </span>
       </div>
     </div>
@@ -290,6 +292,7 @@ export default function ControlsSection({
   shopStickerSettings = null,
 }: ControlsSectionProps) {
   const { toast } = useToast();
+  const { t } = useLanguage();
   const [finish, setFinish] = useState(
     () => shopStickerSettings?.defaults?.finish ?? "glossy",
   );
@@ -464,7 +467,7 @@ export default function ControlsSection({
         }
       }
 
-      if (!pdfBase64) throw new Error("Failed to generate PDF. Please try again.");
+      if (!pdfBase64) throw new Error(t("dieCut.failedPdf"));
 
       const previewDataUrl = canvasRef?.current?.toDataURL?.("image/png") || null;
       const total = computeDieCutDisplayTotal(shopStickerSettings, {
@@ -504,17 +507,17 @@ export default function ControlsSection({
       setDesignUrl(result.designUrl || result.productionUrl || "");
 
       toast({
-        title: result.usedShellAtc ? "Added to Cart!" : "Design Ready!",
+        title: result.usedShellAtc ? t("dieCut.addedToCart") : t("dieCut.designReady"),
         description: result.usedShellAtc
-          ? "Your stickers were added to the cart. You can keep shopping."
-          : "Your design is saved with a reference code. Open from the storefront product page to Add to Cart.",
+          ? t("dieCut.addedDescription")
+          : t("dieCut.savedDescription"),
       });
       setDesignSent(true);
       setShowCelebration(true);
       setTimeout(() => setShowCelebration(false), 2500);
     } catch (error) {
       console.error("Error saving design:", error);
-      toast({ title: "Error Saving Design", description: error instanceof Error ? error.message : "Please try again later.", variant: "destructive" });
+      toast({ title: t("dieCut.errorSaving"), description: error instanceof Error ? error.message : t("dieCut.tryAgain"), variant: "destructive" });
     } finally {
       setIsSending(false);
     }
@@ -570,12 +573,12 @@ export default function ControlsSection({
             {isSending ? (
               <>
                 <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                Preparing Your Stickers...
+                {t("dieCut.preparing")}
               </>
             ) : (
               <>
                 <ShoppingCart className="w-5 h-5" />
-                Add to Cart – ${displayTotal.toFixed(2)}
+                {t("dieCut.addToCart", { price: displayTotal.toFixed(2) })}
               </>
             )}
           </button>
@@ -588,10 +591,10 @@ export default function ControlsSection({
                 <Star className="w-4 h-4 fill-current" />
                 <Star className="w-4 h-4 fill-current" />
                 <Star className="w-3.5 h-3.5 fill-current opacity-80" />
-                <span className="ml-1">4.9/5 from 800+ Customers</span>
+                <span className="ml-1">{t("dieCut.customerRating")}</span>
               </div>
               <p className="text-xs italic" style={{ color: "#6B7280" }}>
-                "Super fast and amazing quality!" – Maria R.
+                {t("dieCut.testimonial")}
               </p>
             </div>
           )}
@@ -603,9 +606,9 @@ export default function ControlsSection({
               <Check className="w-5 h-5 text-white" />
             </div>
             <div className="flex-1">
-              <h4 className="font-bold text-lg mb-1" style={{ color: "#2563EB" }}>Added to Cart!</h4>
+              <h4 className="font-bold text-lg mb-1" style={{ color: "#2563EB" }}>{t("dieCut.addedToCart")}</h4>
               <p className="text-sm mb-3" style={{ color: "#6B7280" }}>
-                Your die-cut design is saved to Cloudflare R2. Continue shopping or open your cart.
+                {t("dieCut.savedR2")}
               </p>
               <a
                 href={buildCartUrl()}
@@ -614,12 +617,12 @@ export default function ControlsSection({
                 className="block w-full py-4 rounded-xl text-lg font-bold text-center text-white transition-all"
                 style={{ background: "linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)", boxShadow: "0 4px 25px rgba(37, 99, 235, 0.4)" }}
               >
-                View Cart
+                {t("dieCut.viewCart")}
                 <ExternalLink className="w-5 h-5 ml-2 inline" />
               </a>
               {referenceCode && (
                 <p className="text-xs text-center mt-3" style={{ color: "#9CA3AF" }}>
-                  Reference: <span className="font-mono font-bold">{referenceCode}</span>
+                  {t("dieCut.reference", { code: referenceCode })}
                 </p>
               )}
             </div>
@@ -670,7 +673,7 @@ export default function ControlsSection({
                 {isCompleted ? <Check className="w-4 h-4" /> : step.number}
               </span>
               <span className="text-[11px] font-bold tracking-wide" style={{ color: isActive ? "#2563EB" : isCompleted ? "#2563EB" : "#9CA3AF" }}>
-                {step.label}
+                {t(step.labelKey)}
               </span>
             </button>
           );
@@ -686,20 +689,20 @@ export default function ControlsSection({
         <div className="text-center space-y-4">
           <div className="rounded-lg p-4" style={{ backgroundColor: "rgba(37, 99, 235, 0.08)", border: "1px solid rgba(37, 99, 235, 0.2)" }}>
             <Check className="w-8 h-8 mx-auto mb-2" style={{ color: "#2563EB" }} />
-            <p className="font-bold text-base" style={{ color: "#2563EB" }}>Image uploaded</p>
+            <p className="font-bold text-base" style={{ color: "#2563EB" }}>{t("dieCut.imageUploaded")}</p>
             <p className="text-sm mt-1" style={{ color: "#9CA3AF" }}>{imageInfo.file.name}</p>
           </div>
           {onClearImage && (
             <Button onClick={onClearImage} variant="outline" size="sm" className="w-full border-gray-300 text-gray-500 hover:bg-gray-100 hover:text-gray-700">
-              <RotateCcw className="w-3 h-3 mr-2" /> Upload Different Image
+              <RotateCcw className="w-3 h-3 mr-2" /> {t("dieCut.uploadDifferent")}
             </Button>
           )}
         </div>
       ) : (
         <div className="text-center">
           <Upload className="w-10 h-10 mx-auto mb-3" style={{ color: "#2563EB" }} />
-          <h3 className="text-lg font-bold mb-2 font-heading tracking-wide" style={{ color: "#111827" }}>Step 1</h3>
-          <p className="text-sm" style={{ color: "#9CA3AF" }}>Upload your artwork to get started.</p>
+          <h3 className="text-lg font-bold mb-2 font-heading tracking-wide" style={{ color: "#111827" }}>{t("dieCut.stepOne")}</h3>
+          <p className="text-sm" style={{ color: "#9CA3AF" }}>{t("dieCut.uploadToStart")}</p>
         </div>
       )}
     </div>
@@ -753,8 +756,8 @@ export default function ControlsSection({
         );
         if (!ok) {
           toast({
-            title: "Size not allowed",
-            description: "Choose one of the preset sizes for this store.",
+            title: t("dieCut.sizeNotAllowed"),
+            description: t("dieCut.choosePreset"),
             variant: "destructive",
           });
           return;
@@ -824,7 +827,7 @@ export default function ControlsSection({
             boxShadow: customSizeMode || isCustomSize ? "0 0 18px rgba(37, 99, 235, 0.35)" : "none",
           }}
         >
-          Custom
+          {t("dieCut.custom")}
         </button>
         )}
       </div>
@@ -832,7 +835,7 @@ export default function ControlsSection({
         <div className="mt-3">
           <div className="flex items-end gap-2">
             <div className="flex-1">
-              <label className="text-xs font-semibold mb-1 block" style={{ color: "#6B7280" }}>Width (in)</label>
+              <label className="text-xs font-semibold mb-1 block" style={{ color: "#6B7280" }}>{t("dieCut.widthIn")}</label>
               <input
                 type="number"
                 min={minW}
@@ -850,7 +853,7 @@ export default function ControlsSection({
               <Link2 className="w-4 h-4" style={{ color: "#3B82F6" }} />
             </div>
             <div className="flex-1">
-              <label className="text-xs font-semibold mb-1 block" style={{ color: "#6B7280" }}>Height (in)</label>
+              <label className="text-xs font-semibold mb-1 block" style={{ color: "#6B7280" }}>{t("dieCut.heightIn")}</label>
               <input
                 type="number"
                 min={minH}
@@ -870,11 +873,11 @@ export default function ControlsSection({
               className="rounded-lg px-4 py-2 text-sm font-bold transition-all"
               style={{ background: "linear-gradient(135deg, #3B82F6, #1D4ED8)", color: "#FFFFFF" }}
             >
-              Apply
+              {t("editor.apply")}
             </button>
           </div>
           <p className="text-xs mt-1.5 flex items-center gap-1" style={{ color: "#9CA3AF" }}>
-            <Link2 className="w-3 h-3" /> Proportions locked to keep your design undistorted
+            <Link2 className="w-3 h-3" /> {t("dieCut.proportionsLocked")}
           </p>
         </div>
       )}
@@ -933,13 +936,13 @@ export default function ControlsSection({
             boxShadow: customQtyMode || isCustomQty ? "0 0 12px rgba(37, 99, 235, 0.3)" : "none",
           }}
         >
-          Custom
+          {t("dieCut.custom")}
         </button>
       </div>
       {customQtyMode && (
         <div className="mt-3 flex items-end gap-2">
           <div className="flex-1">
-            <label className="text-xs font-semibold mb-1 block" style={{ color: "#6B7280" }}>Quantity</label>
+            <label className="text-xs font-semibold mb-1 block" style={{ color: "#6B7280" }}>{t("dieCut.quantity")}</label>
             <input
               type="number"
               min={minQtyLimit}
@@ -959,7 +962,7 @@ export default function ControlsSection({
             className="rounded-lg px-4 py-2 text-sm font-bold transition-all"
             style={{ background: "linear-gradient(135deg, #3B82F6, #1D4ED8)", color: "#FFFFFF" }}
           >
-            Apply
+            {t("editor.apply")}
           </button>
         </div>
       )}
@@ -978,7 +981,7 @@ export default function ControlsSection({
             className="text-xs font-bold mb-2"
             style={{ color: "#374151" }}
           >
-            Finish
+            {t("dieCut.finish")}
           </p>
           <div className="flex flex-wrap gap-2">
             {(["glossy", "matte"] as const).map((key) => {
@@ -999,7 +1002,7 @@ export default function ControlsSection({
                     border: active ? "1px solid #60A5FA" : "1px solid #CBD5E1",
                   }}
                 >
-                  {key}
+                  {t(`dieCut.${key}`)}
                 </button>
               );
             })}
@@ -1010,15 +1013,14 @@ export default function ControlsSection({
             className="text-xs font-bold mb-2"
             style={{ color: "#374151" }}
           >
-            Lamination
+            {t("dieCut.lamination")}
           </p>
           <div className="flex flex-wrap gap-2">
             {(["none", "gloss", "matte"] as const).map((key) => {
               const cfg = shopStickerSettings.lamination?.[key];
               if (!cfg?.enabled) return null;
               const active = lamination === key;
-              const label =
-                key === "none" ? "None" : key === "gloss" ? "Gloss" : "Matte";
+              const label = t(`dieCut.${key}`);
               return (
                 <button
                   key={key}
@@ -1054,7 +1056,7 @@ export default function ControlsSection({
       onMouseEnter={(e) => { e.currentTarget.style.transform = "scale(1.02)"; e.currentTarget.style.boxShadow = "0 0 30px rgba(37, 99, 235, 0.5), 0 6px 20px rgba(0,0,0,0.25)"; }}
       onMouseLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; e.currentTarget.style.boxShadow = "0 0 20px rgba(37, 99, 235, 0.35), 0 4px 15px rgba(0,0,0,0.2)"; }}
     >
-      Continue to Design <ChevronRight className="w-4 h-4" />
+      {t("dieCut.continueDesign")} <ChevronRight className="w-4 h-4" />
     </button>
   );
 
@@ -1064,7 +1066,7 @@ export default function ControlsSection({
       className="w-full py-2.5 px-4 rounded-lg text-sm font-bold flex items-center justify-center gap-1 transition-colors hover:bg-gray-100"
       style={{ border: "1px solid #CBD5E1", color: "#6B7280" }}
     >
-      <ChevronLeft className="w-4 h-4" /> Back
+      <ChevronLeft className="w-4 h-4" /> {t("editor.back")}
     </button>
   );
 
@@ -1078,21 +1080,21 @@ export default function ControlsSection({
                 <div className="flex items-center gap-3 rounded-lg p-3" style={{ backgroundColor: "rgba(37, 99, 235, 0.05)", border: "1px solid rgba(37, 99, 235, 0.1)", boxShadow: "0 2px 12px rgba(0,0,0,0.15)" }}>
                   <div className="relative flex-shrink-0">
                     <div className="w-20 h-20 rounded-lg overflow-hidden border-2" style={{ borderColor: "rgba(37, 99, 235, 0.5)", boxShadow: "0 4px 15px rgba(0,0,0,0.2)" }}>
-                      <img src={imageInfo.image.src} alt="Uploaded design" className="w-full h-full object-contain" style={{ backgroundColor: "#E2E8F0" }} />
+                      <img src={imageInfo.image.src} alt={t("dieCut.uploadedDesignAlt")} className="w-full h-full object-contain" style={{ backgroundColor: "#E2E8F0" }} />
                     </div>
                     <div className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center" style={{ backgroundColor: "#22C55E" }}>
                       <svg className="w-3 h-3 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12" /></svg>
                     </div>
                   </div>
                   <div>
-                    <p className="text-sm font-bold" style={{ color: "#374151" }}>Image Ready</p>
+                    <p className="text-sm font-bold" style={{ color: "#374151" }}>{t("dieCut.imageReady")}</p>
                     <p className="text-xs mt-0.5" style={{ color: "#9CA3AF" }}>{imageInfo.file.name.substring(0, 25)}{imageInfo.file.name.length > 25 ? "..." : ""}</p>
                   </div>
                 </div>
               )}
               <div>
-                <h3 className="text-base font-bold mb-1 font-heading tracking-wide" style={{ color: "#111827" }}>Sticker Size</h3>
-                <p className="text-xs mb-3" style={{ color: "#9CA3AF" }}>Max width or height — keeps proportions.</p>
+                <h3 className="text-base font-bold mb-1 font-heading tracking-wide" style={{ color: "#111827" }}>{t("dieCut.stickerSize")}</h3>
+                <p className="text-xs mb-3" style={{ color: "#9CA3AF" }}>{t("dieCut.maxDimension")}</p>
                 {sizeButtons}
               </div>
               {backButton}
@@ -1100,14 +1102,14 @@ export default function ControlsSection({
 
             <div className="flex flex-col">
               <div>
-                <h3 className="text-base font-bold mb-1 font-heading tracking-wide" style={{ color: "#111827" }}>Quantity</h3>
-                <p className="text-xs mb-3" style={{ color: "#9CA3AF" }}>Order more & save per sticker.</p>
+                <h3 className="text-base font-bold mb-1 font-heading tracking-wide" style={{ color: "#111827" }}>{t("dieCut.quantity")}</h3>
+                <p className="text-xs mb-3" style={{ color: "#9CA3AF" }}>{t("dieCut.orderMore")}</p>
                 {quantityButtons}
               </div>
               {finishLamBlock}
               <div className="flex-1 flex items-center justify-center pt-4">
                 <p className="preview-coming-text text-2xl font-extrabold tracking-wide">
-                  ✨ Preview coming up! ✨
+                  {t("dieCut.previewComing")}
                 </p>
               </div>
             </div>
@@ -1132,13 +1134,13 @@ export default function ControlsSection({
     return (
       <div className="rounded-xl p-6 space-y-6" style={{ backgroundColor: "#F8FAFC", border: "1px solid #E2E8F0" }}>
         <div>
-          <h3 className="text-base font-bold mb-1 font-heading tracking-wide" style={{ color: "#111827" }}>Sticker Size</h3>
-          <p className="text-xs mb-3" style={{ color: "#9CA3AF" }}>Max width or height — keeps proportions.</p>
+          <h3 className="text-base font-bold mb-1 font-heading tracking-wide" style={{ color: "#111827" }}>{t("dieCut.stickerSize")}</h3>
+          <p className="text-xs mb-3" style={{ color: "#9CA3AF" }}>{t("dieCut.maxDimension")}</p>
           {sizeButtons}
         </div>
         <div>
-          <h3 className="text-base font-bold mb-1 font-heading tracking-wide" style={{ color: "#111827" }}>Quantity</h3>
-          <p className="text-xs mb-3" style={{ color: "#9CA3AF" }}>Order more & save per sticker.</p>
+          <h3 className="text-base font-bold mb-1 font-heading tracking-wide" style={{ color: "#111827" }}>{t("dieCut.quantity")}</h3>
+          <p className="text-xs mb-3" style={{ color: "#9CA3AF" }}>{t("dieCut.orderMore")}</p>
           {quantityButtons}
         </div>
         {finishLamBlock}
@@ -1154,7 +1156,7 @@ export default function ControlsSection({
         {continueButton}
         <div className="text-center py-8">
           <p className="preview-coming-text text-2xl font-extrabold tracking-wide">
-            ✨ Preview coming up! ✨
+            {t("dieCut.previewComing")}
           </p>
         </div>
       </div>
@@ -1170,7 +1172,7 @@ export default function ControlsSection({
       <div className="space-y-5" ref={stickyRef}>
         <div>
           <p className="text-sm font-bold mb-3 font-heading tracking-wide text-center" style={{ color: "#111827" }}>
-            How should we cut your sticker?
+            {t("dieCut.cutQuestion")}
           </p>
           <div className="grid grid-cols-2 gap-3">
             <button
@@ -1188,8 +1190,8 @@ export default function ControlsSection({
                   <path d="M32 8 L38 24 L56 24 L42 36 L48 52 L32 42 L16 52 L22 36 L8 24 L26 24 Z" fill={isContour ? "#2563EB" : "#CBD5E1"} />
                 </svg>
               </div>
-              <p className="text-sm font-bold" style={{ color: isContour ? "#2563EB" : "#6B7280" }}>Contour Cut</p>
-              <p className="text-[10px] mt-0.5 italic" style={{ color: "#9CA3AF" }}>Most popular for logos</p>
+              <p className="text-sm font-bold" style={{ color: isContour ? "#2563EB" : "#6B7280" }}>{t("dieCut.contourCut")}</p>
+              <p className="text-[10px] mt-0.5 italic" style={{ color: "#9CA3AF" }}>{t("dieCut.contourHint")}</p>
             </button>
 
             <button
@@ -1207,8 +1209,8 @@ export default function ControlsSection({
                   <rect x="20" y="20" width="24" height="24" rx="2" fill={isShape ? "#2563EB" : "#CBD5E1"} />
                 </svg>
               </div>
-              <p className="text-sm font-bold" style={{ color: isShape ? "#2563EB" : "#6B7280" }}>Shape Cut</p>
-              <p className="text-[10px] mt-0.5 italic" style={{ color: "#9CA3AF" }}>Best for simple designs</p>
+              <p className="text-sm font-bold" style={{ color: isShape ? "#2563EB" : "#6B7280" }}>{t("dieCut.shapeCut")}</p>
+              <p className="text-[10px] mt-0.5 italic" style={{ color: "#9CA3AF" }}>{t("dieCut.shapeHint")}</p>
             </button>
           </div>
         </div>
@@ -1222,12 +1224,12 @@ export default function ControlsSection({
               style={{ background: "linear-gradient(135deg, #3B82F6 0%, #8B5CF6 50%, #EC4899 100%)", boxShadow: "0 4px 15px rgba(59, 130, 246, 0.3)" }}
             >
               {isRemovingBackground ? (
-                <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Removing Background...</>
+                <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> {t("dieCut.removingBackground")}</>
               ) : (
-                <><Sparkles className="w-4 h-4" /> Remove White Background</>
+                <><Sparkles className="w-4 h-4" /> {t("dieCut.removeWhiteBackground")}</>
               )}
             </button>
-            <p className="text-[11px] text-center -mt-1" style={{ color: "#EF4444" }}>It will remove all white background from your design</p>
+            <p className="text-[11px] text-center -mt-1" style={{ color: "#EF4444" }}>{t("dieCut.removeWhiteWarning")}</p>
             {hasOriginalImage && onToggleOriginalImage && (
               <button
                 onClick={onToggleOriginalImage}
@@ -1238,7 +1240,7 @@ export default function ControlsSection({
                   color: showOriginalImage ? "#2563EB" : "#6B7280",
                 }}
               >
-                {showOriginalImage ? "Showing original — tap to see result" : "Compare: Show original image"}
+                {showOriginalImage ? t("dieCut.showingOriginal") : t("dieCut.compareOriginal")}
               </button>
             )}
           </>
@@ -1246,12 +1248,12 @@ export default function ControlsSection({
 
         {(isContour || isShape) && onCutlineVisibilityChange && (
           <div className="flex items-center justify-between rounded-lg px-3 py-2" style={{ backgroundColor: "#F8FAFC", border: "1px solid #E2E8F0" }}>
-            <span className="text-xs font-bold" style={{ color: "#64748B" }}>Cutline preview</span>
+            <span className="text-xs font-bold" style={{ color: "#64748B" }}>{t("dieCut.cutlinePreview")}</span>
             <div className="flex gap-1">
               {([
-                { value: 'thin' as CutlineVisibility, label: 'Thin' },
-                { value: 'normal' as CutlineVisibility, label: 'Normal' },
-                { value: 'bold' as CutlineVisibility, label: 'Bold' },
+                { value: 'thin' as CutlineVisibility, label: t("dieCut.thin") },
+                { value: 'normal' as CutlineVisibility, label: t("dieCut.normal") },
+                { value: 'bold' as CutlineVisibility, label: t("dieCut.bold") },
               ]).map((opt) => (
                 <button
                   key={opt.value}
@@ -1272,22 +1274,22 @@ export default function ControlsSection({
         {isContour && (
           <div className="rounded-xl p-5 space-y-5" style={{ backgroundColor: "#F8FAFC", border: "1px solid #E2E8F0" }}>
             <div>
-              <p className="text-sm font-bold mb-1" style={{ color: "#2563EB" }}>Border thickness</p>
-              <p className="text-[11px] mb-2.5" style={{ color: "#9CA3AF" }}>Distance from artwork to cut edge</p>
+              <p className="text-sm font-bold mb-1" style={{ color: "#2563EB" }}>{t("dieCut.borderThickness")}</p>
+              <p className="text-[11px] mb-2.5" style={{ color: "#9CA3AF" }}>{t("dieCut.borderDistance")}</p>
               {(() => {
                 const isMultiObject = detectedAlgorithm === 'scattered';
                 const options = isMultiObject
                   ? [
-                      { value: "0.07", label: "Tight" },
-                      { value: "0.14", label: "Medium" },
-                      { value: "0.25", label: "Large" },
+                      { value: "0.07", label: t("dieCut.tight") },
+                      { value: "0.14", label: t("dieCut.medium") },
+                      { value: "0.25", label: t("dieCut.large") },
                     ]
                   : [
-                      { value: "0.02", label: "Tiny" },
-                      { value: "0.04", label: "Small" },
-                      { value: "0.07", label: "Med" },
-                      { value: "0.14", label: "Large" },
-                      { value: "0.25", label: "XL" },
+                      { value: "0.02", label: t("dieCut.tiny") },
+                      { value: "0.04", label: t("dieCut.small") },
+                      { value: "0.07", label: t("dieCut.medium") },
+                      { value: "0.14", label: t("dieCut.large") },
+                      { value: "0.25", label: t("dieCut.extraLarge") },
                     ];
                 return (
                   <div className={`grid gap-1.5 ${isMultiObject ? 'grid-cols-3' : 'grid-cols-5'}`}>
@@ -1310,8 +1312,8 @@ export default function ControlsSection({
               })()}
             </div>
             <div>
-              <p className="text-sm font-bold mb-1" style={{ color: "#2563EB" }}>Printed background / bleed fill</p>
-              <p className="text-[11px] mb-2.5" style={{ color: "#9CA3AF" }}>This color prints in the border area (bleed)</p>
+              <p className="text-sm font-bold mb-1" style={{ color: "#2563EB" }}>{t("dieCut.printedBackground")}</p>
+              <p className="text-[11px] mb-2.5" style={{ color: "#9CA3AF" }}>{t("dieCut.bleedHint")}</p>
               <ColorPicker value={strokeSettings.backgroundColor} onChange={(c) => onStrokeChange({ backgroundColor: c })} accentColor="#2563EB" />
             </div>
           </div>
@@ -1320,7 +1322,7 @@ export default function ControlsSection({
         {isShape && (
           <div className="rounded-xl p-5 space-y-6" style={{ backgroundColor: "#F8FAFC", border: "1px solid #E2E8F0" }}>
             <div>
-              <p className="text-sm font-bold mb-2.5" style={{ color: "#2563EB" }}>Shape</p>
+              <p className="text-sm font-bold mb-2.5" style={{ color: "#2563EB" }}>{t("dieCut.shape")}</p>
               <div className="grid grid-cols-4 gap-2">
                 {(["square", "rectangle", "circle", "oval"] as const).map((type) => (
                   <button
@@ -1337,18 +1339,18 @@ export default function ControlsSection({
                       style={{ backgroundColor: shapeSettings.type === type ? "#2563EB" : "#9CA3AF" }}
                       className={`${type === "square" ? "w-8 h-8 rounded" : type === "rectangle" ? "w-10 h-7 rounded" : type === "circle" ? "w-8 h-8 rounded-full" : "w-10 h-7 rounded-full"}`}
                     />
-                    <p className="text-[10px] font-bold capitalize" style={{ color: shapeSettings.type === type ? "#2563EB" : "#9CA3AF" }}>{type}</p>
+                    <p className="text-[10px] font-bold capitalize" style={{ color: shapeSettings.type === type ? "#2563EB" : "#9CA3AF" }}>{t(`dieCut.${type}`)}</p>
                   </button>
                 ))}
               </div>
             </div>
 
             <div>
-              <p className="text-sm font-bold mb-2.5" style={{ color: "#2563EB" }}>Border thickness</p>
+              <p className="text-sm font-bold mb-2.5" style={{ color: "#2563EB" }}>{t("dieCut.borderThickness")}</p>
               <div className={`grid gap-1.5 ${shapeSettings.type === "circle" || shapeSettings.type === "oval" ? "grid-cols-5" : "grid-cols-4"}`}>
                 {(shapeSettings.type === "circle" || shapeSettings.type === "oval"
-                  ? [{ value: "0", label: "Zero" }, { value: "0.03", label: "Tiny" }, { value: "0.09", label: "Small" }, { value: "0.15", label: "Med" }, { value: "0.2", label: "Large" }]
-                  : [{ value: "0.0625", label: "Tiny" }, { value: "0.125", label: "Small" }, { value: "0.1875", label: "Med" }, { value: "0.25", label: "Large" }]
+                  ? [{ value: "0", label: t("dieCut.zero") }, { value: "0.03", label: t("dieCut.tiny") }, { value: "0.09", label: t("dieCut.small") }, { value: "0.15", label: t("dieCut.medium") }, { value: "0.2", label: t("dieCut.large") }]
+                  : [{ value: "0.0625", label: t("dieCut.tiny") }, { value: "0.125", label: t("dieCut.small") }, { value: "0.1875", label: t("dieCut.medium") }, { value: "0.25", label: t("dieCut.large") }]
                 ).map((opt) => (
                   <button
                     key={opt.value}
@@ -1367,7 +1369,7 @@ export default function ControlsSection({
             </div>
 
             <div>
-              <p className="text-sm font-bold mb-2.5" style={{ color: "#2563EB" }}>Printed background / bleed fill</p>
+              <p className="text-sm font-bold mb-2.5" style={{ color: "#2563EB" }}>{t("dieCut.printedBackground")}</p>
               <ColorPicker value={shapeSettings.fillColor} onChange={(c) => onShapeChange({ fillColor: c })} accentColor="#2563EB" />
             </div>
           </div>
@@ -1408,10 +1410,10 @@ export default function ControlsSection({
                 <Check className="w-3 h-3" />
               </span>
               <span className="text-sm font-semibold" style={{ color: "#6B7280" }}>
-                {imageInfo?.file.name ? imageInfo.file.name.substring(0, 20) + (imageInfo.file.name.length > 20 ? "..." : "") : "Upload"}
+                {imageInfo?.file.name ? imageInfo.file.name.substring(0, 20) + (imageInfo.file.name.length > 20 ? "..." : "") : t("dieCut.steps.upload")}
               </span>
             </div>
-            <span className="text-xs font-bold group-hover:underline" style={{ color: "#60A5FA" }}>Edit</span>
+            <span className="text-xs font-bold group-hover:underline" style={{ color: "#60A5FA" }}>{t("dieCut.edit")}</span>
           </button>
         ))}
 
@@ -1426,10 +1428,10 @@ export default function ControlsSection({
                 <Check className="w-3 h-3" />
               </span>
               <span className="text-sm font-semibold" style={{ color: "#6B7280" }}>
-                {resizeSettings.widthInches}" × {resizeSettings.heightInches}" · {quantity} stickers
+                {t("dieCut.stickersCompact", { width: resizeSettings.widthInches, height: resizeSettings.heightInches, quantity })}
               </span>
             </div>
-            <span className="text-xs font-bold group-hover:underline" style={{ color: "#60A5FA" }}>Edit</span>
+            <span className="text-xs font-bold group-hover:underline" style={{ color: "#60A5FA" }}>{t("dieCut.edit")}</span>
           </button>
         ))}
 
@@ -1444,7 +1446,7 @@ export default function ControlsSection({
               className="flex-1 py-2.5 px-4 rounded-lg text-sm font-bold flex items-center justify-center gap-1 transition-colors hover:bg-gray-100"
               style={{ border: "1px solid #CBD5E1", color: "#6B7280" }}
             >
-              <ChevronLeft className="w-4 h-4" /> Back
+              <ChevronLeft className="w-4 h-4" /> {t("editor.back")}
             </button>
           ) : <div className="flex-1" />}
 
@@ -1459,7 +1461,7 @@ export default function ControlsSection({
                 color: ((currentStep === 1 && canProceedToStep2) || (currentStep === 2 && canProceedToStep3)) ? "#FFFFFF" : "#9CA3AF",
               }}
             >
-              Continue <ChevronRight className="w-4 h-4" />
+              {t("landing.proceed")} <ChevronRight className="w-4 h-4" />
             </button>
           )}
         </div>
@@ -1478,7 +1480,7 @@ export default function ControlsSection({
           <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
             <div className="flex items-center gap-3 text-sm" style={{ color: "#6B7280" }}>
               <Package className="w-4 h-4" style={{ color: "#2563EB" }} />
-              <span className="font-semibold">{resizeSettings.widthInches}" × {resizeSettings.heightInches}" · {quantity} stickers</span>
+              <span className="font-semibold">{t("dieCut.stickersCompact", { width: resizeSettings.widthInches, height: resizeSettings.heightInches, quantity })}</span>
               <span className="font-extrabold text-lg" style={{ color: "#111827" }}>${displayTotal.toFixed(2)}</span>
             </div>
             <button
@@ -1487,7 +1489,7 @@ export default function ControlsSection({
               className="px-6 py-2.5 rounded-lg font-bold text-sm disabled:opacity-50"
               style={{ background: "linear-gradient(135deg, #2563EB, #1D4ED8)", color: "#FFFFFF", boxShadow: "0 4px 15px rgba(37, 99, 235, 0.35)" }}
             >
-              {isSending ? "Saving..." : designSent ? "Added ✓" : `Add to Cart – $${displayTotal.toFixed(2)}`}
+              {isSending ? t("dieCut.saving") : designSent ? t("dieCut.added") : t("dieCut.addToCart", { price: displayTotal.toFixed(2) })}
             </button>
           </div>
         </div>

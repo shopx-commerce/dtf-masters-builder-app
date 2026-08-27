@@ -46,6 +46,7 @@ import type {
 import type { ShopStickerSettings } from "@/lib/shop-sticker-settings";
 import { snapQuantityToOptions } from "@/lib/pricing";
 import type { DieCutShopifyVariant } from "./die-cut-checkout";
+import { useLanguage } from "@/lib/i18n";
 
 function initialQuantityFromShop(
   shop: ShopStickerSettings | null | undefined,
@@ -128,6 +129,7 @@ export default function ImageEditor({
   initialQuantity,
   initialOutlineType,
 }: ImageEditorProps) {
+  const { t } = useLanguage();
   const [imageInfo, setImageInfo] = useState<ImageInfo | null>(null);
   const [cadCutBounds, setCadCutBounds] = useState<CadCutBounds | null>(null);
   const [strokeSettings, setStrokeSettings] = useState<StrokeSettings>({
@@ -1000,13 +1002,13 @@ export default function ImageEditor({
           strokeSettings,
         });
         alert(
-          `Download failed: ${error instanceof Error ? error.message : "Unknown error"}. Please try again.`,
+          `${t("toast.downloadFailed")}: ${error instanceof Error ? error.message : t("error.title")}. ${t("toast.downloadFailedDesc")}`,
         );
       } finally {
         setIsProcessing(false);
       }
     },
-    [imageInfo, strokeSettings, resizeSettings, shapeSettings],
+    [imageInfo, strokeSettings, resizeSettings, shapeSettings, t],
   );
 
   if (!imageInfo) {
@@ -1025,8 +1027,8 @@ export default function ImageEditor({
               <div className="flex items-center space-x-3">
                 <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[#1B2A4A]"></div>
                 <div className="text-gray-700">
-                  <div className="font-medium">Processing image...</div>
-                  <div className="text-sm text-gray-500 mt-1">Creating high-quality stroke and preparing download</div>
+                  <div className="font-medium">{t("dieCut.processingImage")}</div>
+                  <div className="text-sm text-gray-500 mt-1">{t("dieCut.processingDescription")}</div>
                 </div>
               </div>
             </div>
@@ -1086,8 +1088,8 @@ export default function ImageEditor({
               <div className="flex items-center space-x-3">
                 <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[#1B2A4A]"></div>
                 <div className="text-gray-700">
-                  <div className="font-medium">Processing image...</div>
-                  <div className="text-sm text-gray-500 mt-1">Creating high-quality stroke and preparing download</div>
+                  <div className="font-medium">{t("dieCut.processingImage")}</div>
+                  <div className="text-sm text-gray-500 mt-1">{t("dieCut.processingDescription")}</div>
                 </div>
               </div>
             </div>
@@ -1131,9 +1133,9 @@ export default function ImageEditor({
             <div className="flex items-center space-x-3">
               <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[#1B2A4A]"></div>
               <div className="text-gray-700">
-                <div className="font-medium">Processing image...</div>
+                <div className="font-medium">{t("dieCut.processingImage")}</div>
                 <div className="text-sm text-gray-500 mt-1">
-                  Creating high-quality stroke and preparing download
+                  {t("dieCut.processingDescription")}
                 </div>
               </div>
             </div>

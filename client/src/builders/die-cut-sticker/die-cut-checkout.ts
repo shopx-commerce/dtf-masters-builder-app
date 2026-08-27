@@ -234,9 +234,14 @@ async function uploadDieCutToAnyNest(
   };
 }
 
+/**
+ * "Custom Size / Custom Quantity" on the standalone store. A preset variant such
+ * as "2x2 / 300" would show those preset options on the cart line instead of the
+ * customer's real size and quantity, and would charge its own catalog price.
+ */
 const STANDALONE_FALLBACK_VARIANT_ID = String(
   (import.meta as { env?: Record<string, string | undefined> }).env
-    ?.VITE_DIE_CUT_FALLBACK_VARIANT_ID || "44420132962454",
+    ?.VITE_DIE_CUT_FALLBACK_VARIANT_ID || "46288860905622",
 ).replace(/\D/g, "");
 
 function isCustomVariant(variant: DieCutShopifyVariant): boolean {
@@ -379,10 +384,14 @@ export async function runDieCutCheckout(
     input.quantity,
   );
 
+  // Standalone has no variant list to match against, so the custom-size variant
+  // takes precedence over whatever variant the entry URL carried — that one is
+  // whichever preset the product page happened to have selected.
   const vidDigits = String(
     matchedVariant?.id ||
+      (inShell ? input.variantId : STANDALONE_FALLBACK_VARIANT_ID) ||
       input.variantId ||
-      (!inShell ? STANDALONE_FALLBACK_VARIANT_ID : ""),
+      "",
   ).replace(/\D/g, "");
 
   const shop = String(input.shopDomain || "").trim();
@@ -619,7 +628,18 @@ export async function runDieCutCheckout(
 
     onProgress("Redirecting to cart...");
 
-    navigateStandaloneCartAdd(input, stickerProps, vidDigits);
+    // The theme's cart line renders the design from _preview_url and links the
+    // print file from _production_url. In the shell path the Shopify app writes
+    // both; going straight to /cart/add means we have to send them ourselves.
+    navigateStandaloneCartAdd(
+      input,
+      {
+        ...stickerProps,
+        ...(previewUrl ? { _preview_url: previewUrl } : {}),
+        ...(productionUrl ? { _production_url: productionUrl } : {}),
+      },
+      vidDigits,
+    );
 
   } else {
 

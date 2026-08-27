@@ -7,6 +7,7 @@ import {
 } from "@/lib/shop-sticker-settings";
 import LanguageToggle from "@/components/language-toggle";
 import type { DieCutShopifyVariant } from "@/builders/die-cut-sticker/die-cut-checkout";
+import { useLanguage } from "@/lib/i18n";
 
 function getUrlParams() {
   const urlParams = new URLSearchParams(window.location.search);
@@ -75,6 +76,7 @@ const AUTO_FETCH_SHOP_SETTINGS = (() => {
 })();
 
 export default function DieCutStickerMaker() {
+  const { t } = useLanguage();
   const [shopStickerSettings, setShopStickerSettings] =
     useState<ShopStickerSettings | null>(() =>
       typeof window !== "undefined"
@@ -251,7 +253,7 @@ export default function DieCutStickerMaker() {
                 href="/"
                 className="text-sm font-medium text-cyan-600 hover:text-cyan-700"
               >
-                ← Back
+                ← {t("editor.back")}
               </Link>
               <h1
                 className="text-2xl font-black tracking-widest"
@@ -265,11 +267,11 @@ export default function DieCutStickerMaker() {
                   backgroundClip: "text",
                 }}
               >
-                DIE-CUT STICKERS
+                {t("dieCut.headerTitle")}
               </h1>
             </div>
             <div className="flex items-center gap-3 text-sm text-gray-500">
-              <span>AnyNest Die-Cut Sticker Builder</span>
+              <span>{t("dieCut.builderName")}</span>
               <LanguageToggle />
             </div>
           </div>

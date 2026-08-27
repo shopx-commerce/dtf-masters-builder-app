@@ -5,6 +5,7 @@ import { ImageInfo } from "./image-editor";
 import type { ResizeSettings } from "@/lib/types";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { useLanguage } from "@/lib/i18n";
 
 export interface StickerOptions {
   size: string;
@@ -20,12 +21,13 @@ interface UploadSectionProps {
 }
 
 export default function UploadSection({ onImageUpload, imageInfo, resizeSettings, showCutLineInfo = false, isCompactEmbed = false }: UploadSectionProps) {
+  const { t } = useLanguage();
   const [selectedSize, setSelectedSize] = useState<string>("");
   const [quantity, setQuantity] = useState<number>(25);
   
   const handleFileUpload = useCallback((file: File) => {
     if (!file.type.startsWith('image/')) {
-      alert('Please upload an image file (PNG or JPEG).');
+      alert(t("dieCut.imageFileOnly"));
       return;
     }
 
@@ -41,7 +43,7 @@ export default function UploadSection({ onImageUpload, imageInfo, resizeSettings
       img.src = e.target?.result as string;
     };
     reader.readAsDataURL(file);
-  }, [onImageUpload, isCompactEmbed, selectedSize, quantity]);
+  }, [onImageUpload, isCompactEmbed, selectedSize, quantity, t]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -62,21 +64,21 @@ export default function UploadSection({ onImageUpload, imageInfo, resizeSettings
   }, [handleFileUpload]);
 
   const trustBadges = [
-    { icon: Droplets, text: "Waterproof & Scratch Resistant" },
-    { icon: Sun, text: "Outdoor Durable 3–5 Years" },
-    { icon: Zap, text: "No Minimum Orders" },
-    { icon: Shield, text: "Free Proof Before Printing" },
-    { icon: MapPin, text: "Printed in California" },
+    { icon: Droplets, text: t("dieCut.waterproof") },
+    { icon: Sun, text: t("dieCut.outdoorDurable") },
+    { icon: Zap, text: t("dieCut.noMinimum") },
+    { icon: Shield, text: t("dieCut.freeProof") },
+    { icon: MapPin, text: t("dieCut.printedCalifornia") },
   ];
 
   return (
     <div>
       <div className="text-center mb-6">
         <h1 className="text-2xl md:text-3xl font-heading font-bold tracking-wide uppercase mb-2" style={{ color: "#111827" }}>
-          Turn Your Logo Into Waterproof Vinyl Stickers
+          {t("dieCut.heroTitle")}
         </h1>
         <p className="text-sm" style={{ color: "#6B7280" }}>
-          Upload your design and get professional-quality stickers printed in 24–48 hours.
+          {t("dieCut.heroSubtitle")}
         </p>
       </div>
 
@@ -112,9 +114,9 @@ export default function UploadSection({ onImageUpload, imageInfo, resizeSettings
               >
                 <Upload className="w-10 h-10 group-hover:text-blue-300 transition-colors duration-300" style={{ color: "#60A5FA" }} />
               </div>
-              <h3 className="text-xl font-bold mb-1 font-heading tracking-wide" style={{ color: "#111827" }}>Upload Your Design</h3>
-              <p className="text-sm mb-1" style={{ color: "#6B7280" }}>Drag & Drop or Click to Upload</p>
-              <p className="text-xs mb-5" style={{ color: "#9CA3AF" }}>We automatically generate the cutline and preview instantly.</p>
+              <h3 className="text-xl font-bold mb-1 font-heading tracking-wide" style={{ color: "#111827" }}>{t("dieCut.uploadTitle")}</h3>
+              <p className="text-sm mb-1" style={{ color: "#6B7280" }}>{t("dieCut.dragDrop")}</p>
+              <p className="text-xs mb-5" style={{ color: "#9CA3AF" }}>{t("dieCut.autoCutline")}</p>
               <button
                 className="px-8 py-3 rounded-xl text-base font-bold flex items-center gap-2 transition-all duration-300 group-hover:scale-105"
                 style={{
@@ -124,9 +126,9 @@ export default function UploadSection({ onImageUpload, imageInfo, resizeSettings
                 }}
               >
                 <Upload className="w-5 h-5" />
-                Upload Your Design
+                {t("dieCut.uploadTitle")}
               </button>
-              <p className="text-xs mt-3" style={{ color: "#9CA3AF" }}>PNG, JPG — works best with transparent backgrounds</p>
+              <p className="text-xs mt-3" style={{ color: "#9CA3AF" }}>{t("dieCut.uploadFormats")}</p>
             </div>
             <input 
               type="file" 
@@ -141,7 +143,7 @@ export default function UploadSection({ onImageUpload, imageInfo, resizeSettings
         <div className="md:col-span-2 flex flex-col justify-center">
           <div className="rounded-2xl p-5 space-y-4" style={{ backgroundColor: "#F8FAFC", border: "1px solid #E2E8F0" }}>
             <p className="text-xs font-bold uppercase tracking-wider" style={{ color: "#60A5FA" }}>
-              Production-Grade Die Cut Stickers. Fast Turnaround.
+              {t("dieCut.productionGrade")}
             </p>
             <div className="space-y-3">
               {trustBadges.map((badge, i) => (
@@ -160,7 +162,7 @@ export default function UploadSection({ onImageUpload, imageInfo, resizeSettings
                     <svg key={i} className="w-3.5 h-3.5" viewBox="0 0 20 20" fill="#FBBF24"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" /></svg>
                   ))}
                 </div>
-                <span className="text-xs font-semibold" style={{ color: "#6B7280" }}>4.9/5 from 2,000+ orders</span>
+                <span className="text-xs font-semibold" style={{ color: "#6B7280" }}>{t("dieCut.ordersRating")}</span>
               </div>
             </div>
           </div>
