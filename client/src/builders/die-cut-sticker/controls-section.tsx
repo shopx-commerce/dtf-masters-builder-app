@@ -19,6 +19,7 @@ import {
   computeShopDisplayTotal,
   clampDimension,
 } from "@/lib/shop-sticker-settings";
+import { calcStickerPrice, snapQuantityToOptions } from "@/lib/pricing";
 import {
   runDieCutCheckout,
   type DieCutShopifyVariant,
@@ -186,6 +187,18 @@ const PricingDisplay = ({
     lamination,
     variants,
   });
+  const tiers = shopStickerSettings?.pricing?.tiers?.length
+    ? shopStickerSettings.pricing.tiers
+    : undefined;
+  const snappedQty = tiers
+    ? snapQuantityToOptions(quantity, shopStickerSettings!.pricing.quantityOptions)
+    : Math.max(1, Math.round(quantity));
+  const perSticker = calcStickerPrice(
+    widthInches,
+    heightInches,
+    snappedQty,
+    tiers,
+  ).perSticker;
   if (total <= 0) return null;
 
   return (
@@ -197,7 +210,7 @@ const PricingDisplay = ({
         {t("dieCut.stickerSummary", { quantity, width: widthInches, height: heightInches })}
       </p>
       <p className="text-xs mt-1.5" style={{ color: "#9CA3AF" }}>
-        {t("dieCut.perSticker", { price: (total / Math.max(1, quantity)).toFixed(2) })}
+        {t("dieCut.perSticker", { price: perSticker.toFixed(2) })}
       </p>
 
       <p className="text-xs font-semibold mt-4" style={{ color: "#22C55E" }}>
@@ -780,9 +793,14 @@ export default function ControlsSection({
     });
   };
 
+  const presetPillClass =
+    "relative h-[52px] flex-1 min-w-[2.75rem] basis-[calc(33.333%-0.45rem)] sm:basis-0 rounded-2xl py-3.5 text-center transition-all font-bold text-sm";
+  const customPillClass =
+    "h-[52px] w-full sm:w-auto sm:flex-[1.75] sm:min-w-[5.5rem] sm:max-w-[9rem] basis-full sm:basis-auto rounded-2xl px-2 py-3.5 text-center transition-all font-bold text-xs sm:text-sm leading-tight";
+
   const sizeButtons = (
     <div>
-      <div className="grid grid-cols-6 gap-2">
+      <div className="flex flex-wrap gap-2">
         {sizePresets.map((p) => {
           const selected = !customSizeMode && presetMatches(p);
           const label = p.label || `${p.width}×${p.height}`;
@@ -791,7 +809,7 @@ export default function ControlsSection({
               key={`${p.width}x${p.height}`}
               type="button"
               onClick={() => applyShopPresetSize(p)}
-              className="relative rounded-2xl py-3.5 text-center transition-all font-bold text-sm"
+              className={presetPillClass}
               style={{
                 background: selected ? "linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%)" : "#E2E8F0",
                 border: selected ? "2px solid #60A5FA" : "1px solid #D1D5DB",
@@ -819,7 +837,7 @@ export default function ControlsSection({
             setCustomWidth(w.toFixed(1));
             setCustomHeight(h.toString());
           }}
-          className="rounded-2xl py-3.5 text-center transition-all font-bold text-sm"
+          className={customPillClass}
           style={{
             background: customSizeMode || isCustomSize ? "linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%)" : "#E2E8F0",
             border: customSizeMode || isCustomSize ? "2px solid #60A5FA" : "1px solid #D1D5DB",
@@ -903,15 +921,20 @@ export default function ControlsSection({
     setQuantity(q);
   };
 
+  const qtyPresetPillClass =
+    "h-[46px] flex-1 min-w-[2.75rem] basis-[calc(33.333%-0.45rem)] sm:basis-0 rounded-2xl py-2.5 text-center transition-all font-bold text-sm";
+  const qtyCustomPillClass =
+    "h-[46px] w-full sm:w-auto sm:flex-[1.75] sm:min-w-[5.5rem] sm:max-w-[9rem] basis-full sm:basis-auto rounded-2xl px-2 py-2.5 text-center transition-all font-bold text-xs sm:text-sm leading-tight";
+
   const quantityButtons = (
     <>
-      <div className="grid grid-cols-6 gap-2">
+      <div className="flex flex-wrap gap-2">
         {qtyGrid.map((q) => (
           <button
             key={q}
             type="button"
             onClick={() => handlePresetQtyClick(q)}
-            className="rounded-2xl py-2.5 text-center transition-all font-bold text-sm"
+            className={qtyPresetPillClass}
             style={{
               background: !customQtyMode && quantity === q ? "linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%)" : "#E2E8F0",
               border: !customQtyMode && quantity === q ? "2px solid #60A5FA" : "1px solid #D1D5DB",
@@ -928,7 +951,7 @@ export default function ControlsSection({
             setCustomQtyMode(true);
             setCustomQtyInput(quantity.toString());
           }}
-          className="rounded-2xl py-2.5 text-center transition-all font-bold text-sm"
+          className={qtyCustomPillClass}
           style={{
             background: customQtyMode || isCustomQty ? "linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%)" : "#E2E8F0",
             border: customQtyMode || isCustomQty ? "2px solid #60A5FA" : "1px solid #D1D5DB",

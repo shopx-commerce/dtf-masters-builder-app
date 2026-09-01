@@ -1064,7 +1064,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const tiers = [...settings.pricing.tiers].sort((a, b) => b.qtyMin - a.qtyMin);
         const tier = tiers.find((t) => quantity >= t.qtyMin) || tiers[tiers.length - 1];
         const area = widthIn * heightIn;
-        const perSticker = Math.max(tier.minPer, tier.base + tier.rate * area);
+        const perStickerRaw = tier.base + tier.rate * area;
+        const perSticker = Math.round(Math.max(tier.minPer, perStickerRaw) * 100) / 100;
         const baseTotal = Math.round(perSticker * quantity * 100) / 100;
         const extraFeeFlat = Math.round((variantPriceDollars - baseTotal) * 100) / 100;
         settings = {

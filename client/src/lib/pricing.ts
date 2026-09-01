@@ -83,13 +83,12 @@ export function calcStickerPrice(
   const tier = pickTier(qty, tierList);
 
   const perStickerRaw = tier.base + tier.rate * area;
-  const perSticker = Math.max(tier.minPer, perStickerRaw);
-
+  const perSticker = roundCents(Math.max(tier.minPer, perStickerRaw));
   const total = roundCents(perSticker * qty);
 
   return {
     area: roundCents(area),
-    perSticker: roundCents(perSticker),
+    perSticker,
     total,
     tierUsed: tier.qtyMin,
   };
