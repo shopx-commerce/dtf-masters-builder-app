@@ -222,3 +222,51 @@ describe('a selected-only pack is not the last word on whether the film is full'
     expect(wholeSheet.filmHeight).toBeLessThanOrEqual(ABH - 2 * MARGIN);
   });
 });
+
+/**
+ * The third report: asking for far more copies than the film can hold produced a knot of red
+ * overlap outlines that no amount of Auto-Arrange would clear.
+ *
+ * The packer is not at fault, and these pin why. A design the packer cannot place is reported
+ * in a column of its own *below* the sheet, so every leftover normalises onto the same spot on
+ * the bottom edge. Applying those positions is what builds the heap — and once built it is
+ * self-sealing, because the heaped copies are now on the sheet and every later arrange counts
+ * them as settled and leaves them alone. The commit path therefore takes such copies back
+ * instead of placing them, which is only correct while the two facts below hold.
+ */
+describe('more copies than the film can hold', () => {
+  const SZ = 6;
+  /** Comfortably more than a 24" sheet can take, comfortably less than a 240" one. */
+  const COUNT = 30;
+  const copies = Array.from({ length: COUNT }, (_, i) => ({
+    id: `c${i}`,
+    w: SZ,
+    h: SZ,
+    fill: 1,
+    duplicateKey: 'same-artwork',
+  }));
+
+  it('reports the leftovers stacked below the sheet, all on one spot once folded back', () => {
+    const short = arrange({ items: copies, artboardHeight: 24 });
+    const placed = short.result as Placed[];
+    const overflowing = placed.filter(p => p.overflows);
+    expect(overflowing.length).toBeGreaterThan(0);
+
+    // Every leftover is reported at or past the bottom edge, on a sheet that is already
+    // packed to it. That is the packer saying "nowhere", not "here" — a position which,
+    // taken literally, lands on artwork that did fit.
+    for (const p of overflowing) {
+      expect(p.ny * 24 + SZ / 2).toBeGreaterThanOrEqual(24);
+    }
+
+    // And clamping them back onto the sheet, as committing them would, collapses them onto a
+    // single position: the heap the customer sees as overlapping designs.
+    const clamped = new Set(overflowing.map(p => Math.min(p.ny * 24, 24 - SZ / 2).toFixed(4)));
+    expect(clamped.size).toBe(1);
+  });
+
+  it('fits every copy once the sheet is long enough, so the shortage is real and not a packing failure', () => {
+    const tall = arrange({ items: copies, artboardHeight: 240 });
+    expect((tall.result as Placed[]).filter(p => p.overflows).length).toBe(0);
+  });
+});

@@ -148,6 +148,11 @@ function useImageEditorModel(props: ImageEditorProps) {
     // Before the copies land: the seeded grid below and the pack that replaces it are two
     // separate paints, and the veil is what stops the customer seeing the first one.
     bagBeginArrangeRef.current();
+    // Held outside the branch for the arrange below. Copies that still have nowhere to go
+    // once the sheet has grown as far as it may are taken back rather than dropped on top of
+    // the artwork that did fit — asking for more copies than the longest gangsheet can hold
+    // is a real answer ("N did not fit"), not a heap of overlapping designs.
+    let copyIds: string[] = [];
     if (delta > 0) {
       const base = row.designs[0];
       const baseName = base.name.replace(/ copy( \d+)?$/, "");
@@ -160,7 +165,7 @@ function useImageEditorModel(props: ImageEditorProps) {
       // of this item to the sheet", not "expand the group", so the new
       // copies should be free to be placed independently by arrange.
       const { groupId: _dropGid, ...baseNoGroup } = base;
-      const copyIds = Array.from({ length: delta }, () => crypto.randomUUID());
+      copyIds = Array.from({ length: delta }, () => crypto.randomUUID());
       bagSetDesigns(prev => [...prev, ...seedCopyGrid({
         base: baseNoGroup,
         baseName,
@@ -198,6 +203,7 @@ function useImageEditorModel(props: ImageEditorProps) {
           skipSnapshot: true,
           preserveSelection: true,
           arrangeAll: true,
+          trimUnplaceableIds: copyIds.length > 0 ? new Set(copyIds) : undefined,
         });
       });
     });

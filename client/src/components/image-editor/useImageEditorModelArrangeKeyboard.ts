@@ -311,6 +311,24 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     /** Ids of expendable Fill Sheet copies — the only designs `trimOverflow` may delete. */
     fillIds?: Set<string>;
     /**
+     * Copies created moments ago that may be taken back if the film runs out.
+     *
+     * Related to `trimOverflow`/`fillIds` but fires at the opposite end of the run. That pair
+     * trims *before* the height ladder, because Fill Sheet must never buy film. This one is
+     * the last resort: the ladder has already climbed as far as it is allowed to, and the
+     * only remaining choice is between dropping the copy and dropping it *on top of* artwork
+     * that is already placed.
+     *
+     * Without it, asking for more copies than the longest sheet can hold heaps every leftover
+     * onto the bottom edge — and because the packer reports them all in a column below the
+     * sheet, they collapse onto the same spot. That reads as a nesting bug (a knot of red
+     * overlap outlines) rather than as "the film is full". Worse, the heap is self-sealing:
+     * those copies are now *on* the sheet, so every later arrange counts them as settled and
+     * leaves them exactly where they landed, which is why pressing Auto-Arrange again never
+     * clears it.
+     */
+    trimUnplaceableIds?: Set<string>;
+    /**
      * How to undo a run that cannot honour `noGrow`: delete exactly these designs from the
      * sheet as it stands now.
      *
@@ -378,6 +396,12 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     // untrimmable overflow copies onto the sheet.
     fillIds: a?.fillIds || b?.fillIds
       ? new Set([...(a?.fillIds ?? []), ...(b?.fillIds ?? [])])
+      : undefined,
+    // Unioned for the same reason as `fillIds`: the coalesced run stands in for both
+    // callers, so every copy either of them just created stays droppable rather than
+    // being heaped on the bottom edge.
+    trimUnplaceableIds: a?.trimUnplaceableIds || b?.trimUnplaceableIds
+      ? new Set([...(a?.trimUnplaceableIds ?? []), ...(b?.trimUnplaceableIds ?? [])])
       : undefined,
     // Unioned too: the coalesced run stands in for both, so undoing it has to take back
     // everything both of them added rather than stranding one caller's copies on the sheet.
@@ -1010,6 +1034,9 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
           // must stay deletable rather than force yet another rung.
           trimOverflow: opts?.trimOverflow,
           fillIds: opts?.fillIds,
+          // Rides the ladder for the same reason: the copies stay droppable at whichever
+          // rung ends the climb, which is the only rung that knows the film really ran out.
+          trimUnplaceableIds: opts?.trimUnplaceableIds,
           noShrink: opts?.noShrink,
           // The climb is still this run: the caller hears once, from whichever rung ends it.
           onSettled: opts?.onSettled,
@@ -1020,11 +1047,9 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         }), 0);
         return;
       }
-      if (hasOverflow) {
-        toast({ title: t("toast.noSpace"), description: t("toast.noSpaceDesc"), variant: "destructive" });
-      } else if (anyRotated) {
-        toast({ title: t("toast.autoArranged"), description: t("toast.autoArrangedDesc") });
-      }
+      // What to tell the customer is settled after the placement loop below, not here:
+      // whether an overflow means "the sheet is full" depends on whether the leftovers are
+      // copies this run is allowed to take back.
       const abW = artboardWidthRef.current;
       const abH = artboardHeightRef.current;
 
@@ -1062,7 +1087,21 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         return !!g && g.members.every(m => onSheetNow(m.id));
       };
       const deltas = new Map<string, DesignDelta>();
+      /** Copies taken back rather than heaped on the bottom edge — see `trimUnplaceableIds`. */
+      const droppedIds = new Set<string>();
       for (const placed of bestResult) {
+        if (
+          placed.overflows
+          && !placementIsSettled(placed)
+          && opts?.trimUnplaceableIds?.has(placed.id)
+        ) {
+          // The film is full and this copy was created moments ago, so there is a third
+          // option besides the two below: take it back. The customer keeps the copies that
+          // did fit, on a sheet that still reads correctly, and the toast says how many did
+          // not — honest about the shortage without vandalising the layout to prove it.
+          droppedIds.add(placed.id);
+          continue;
+        }
         if (placed.overflows && placementIsSettled(placed)) {
           // Nowhere on the film for this one, and by this point the sheet is either at the
           // longest length sold or has already climbed as far as one arrange may take it —
@@ -1128,8 +1167,27 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       // single member back onto the film and leave its siblings where the packer put them,
       // which is the "margins inside my groups keep changing" report: the pack preserved the
       // group's geometry and the clamp immediately undid it.
+      const stillOverflows = droppedIds.size > 0
+        ? bestResult.some(p => p.overflows && !droppedIds.has(p.id))
+        : hasOverflow;
+      // Said after the placement loop rather than before it, because only the loop knows
+      // whether the overflow cost the customer anything. "N copies did not fit" is a
+      // different message from "the sheet is full", and the first one is the truth here.
+      if (droppedIds.size > 0) {
+        toast({
+          title: t("toast.copiesTrimmed"),
+          description: droppedIds.size === 1
+            ? t("toast.copyTrimmedDesc")
+            : t("toast.copiesTrimmedDesc", { count: droppedIds.size }),
+          variant: "destructive",
+        });
+      } else if (stillOverflows) {
+        toast({ title: t("toast.noSpace"), description: t("toast.noSpaceDesc"), variant: "destructive" });
+      } else if (anyRotated) {
+        toast({ title: t("toast.autoArranged"), description: t("toast.autoArrangedDesc") });
+      }
       setDesigns(prev => withDesignsClampedToArtboard(
-        prev.map(d => {
+        (droppedIds.size > 0 ? prev.filter(d => !droppedIds.has(d.id)) : prev).map(d => {
           const delta = deltas.get(d.id);
           if (!delta) return d;
           const finalRotation = delta.rotation === null
@@ -1166,12 +1224,21 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       if (!opts?.preserveSelection) {
         setSelectedDesignId(null);
         setSelectedDesignIds(new Set());
+      } else if (droppedIds.size > 0) {
+        // Those copies are gone. Leaving their ids selected points the layer row and the
+        // transform tools at designs that no longer exist.
+        setSelectedDesignIds(prev => new Set([...prev].filter(id => !droppedIds.has(id))));
+        if (selectedDesignIdRef.current && droppedIds.has(selectedDesignIdRef.current)) {
+          setSelectedDesignId(null);
+        }
       }
       // Packing tighter — a smaller margin, fewer copies, a deleted design — can free up
       // whole sizes worth of film. Deferred so it measures the layout we just committed
       // rather than the one it replaced. Never snapshots: whatever asked for this arrange
       // already did, so one undo takes the arrange and the resize back together.
-      if (!hasOverflow && !opts?.noShrink) setTimeout(() => shrinkSheetToFitRef.current(), 0);
+      // Taking the leftovers back can leave a sheet that fits after all, and a sheet that
+      // fits is allowed to shrink to the rung the artwork actually needs.
+      if (!stillOverflows && !opts?.noShrink) setTimeout(() => shrinkSheetToFitRef.current(), 0);
       finishArrange({ trimmed: trimmedCount, reverted: false, packed: true, frozenMs });
     };
 

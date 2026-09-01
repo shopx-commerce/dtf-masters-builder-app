@@ -246,6 +246,13 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
       /** Ids of expendable Fill Sheet copies — the only designs `trimOverflow` may delete. */
       fillIds?: Set<string>;
       /**
+       * Copies created moments ago that may be taken back if the film runs out. Unlike
+       * `trimOverflow`, which withholds growth up front, this fires only once the height
+       * ladder has climbed as far as it may — the last resort before the packer's leftovers
+       * would be heaped on top of the artwork that did fit.
+       */
+      trimUnplaceableIds?: Set<string>;
+      /**
        * How to undo a run that cannot honour `noGrow`: delete exactly these designs from the
        * sheet as it stands, rather than restoring a layout captured before it started, which
        * would also revert whatever the customer did while it packed.
