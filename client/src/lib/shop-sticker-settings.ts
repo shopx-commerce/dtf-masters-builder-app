@@ -67,6 +67,27 @@ function roundCents(x: number): number {
   return Math.round(x * 100) / 100;
 }
 
+/** Variant-price anchor fee — only for the default size/qty the embed synced. */
+function shouldApplyExtraFeeFlat(
+  settings: ShopStickerSettings,
+  args: { widthIn: number; heightIn: number; qty: number },
+  snappedQty: number,
+): boolean {
+  const extra = Number(settings.pricing?.extraFeeFlat) || 0;
+  if (extra === 0) return false;
+  const d = settings.defaults;
+  if (!d) return false;
+  const defaultQty = snapQuantityToOptions(
+    d.quantity,
+    settings.pricing.quantityOptions,
+  );
+  return (
+    Math.abs(args.widthIn - d.widthIn) < 0.04 &&
+    Math.abs(args.heightIn - d.heightIn) < 0.04 &&
+    snappedQty === defaultQty
+  );
+}
+
 /** Display-only total (server recomputes on draft order). */
 export function computeShopDisplayTotal(
   settings: ShopStickerSettings | null,
@@ -99,7 +120,9 @@ export function computeShopDisplayTotal(
 
   const finishAdj = Number(settings.finish?.[finishKey]?.adjustment) || 0;
   const lamAdj = Number(settings.lamination?.[lamKey]?.adjustment) || 0;
-  const extra = Number(settings.pricing?.extraFeeFlat) || 0;
+  const extra = shouldApplyExtraFeeFlat(settings, args, qty)
+    ? Number(settings.pricing?.extraFeeFlat) || 0
+    : 0;
   let total = roundCents(base.total + finishAdj + lamAdj + extra);
   const minOrder = Number(settings.pricing?.minOrderPrice) || 0;
   if (minOrder > 0 && total < minOrder) total = roundCents(minOrder);
