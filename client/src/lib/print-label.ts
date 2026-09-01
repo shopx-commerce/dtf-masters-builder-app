@@ -73,8 +73,12 @@ const LABEL_INSET_INCHES = 0.05;
  * The background box is opaque, so ink underneath it is ink the customer loses. This is the
  * width of the moat checked around the box: enough that the label is visibly in open space
  * rather than crowding a stroke it happens not to touch.
+ *
+ * A quarter inch rather than the twentieth it used to be, which was one mask cell — close
+ * enough to a stroke that a label technically clear of ink still read as printed on the
+ * artwork, and too fine to survive the rounding in either direction.
  */
-const LABEL_CLEARANCE_INCHES = 0.05;
+const LABEL_CLEARANCE_INCHES = 0.25;
 
 /** Em size the advance ratios are probed at. Large enough that hinting does not skew the ratio. */
 const MEASURE_PROBE_PX = 100;
@@ -384,8 +388,20 @@ export function layoutPrintLabel(
   const boxW = Math.min(maxBoxWidth, widest * fontInches + 2 * pad);
   const boxH = labelBoxHeight(lines.length, fontInches);
 
-  // Inside the artwork's own corner, if the corner is empty. Checked with a moat around the box
-  // so the label sits in open space rather than up against a stroke.
+  // Inside the artwork's own corner, if the corner is *open*.
+  //
+  // "Open" is deliberately stronger than "the box misses the ink". A moat around the box alone
+  // is satisfied by any hole big enough to hold it — the counter of an O, the gap between two
+  // elements, the space under a descender — and a label dropped into a hole is surrounded by
+  // artwork on every side. It is clear of the ink and it still reads, to the person looking at
+  // the sheet, as the file name printed across the design. That is the complaint this rule
+  // answers, and it is worst on white artwork, where the label's opaque white box blends into
+  // the design and only the black text shows.
+  //
+  // So the test runs from the moat's top-left all the way out to the artwork's right and bottom
+  // edges: the label may only sit in a corner it can see out of. A genuinely empty corner — the
+  // margin under a line of text, the flat side of an L — passes and still costs no film, while
+  // an interior pocket now fails and takes the band below, which is always safe.
   if (input.isClearOfInk && boxW + 2 * LABEL_INSET_INCHES <= artW && boxH + 2 * LABEL_INSET_INCHES <= artH) {
     const rect: LabelRect = {
       x: artW / 2 - LABEL_INSET_INCHES - boxW,
@@ -393,13 +409,13 @@ export function layoutPrintLabel(
       width: boxW,
       height: boxH,
     };
-    const moat: LabelRect = {
+    const corner: LabelRect = {
       x: rect.x - LABEL_CLEARANCE_INCHES,
       y: rect.y - LABEL_CLEARANCE_INCHES,
-      width: rect.width + 2 * LABEL_CLEARANCE_INCHES,
-      height: rect.height + 2 * LABEL_CLEARANCE_INCHES,
+      width: artW / 2 - (rect.x - LABEL_CLEARANCE_INCHES),
+      height: artH / 2 - (rect.y - LABEL_CLEARANCE_INCHES),
     };
-    if (input.isClearOfInk(moat)) {
+    if (input.isClearOfInk(corner)) {
       return { placement: 'inside', bandInches: 0, rect, fontInches, lines };
     }
   }
@@ -415,6 +431,36 @@ export function layoutPrintLabel(
     },
     fontInches,
     lines,
+  };
+}
+
+/**
+ * Converts the centre of a packed footprint into the centre of the artwork inside it.
+ *
+ * A design that carries a label below its artwork is packed as one taller block, so what the
+ * packer hands back is the centre of artwork-plus-band. What the editor stores is the centre
+ * of the artwork alone, with the band understood to hang below it. The two differ by half the
+ * band, along whatever direction "below" points once the design is turned.
+ *
+ * In the design's own frame the artwork centre sits half a band *above* the footprint centre,
+ * so the offset is `(0, -band/2)`; rotating it by the same y-down matrix the canvas and the
+ * bounds use gives the screen-space correction. At no rotation that is straight up, which is
+ * why an unrotated design needs no horizontal term and why a sign error in the horizontal one
+ * stays invisible until the packer starts turning designs.
+ */
+export function artworkCentreFromFootprint(
+  footprintCx: number,
+  footprintCy: number,
+  bandInches: number,
+  rotationDegrees: number,
+): { x: number; y: number } {
+  if (!(bandInches > 0)) return { x: footprintCx, y: footprintCy };
+  const rad = (rotationDegrees * Math.PI) / 180;
+  const half = bandInches / 2;
+  // Rotating (0, -half): x' = -y*sin, y' = y*cos.
+  return {
+    x: footprintCx + half * Math.sin(rad),
+    y: footprintCy - half * Math.cos(rad),
   };
 }
 

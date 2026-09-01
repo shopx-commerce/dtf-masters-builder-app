@@ -23,6 +23,7 @@ import {
 } from "./constants";
 import {
   clampDesignToArtboard,
+  withDesignsClampedToArtboard,
   getDesignSelectionUnits,
   getStampExtra,
   rotateDesignSelection,
@@ -93,11 +94,21 @@ const DRAFT_QUOTA_RETRY_COOLDOWN_MS = 60_000;
 /**
  * How the sheet is packed after the copy count changes.
  *
- * Identical to what the Auto-Arrange button asks for, which is the point: adding a copy used to
- * pack with the stable-layout pass, so it kept designs where they already were and left film on
- * the sheet the button could then recover. Two ways to nest the same artwork meant the customer
- * had to know to press the button afterwards to get the tighter result — so copies now get the
- * same pack the button gives, and there is only one answer.
+ * Deliberately *not* what the Auto-Arrange button asks for. These options carried `fullRepack`
+ * so that a copy and a press of the button gave the same answer, and the cost was that
+ * duplicating one design rebuilt the entire sheet: a customer with four designs sitting
+ * together and film to spare pressed Duplicate and watched all of it fly apart, the copies
+ * landing nowhere near the original. Pressing a button labelled Duplicate is not a request to
+ * relayout the sheet.
+ *
+ * Without the flag the packer offers its stable layout, which leaves settled designs alone and
+ * seats only the new copies — into the topmost free space, so they come to rest beside the work
+ * they were copied from. Efficiency is not given up for that: a from-scratch layout that bills
+ * at a cheaper rung still wins outright, and a tie is taken too when it removes real slack
+ * without rearranging most of the sheet. Only a repack that costs the same and buys nothing is
+ * now declined. If the copies genuinely do not fit, the overflow retry repacks the whole sheet
+ * from scratch before any sheet growth is considered, so the tighter answer is still reached —
+ * it is just no longer imposed on a sheet that did not need it.
  *
  * `arrangeAll` because every copy path leaves the new copies selected for layer feedback, and
  * selected-only mode would treat the rest of the sheet as fixed obstacles and stack the copies
@@ -108,7 +119,6 @@ const COPY_ARRANGE_OPTS = {
   skipSnapshot: true,
   preserveSelection: true,
   arrangeAll: true,
-  fullRepack: true,
 } as const;
 
 /**
@@ -2139,21 +2149,24 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     const nextHeight = availableGangsheetHeights.find(h => h >= requiredHeight) ?? artboardHeight;
     const expanded = nextHeight > artboardHeight;
 
-    const positionedDesigns = resizedDesigns.map(design => {
-      const absCy = design.transform.ny * artboardHeight;
-      const resizedTransform = expanded
-        ? { ...design.transform, ny: absCy / nextHeight }
-        : design.transform;
-      const clamped = clampDesignToArtboard(
-        { ...design, transform: resizedTransform },
-        artboardWidth,
-        nextHeight,
-      );
-      return {
-        ...design,
-        transform: { ...resizedTransform, nx: clamped.nx, ny: clamped.ny },
-      };
-    });
+    // Clamped as a sheet rather than per design: a resize applied to a whole group grows every
+    // member, and correcting only the ones that ended up over an edge would change the spacing
+    // inside the group that the customer never asked to change.
+    const positionedDesigns = withDesignsClampedToArtboard(
+      resizedDesigns.map(design => (
+        expanded
+          ? {
+              ...design,
+              transform: {
+                ...design.transform,
+                ny: (design.transform.ny * artboardHeight) / nextHeight,
+              },
+            }
+          : design
+      )),
+      artboardWidth,
+      nextHeight,
+    );
 
     setDesigns(() => positionedDesigns);
     if (expanded) {
@@ -2512,11 +2525,14 @@ export function useImageEditorModelStateDesign(props: ImageEditorProps) {
     setDesigns(prev => {
       const labelled = prev.map(d => (idSet.has(d.id) ? { ...d, printFileName: turningOn } : d));
       if (!turningOn) return labelled;
-      return labelled.map(d => {
-        if (!idSet.has(d.id)) return d;
-        const { nx, ny } = clampDesignToArtboard(d, artboardWidthRef.current, artboardHeightRef.current);
-        return { ...d, transform: { ...d.transform, nx, ny } };
-      });
+      // Turning a label on grows the design's footprint downwards, which can push it off the
+      // bottom edge. Clamped across the sheet so that a labelled group member takes its
+      // siblings with it instead of sliding out of the arrangement on its own.
+      return withDesignsClampedToArtboard(
+        labelled,
+        artboardWidthRef.current,
+        artboardHeightRef.current,
+      );
     });
     if (needsRoom && designsRef.current.length >= 2) {
       beginArrangeRef.current();

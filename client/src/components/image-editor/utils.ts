@@ -2,6 +2,7 @@ import { hasCleanAlpha } from "@/lib/image-crop";
 import { IOS_SAFE_CANVAS_DIM, SAFARI_MAX_CANVAS_AREA } from "@/lib/image-budget";
 import { isMobileDevice } from "@/lib/upload-queue";
 import { inkInset, type NestMask } from "@/lib/nest-core";
+import { planUnitClamp } from "@/lib/clamp-units";
 import { DEFAULT_SHEET_MARGIN, fitHeightForBand, type InkBand } from "@/lib/sheet-fit";
 import { getDesignNestMask, type DesignMask } from "@/lib/nest-mask";
 import {
@@ -145,6 +146,8 @@ export {
   readDeclaredDpi,
   injectPngDpi,
   clampDesignToArtboard,
+  clampDesignsToArtboard,
+  withDesignsClampedToArtboard,
   getRotatedBounds,
   getInkBounds,
   getContentInkBandY,
@@ -1328,6 +1331,69 @@ function clampDesignToArtboard(
     ny = Math.max(minNy, Math.min(maxNy, ny));
   }
   return { nx, ny };
+}
+
+/**
+ * Clamp a whole sheet at once, moving each user-defined group as one rigid piece.
+ *
+ * This is what every sheet-sized operation should use instead of calling
+ * `clampDesignToArtboard` in a loop. Clamping designs one at a time is right for a single
+ * design and quietly wrong for a group: when only one member is over the edge, only that
+ * member is pulled back, and the spacing the customer arranged inside the group is not the
+ * spacing they get. The damage accumulates, because an arrange, a height-ladder jump and a
+ * resize each run the clamp over every design on the film.
+ *
+ * The unit logic lives in `planUnitClamp` and is pure geometry; the only thing added here is
+ * the measurement, which has to be *ink* bounds. Using the image box would haul every nested
+ * design whose empty corner overhangs a neighbour back onto the sheet and undo the layout.
+ *
+ * Returns only the designs that move, so callers can skip the rebuild when nothing did.
+ */
+function clampDesignsToArtboard<T extends DesignWithArtwork & { id: string; groupId?: string }>(
+  designs: T[],
+  abW: number,
+  abH: number,
+): Map<string, { nx: number; ny: number }> {
+  return planUnitClamp(
+    designs.map(d => {
+      const ink = getInkBounds(d);
+      const cx = d.transform.nx * abW;
+      const cy = d.transform.ny * abH;
+      return {
+        id: d.id,
+        groupId: d.groupId,
+        nx: d.transform.nx,
+        ny: d.transform.ny,
+        box: {
+          minX: cx + ink.minX,
+          maxX: cx + ink.maxX,
+          minY: cy + ink.minY,
+          maxY: cy + ink.maxY,
+        },
+      };
+    }),
+    abW,
+    abH,
+  );
+}
+
+/**
+ * Apply `clampDesignsToArtboard` to a design list, returning the list unchanged when the
+ * clamp had nothing to do. Saves every caller the same map-and-merge.
+ */
+function withDesignsClampedToArtboard<T extends DesignWithArtwork & { id: string; groupId?: string }>(
+  designs: T[],
+  abW: number,
+  abH: number,
+): T[] {
+  const moves = clampDesignsToArtboard(designs, abW, abH);
+  if (moves.size === 0) return designs;
+  return designs.map(d => {
+    const move = moves.get(d.id);
+    return move
+      ? { ...d, transform: { ...d.transform, nx: move.nx, ny: move.ny } }
+      : d;
+  });
 }
 
 export type DesignSelectionUnit = {

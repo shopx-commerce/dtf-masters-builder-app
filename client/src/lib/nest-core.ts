@@ -599,14 +599,45 @@ interface Orientation {
   h: number;
 }
 
+/**
+ * Ink share of its own bounding box above which a silhouette is treated as a plain rectangle.
+ *
+ * A shape that fills its box has nothing to offer a neighbour: every quarter turn presents the
+ * same flat edges, so the extra orientations are pure cost. Below this it has a concavity
+ * something else can sit in, and which concavity faces which way is the whole question.
+ */
+const SOLID_INK_RATIO = 0.95;
+
 function orientationsFor(item: NestItem, cell: number, allowRotation: boolean): Orientation[] {
   const cols = cellsFor(item.w, cell);
   const rows = cellsFor(item.h, cell);
   const base = item.mask ? resampleMask(item.mask, cols, rows) : solidMask(cols, rows);
-  const out: Orientation[] = [{ sil: toSilhouette(base), rotation: 0, w: item.w, h: item.h }];
-  if (allowRotation && !item.noRotate && Math.abs(item.w - item.h) > 0.1) {
-    const turned = rotateMask90(base);
-    out.push({ sil: toSilhouette(turned), rotation: 90, w: item.h, h: item.w });
+  const upright = toSilhouette(base);
+  const out: Orientation[] = [{ sil: upright, rotation: 0, w: item.w, h: item.h }];
+  if (!allowRotation || item.noRotate) return out;
+
+  /**
+   * Whether turning this design changes anything a packer can use.
+   *
+   * For a rectangle the answer is "only if it is not square", which is what the footprint
+   * test below asks, and for years that test was the whole story. It is the wrong question
+   * for a silhouette. A triangle in a square footprint fails it — same width as height, no
+   * rotation offered — and yet a triangle is the shape that most wants turning: two of them
+   * tile a rectangle when one is upside down, and never at any other pair of angles. The
+   * footprint is unchanged by the turn; the shape is not, and the shape is what nests.
+   */
+  const shaped = !upright.empty
+    && upright.inkCells < SOLID_INK_RATIO * upright.mask.cols * upright.mask.rows;
+
+  if (shaped || Math.abs(item.w - item.h) > 0.1) {
+    out.push({ sil: toSilhouette(rotateMask90(base)), rotation: 90, w: item.h, h: item.w });
+  }
+  // Half and three-quarter turns are the ones that interlock a shape with a copy of itself.
+  // They are offered only to shaped silhouettes: on a solid footprint they are congruent to
+  // the two above and would double the search for an identical answer.
+  if (shaped) {
+    out.push({ sil: toSilhouette(rotateMaskTimes(base, 2)), rotation: 180, w: item.w, h: item.h });
+    out.push({ sil: toSilhouette(rotateMaskTimes(base, 3)), rotation: 270, w: item.h, h: item.w });
   }
   return out;
 }

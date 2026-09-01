@@ -1,7 +1,7 @@
 - [Fluorescent editor port](fluorescent-editor-port.md) — keep source-repository improvements selective and route wand state through the existing editor preview/control boundary.
 - [Raster upload DPI handling](raster-upload-dpi.md) — use a stable 300 DPI default and never silently lower valid DPI based on pixel dimensions.
 - [Group rotation clamping](group-rotation-clamping.md) — rotate selected designs around one group center and clamp with one shared translation.
-- [Copy-count arrangement](copy-count-arrangement.md) — layer copy-count changes must repack the whole sheet, not use selected-only obstacle mode.
+- [Copy-count arrangement](copy-count-arrangement.md) — copy paths take whole-sheet scope but must not force a full repack; an overflow is only real once both are widened.
 - [Legacy arrangement boundary](legacy-arrangement-boundary.md) — preserve the legacy worker packing/ranking behavior while keeping group super-item mapping in the editor layer.
 - [Low-zoom selection controls](low-zoom-selection-controls.md) — shrink corner handles and rotation hit zones only below 100% zoom.
 - [Halftone resize pipeline](halftone-resize-pipeline.md) — rebuild halftone screens from original pixels at the design’s final physical size.
@@ -34,3 +34,7 @@
 - [Fill Sheet capacity search](fill-sheet-capacity-search.md) — measure capacity by repacking to saturation, never estimate once; a fill neither grows nor shrinks the sheet.
 - [Large PNG pixel edits](large-png-pixel-edits.md) — stream rows through native compression codecs instead of decoding whole images; caps belong only on the fallback decoder.
 - [Editor async job guards](editor-async-job-guards.md) — claim in-flight guards synchronously, release by token ownership, re-check source identity after every await.
+- [Sheet-wide clamping units](sheet-wide-clamping-units.md) — clamping a whole sheet design-by-design silently rewrites group spacing; clamp per unit, after placements.
+- [Label open-corner rule](label-open-corner-rule.md) — a clear moat is not enough; the file-name stamp may only sit in a corner it can see out of.
+- [Shaped nester orientations](nester-shaped-orientations.md) — bounds-off-sheet already works; triangles failed because a square footprint was denied every turn.
+- [Footprint to artwork centre](footprint-to-artwork-centre.md) — the label-band offset's horizontal sign is invisible until the packer rotates something.

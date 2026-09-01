@@ -2,6 +2,7 @@ import { useRef, useCallback, useEffect, useMemo, useState } from "react";
 import { formatDimensions } from "@/lib/format-length";
 import {
   clampDesignToArtboard,
+  withDesignsClampedToArtboard,
   getArrangeWorker,
   discardArrangeWorker,
   getDesignNestSilhouette,
@@ -28,6 +29,7 @@ import { DEFAULT_SHEET_MARGIN, planBandReseat, planLadderJump, planSheetShrink }
 import { isUploadBatchActive } from "@/lib/upload-queue";
 import { keepPositionsNest, type NestMask } from "@/lib/nest-core";
 import { getDesignNestMask } from "@/lib/nest-mask";
+import { artworkCentreFromFootprint } from "@/lib/print-label";
 import type { ImageInfo, DesignItem } from "@/lib/types";
 import type { ImageEditorBagAfterDesign } from "./image-editor-hook-bag.types";
 import { useSelectionActions } from "@/state/selection-store";
@@ -886,6 +888,22 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
       // artwork needs. One honest repack answers the question, and only an overflow that
       // survives it is a real shortage of film.
       //
+      // The same reasoning applies to *scope*, and used not to be applied to it. A
+      // selected-only arrange packs the selection into the gaps between everything else,
+      // held as fixed obstacles, so its overflows are no more trustworthy than a stable
+      // pass's: the film may well be there, just not in the shape the untouched designs
+      // happen to have left. This is the ordinary state of the sheet right after copies are
+      // added, because every copy path leaves the new copies selected — so the next press of
+      // Auto-Arrange packs only those, around the rest.
+      //
+      // Overflowing designs that are already on the sheet keep their old positions rather
+      // than being dropped in a heap (see the placement loop below), which is the right call
+      // when the film is genuinely full and the wrong one here: a copy that landed on its
+      // neighbour stays on its neighbour, the red overlap outlines never clear, and pressing
+      // the button again reruns the identical selected-only pack and reaches the identical
+      // conclusion. Widening the retry to the whole sheet is what lets the second opinion
+      // actually differ from the first.
+      //
       // Costs one extra pack, once. The retry carries `fullRepack`, and the ladder forwards
       // that flag to every rung above it, so this gate cannot open a second time however far
       // the sheet ends up climbing.
@@ -897,6 +915,7 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
           ...opts,
           skipSnapshot: true,
           fullRepack: true,
+          arrangeAll: true,
           repacked: true,
           continuation: true,
         }), 0);
@@ -1103,27 +1122,44 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
         }
       }
 
-      setDesigns(prev => prev.map(d => {
-        const delta = deltas.get(d.id);
-        if (!delta) return d;
-        const finalRotation = delta.rotation === null
-          ? d.transform.rotation
-          : delta.rotation % 360;
-        const stampExtra = getStampExtra(d);
-        let adjustedNx = delta.nx;
-        let adjustedNy = delta.ny;
-        if (stampExtra > 0 && delta.rotation !== null) {
-          // Stamp-extra offset only makes sense when the packer chose the
-          // rotation. For group members (rotation preserved), skip it —
-          // the design's current position already accounts for its stamp.
-          const rad = (finalRotation * Math.PI) / 180;
-          adjustedNx -= (stampExtra / 2) * Math.sin(rad) / abW;
-          adjustedNy -= (stampExtra / 2) * Math.cos(rad) / abH;
-        }
-        const newTransform = { ...d.transform, nx: adjustedNx, ny: adjustedNy, rotation: finalRotation };
-        const { nx, ny } = clampDesignToArtboard({ ...d, transform: newTransform }, abW, abH);
-        return { ...d, transform: { ...newTransform, nx, ny } };
-      }));
+      // Two passes on purpose. The packer's placements go on first, and only then is the
+      // finished sheet clamped as a whole — a group is one unit to the clamp exactly as it was
+      // one super-item to the packer. Clamping inside the map, design by design, could move a
+      // single member back onto the film and leave its siblings where the packer put them,
+      // which is the "margins inside my groups keep changing" report: the pack preserved the
+      // group's geometry and the clamp immediately undid it.
+      setDesigns(prev => withDesignsClampedToArtboard(
+        prev.map(d => {
+          const delta = deltas.get(d.id);
+          if (!delta) return d;
+          const finalRotation = delta.rotation === null
+            ? d.transform.rotation
+            : delta.rotation % 360;
+          const stampExtra = getStampExtra(d);
+          let adjustedNx = delta.nx;
+          let adjustedNy = delta.ny;
+          if (stampExtra > 0 && delta.rotation !== null) {
+            // The packer sized this design as artwork plus label band and so reports the
+            // centre of the pair; the transform below is the artwork's own centre. Only
+            // meaningful when the packer chose the rotation — for group members the rotation
+            // is preserved and the design's current position already accounts for its stamp.
+            const centre = artworkCentreFromFootprint(
+              delta.nx * abW,
+              delta.ny * abH,
+              stampExtra,
+              finalRotation,
+            );
+            adjustedNx = centre.x / abW;
+            adjustedNy = centre.y / abH;
+          }
+          return {
+            ...d,
+            transform: { ...d.transform, nx: adjustedNx, ny: adjustedNy, rotation: finalRotation },
+          };
+        }),
+        abW,
+        abH,
+      ));
       // Let the preview slide the designs into place. An arrange where every design was
       // anchored produced no deltas and moved nothing, so there is nothing to animate.
       if (deltas.size > 0) setArrangeEpoch(e => e + 1);
@@ -1571,13 +1607,22 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
     const oldW = artboardWidth;
     const oldH = artboardHeight;
 
-    setDesigns(prev => prev.map(d => {
-      const absCx = d.transform.nx * oldW;
-      const absCy = d.transform.ny * oldH;
-      const newTransform = { ...d.transform, nx: absCx / newWidth, ny: absCy / newHeight };
-      const { nx, ny } = clampDesignToArtboard({ ...d, transform: newTransform }, newWidth, newHeight);
-      return { ...d, transform: { ...newTransform, nx, ny } };
-    }));
+    // Absolute positions are carried across unchanged, then the whole sheet is clamped in one
+    // pass. Clamping here design by design is what used to pull groups apart on a height
+    // change: growing the sheet is a normal part of an arrange, so a customer who kept adding
+    // artwork got a group re-clamped a member at a time on every rung of the ladder.
+    setDesigns(prev => withDesignsClampedToArtboard(
+      prev.map(d => ({
+        ...d,
+        transform: {
+          ...d.transform,
+          nx: (d.transform.nx * oldW) / newWidth,
+          ny: (d.transform.ny * oldH) / newHeight,
+        },
+      })),
+      newWidth,
+      newHeight,
+    ));
 
     setArtboardWidth(newWidth);
     setArtboardHeight(newHeight);
@@ -1908,12 +1953,15 @@ export function useImageEditorModelArrangeKeyboard(bag: ImageEditorBagAfterDesig
           beginArrangeRef.current();
           const newIds = handleDuplicateSelectedRef.current();
           if (newIds.length > 0) {
-            // Same pack the Auto-Arrange button gives — see COPY_ARRANGE_OPTS.
+            // Duplicating from the keyboard is the same request as duplicating from the
+            // toolbar and takes the same pack — whole-sheet scope so the fresh copies are
+            // not stacked into the gaps around a frozen selection, but no `fullRepack`, so
+            // the sheet absorbs them instead of being rebuilt around them. See
+            // COPY_ARRANGE_OPTS.
             setTimeout(() => handleAutoArrangeRef.current({
               skipSnapshot: true,
               preserveSelection: true,
               arrangeAll: true,
-              fullRepack: true,
             }), 0);
           }
         } else {

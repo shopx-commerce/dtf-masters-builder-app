@@ -189,6 +189,22 @@ const DEBUG_OVERLAP = false; // Set true to log when rotation is used (for overl
 const DEBUG_RANK = typeof process !== 'undefined' && !!process.env?.ARRANGE_RANK_DEBUG;
 const ROTATION_SAFETY = 0.02; // Extra vertical offset when rotation=90 to prevent overlap with row above
 
+/**
+ * Whether a rotation swaps a design's width and height.
+ *
+ * The rectangle packers only ever emit 0 or 90, so for most of this file `=== 90` was the
+ * same question. The nester now turns shaped artwork a half or three-quarter turn as well,
+ * and a three-quarter turn swaps the sides exactly as a quarter turn does. Off-axis angles —
+ * which a user can set by hand — answer false, keeping the upright footprint they had before.
+ */
+function isQuarterTurn(rotation: number): boolean {
+  const norm = ((rotation % 360) + 360) % 360;
+  const steps = Math.round(norm / 90);
+  if (Math.abs(norm - steps * 90) > 1) return false;
+  const quarters = steps % 4;
+  return quarters === 1 || quarters === 3;
+}
+
 function findBestPos(
   sky: SkylineSeg[],
   footprintW: number,
@@ -756,7 +772,7 @@ export function keepPositionsPack(
     if (!it) continue;
     const h = p.anchored
       ? (currentById.get(p.id)?.h ?? it.h)
-      : (p.rotation === 90 ? it.w : it.h);
+      : (isQuarterTurn(p.rotation) ? it.w : it.h);
     maxHeight = Math.max(maxHeight, p.ny * abH + h / 2);
   }
   const itemArea = items.reduce((sum, i) => sum + i.w * i.h, 0);
@@ -826,7 +842,7 @@ export function runArrange(input: ArrangeInput) {
       const it = itemById.get(p.id);
       if (!it) continue;
       const anchored = p.anchored ? currentById.get(p.id) : undefined;
-      const fh = anchored ? anchored.h : (p.rotation === 90 ? it.w : it.h);
+      const fh = anchored ? anchored.h : (isQuarterTurn(p.rotation) ? it.w : it.h);
       const inset = inkInset(it.mask, it.w, it.h, p.rotation);
       bottom = Math.max(bottom, p.ny * artboardHeight + fh / 2 - inset.bottom);
     }

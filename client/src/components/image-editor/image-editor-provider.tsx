@@ -187,13 +187,17 @@ function useImageEditorModel(props: ImageEditorProps) {
         // Copy-count changes must repack the whole sheet. The newly created
         // copies are selected for layer feedback, but selected-only arranging
         // would keep every other design fixed and stack copies in one column.
-        // `fullRepack` so the result matches the Auto-Arrange button — see
+        //
+        // Whole-sheet scope, but deliberately no `fullRepack`: raising the copy
+        // count asks the sheet to take the extra copies, not to be rebuilt around
+        // them, so settled designs stay put and the copies are seated in the free
+        // space nearest the top. A from-scratch layout still wins when it reaches
+        // a cheaper rung, and an overflow still triggers one. See
         // COPY_ARRANGE_OPTS in useImageEditorModelStateDesign.
         bagHandleAutoArrangeRef.current({
           skipSnapshot: true,
           preserveSelection: true,
           arrangeAll: true,
-          fullRepack: true,
         });
       });
     });
