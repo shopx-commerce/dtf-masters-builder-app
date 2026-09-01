@@ -39,4 +39,5 @@
 - [Shaped nester orientations](nester-shaped-orientations.md) — bounds-off-sheet already works; triangles failed because a square footprint was denied every turn.
 - [Footprint to artwork centre](footprint-to-artwork-centre.md) — the label-band offset's horizontal sign is invisible until the packer rotates something.
 - [Overlap detection resolution](overlap-detection-resolution.md) — red marks must rasterise at physical px/inch; a display-derived scale invents overlaps on long sheets.
+- [Arrange reveal freeze](arrange-reveal-freeze.md) — hide a multi-commit operation by withholding the commits from the view, not by covering the canvas; a held sheet must go inert.
 - [Unplaceable copy heap](unplaceable-copy-heap.md) — "red marks Auto-Arrange never clears" is a full sheet; leftovers are reported below it and fold onto one spot, then read as settled.

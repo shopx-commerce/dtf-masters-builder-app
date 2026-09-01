@@ -290,6 +290,16 @@ interface PreviewSectionProps {
    * designs could not tell an arrange apart from a drag.
    */
   arrangeEpoch?: number;
+  /**
+   * Whether the sheet may be touched.
+   *
+   * False while an arrange is running, because the editor holds the preview on the frame it
+   * had before the operation started rather than painting the packer's working-out. What is
+   * on screen then is a picture of somewhere the designs no longer are, so a drag or a click
+   * on it would act on positions the customer cannot see. Only the sheet goes inert — the
+   * zoom, reset and history controls below it are outside this and stay live.
+   */
+  interactive?: boolean;
   selectedDesignId?: string | null;
   selectedDesignIds?: Set<string>;
   onSelectDesign?: (id: string | null) => void;
@@ -331,7 +341,7 @@ interface PreviewSectionProps {
 }
 
 const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
-  ({ imageInfo, resizeSettings, artboardWidth = 24.5, artboardHeight = 12, designTransform, onTransformChange, designs = [], arrangeEpoch = 0, selectedDesignId, selectedDesignIds = new Set(), onSelectDesign, onMultiSelect, onMultiDragDelta, onMultiResizeDelta, onMultiRotateDelta, onDuplicateSelected, onInteractionEnd, onExpandArtboard, onDesignContextMenu, spotPreviewData, activeSpotChannel, onWandTap, panModeActive = false, onPanModeChange, selectionZoomActive: selectionZoomActiveProp, onSelectionZoomChange, bottomToolbarContainer, backdropSwatchContainer, wandDeleteActive = false, onWandDeleteTap, onWandDeactivate, onRegisterFocus }, ref) => {
+  ({ imageInfo, resizeSettings, artboardWidth = 24.5, artboardHeight = 12, designTransform, onTransformChange, designs = [], arrangeEpoch = 0, interactive = true, selectedDesignId, selectedDesignIds = new Set(), onSelectDesign, onMultiSelect, onMultiDragDelta, onMultiResizeDelta, onMultiRotateDelta, onDuplicateSelected, onInteractionEnd, onExpandArtboard, onDesignContextMenu, spotPreviewData, activeSpotChannel, onWandTap, panModeActive = false, onPanModeChange, selectionZoomActive: selectionZoomActiveProp, onSelectionZoomChange, bottomToolbarContainer, backdropSwatchContainer, wandDeleteActive = false, onWandDeleteTap, onWandDeactivate, onRegisterFocus }, ref) => {
     const { toast } = useToast();
     const { t, lang } = useLanguage();
     const isMobile = useIsMobile();
@@ -5256,6 +5266,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
             userSelect: 'none',
             touchAction: 'none',
             overscrollBehavior: 'none',
+            ...(interactive ? null : { pointerEvents: 'none' as const }),
             // The rulers are absolutely positioned against the border box, so
             // padding here is what keeps the sheet clear of them.
             ...(isMobile

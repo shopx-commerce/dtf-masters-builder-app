@@ -35,6 +35,7 @@ import {
   useUiStore,
 } from "@/state/ui-store";
 import { ArrangeOverlay } from "./arrange-overlay";
+import { useArrangeFreeze } from "./use-arrange-freeze";
 
 /**
  * The tools in the phone's Design tools sheet, and the thing the bar offers to repeat.
@@ -464,6 +465,32 @@ export default function ImageEditorView() {
     window.addEventListener("dtf:set-sheet-height", onSet);
     return () => window.removeEventListener("dtf:set-sheet-height", onSet);
   }, [handleArtboardHeightChange, isEditMode]);
+
+  /**
+   * What the preview is allowed to see.
+   *
+   * While the sheet is being packed this stays on the frame from before the operation
+   * started, so none of the working-out — provisional placements, discarded packs, the sheet
+   * growing a size at a time, Fill Sheet's copies stacked in the middle — is ever painted.
+   * The finished layout arrives in one commit when the sheet settles.
+   *
+   * Everything describing the picture travels together. Holding the designs but not the
+   * sheet height, or not the selection, would show the customer a frame that never existed.
+   */
+  const preview = useArrangeFreeze(
+    {
+      imageInfo: activeImageInfo,
+      resizeSettings: activeResizeSettings,
+      designTransform: activeDesignTransform,
+      artboardWidth,
+      artboardHeight,
+      designs,
+      arrangeEpoch,
+      selectedDesignId,
+      selectedDesignIds,
+    },
+    arrangeStage !== null,
+  );
 
   const designTools: DesignTool[] = !mobileLayout ? [] : [
     {
@@ -985,16 +1012,17 @@ export default function ImageEditorView() {
               <div className="relative min-h-0 min-w-0 flex-1">
                 <PreviewSection
                   ref={canvasRef}
-                  imageInfo={activeImageInfo}
-                  resizeSettings={activeResizeSettings}
-                  artboardWidth={artboardWidth}
-                  artboardHeight={artboardHeight}
-                  designTransform={activeDesignTransform}
+                  imageInfo={preview.imageInfo}
+                  resizeSettings={preview.resizeSettings}
+                  artboardWidth={preview.artboardWidth}
+                  artboardHeight={preview.artboardHeight}
+                  designTransform={preview.designTransform}
                   onTransformChange={handleDesignTransformChange}
-                  designs={designs}
-                  arrangeEpoch={arrangeEpoch}
-                  selectedDesignId={selectedDesignId}
-                  selectedDesignIds={selectedDesignIds}
+                  designs={preview.designs}
+                  arrangeEpoch={preview.arrangeEpoch}
+                  interactive={arrangeStage === null}
+                  selectedDesignId={preview.selectedDesignId}
+                  selectedDesignIds={preview.selectedDesignIds}
                   onSelectDesign={handleSelectDesign}
                   onMultiSelect={handleMultiSelect}
                   onMultiDragDelta={handleMultiDragDelta}
@@ -1638,16 +1666,17 @@ export default function ImageEditorView() {
           <div className="flex-1 min-h-0 relative">
             <PreviewSection
               ref={canvasRef}
-              imageInfo={activeImageInfo}
-              resizeSettings={activeResizeSettings}
-              artboardWidth={artboardWidth}
-              artboardHeight={artboardHeight}
-              designTransform={activeDesignTransform}
+              imageInfo={preview.imageInfo}
+              resizeSettings={preview.resizeSettings}
+              artboardWidth={preview.artboardWidth}
+              artboardHeight={preview.artboardHeight}
+              designTransform={preview.designTransform}
               onTransformChange={handleDesignTransformChange}
-              designs={designs}
-              arrangeEpoch={arrangeEpoch}
-              selectedDesignId={selectedDesignId}
-              selectedDesignIds={selectedDesignIds}
+              designs={preview.designs}
+              arrangeEpoch={preview.arrangeEpoch}
+              interactive={arrangeStage === null}
+              selectedDesignId={preview.selectedDesignId}
+              selectedDesignIds={preview.selectedDesignIds}
               onSelectDesign={handleSelectDesign}
               onMultiSelect={handleMultiSelect}
               onMultiDragDelta={handleMultiDragDelta}
