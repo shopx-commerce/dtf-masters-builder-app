@@ -12,6 +12,13 @@ import { computeLayerRect } from "@/lib/types";
 import { inkInset } from "@/lib/nest-core";
 import { getDesignNestMask } from "@/lib/nest-mask";
 import {
+  findAabbPairs,
+  findOutOfBounds,
+  overlapDetectionSize,
+  overlapPasses,
+  type OverlapDesign,
+} from "@/lib/overlap-detect";
+import {
   drawPrintLabel,
   labelReadsUpsideDown,
   type PrintLabelLayout,
@@ -1684,8 +1691,15 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
     }, []);
 
     const checkPixelOverlap = useCallback(() => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
+      // The preview being mounted is the only thing wanted from the canvas here: the check
+      // itself works in sheet inches, not in whatever size the canvas happens to be.
+      if (!canvasRef.current) return;
+
+      // Claim this check before anything below can answer or return early. A sliced
+      // fallback pass from an earlier check is still running at this point, and without a
+      // claim taken up front it would write its stale answer over a newer one.
+      overlapRequestIdRef.current += 1;
+      const myRequestId = overlapRequestIdRef.current;
 
       if (designs.length === 0) {
         if (overlappingDesignsRef.current.size > 0) {
@@ -1694,9 +1708,10 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         return;
       }
 
-      const scale = 0.25;
-      const sw = Math.max(60, Math.round(canvas.width * scale));
-      const sh = Math.max(30, Math.round(canvas.height * scale));
+      // Resolution comes from the sheet's physical size, never from how large the preview
+      // happens to draw it. See `overlap-detect`: a display-derived scale tested a long
+      // sheet more coarsely than the margin between its designs.
+      const { sw, sh } = overlapDetectionSize(artboardWidth, artboardHeight);
 
       const designRects: Array<{id: string; left: number; top: number; right: number; bottom: number; design: DesignItem; rect: {x: number; y: number; width: number; height: number}; label: PrintLabelLayout | null}> = [];
       for (const d of designs) {
@@ -1758,12 +1773,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         });
       }
 
-      const outOfBounds = new Set<string>();
-      for (const dr of designRects) {
-        if (dr.left < -1 || dr.top < -1 || dr.right > sw + 1 || dr.bottom > sh + 1) {
-          outOfBounds.add(dr.id);
-        }
-      }
+      const outOfBounds = findOutOfBounds(designRects, sw, sh);
 
       if (designs.length < 2) {
         const prev = overlappingDesignsRef.current;
@@ -1773,15 +1783,7 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
         return;
       }
 
-      const aabbPairs: [number, number][] = [];
-      for (let i = 0; i < designRects.length; i++) {
-        for (let j = i + 1; j < designRects.length; j++) {
-          const a = designRects[i], b = designRects[j];
-          if (a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top) {
-            aabbPairs.push([i, j]);
-          }
-        }
-      }
+      const aabbPairs = findAabbPairs(designRects);
 
       if (aabbPairs.length === 0 && outOfBounds.size === 0) {
         if (overlappingDesignsRef.current.size > 0) setOverlappingDesigns(new Set());
@@ -1797,6 +1799,34 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
       const neededSet = new Set<number>();
       for (const [i, j] of aabbPairs) { neededSet.add(i); neededSet.add(j); }
+
+      /**
+       * A design in the form the pixel test wants, shared by the worker and the fallback so
+       * neither can drift from the other.
+       *
+       * The label box uses the same rect the label is drawn from, converted into the pixels
+       * this pass works in. The artwork's own drawn height is the honest scale factor:
+       * `rect.height` is the artwork, and the label's coordinates are relative to its centre.
+       */
+      const toDetectDesign = (dr: typeof designRects[number], sourceIndex: number): OverlapDesign => {
+        const artH = dr.design.heightInches * dr.design.transform.s;
+        const pxPerInch = artH > 0 ? dr.rect.height / artH : 0;
+        return {
+          id: dr.id,
+          left: dr.left, top: dr.top, right: dr.right, bottom: dr.bottom,
+          sourceIndex,
+          drawW: dr.rect.width, drawH: dr.rect.height,
+          rotation: dr.design.transform.rotation,
+          cx: dr.rect.x + dr.rect.width / 2,
+          cy: dr.rect.y + dr.rect.height / 2,
+          labelBox: dr.label && pxPerInch > 0 ? {
+            x: dr.label.rect.x * pxPerInch,
+            y: dr.label.rect.y * pxPerInch,
+            w: dr.label.rect.width * pxPerInch,
+            h: dr.label.rect.height * pxPerInch,
+          } : undefined,
+        };
+      };
 
       const worker = overlapWorkerRef.current;
       if (worker && typeof createImageBitmap !== 'undefined') {
@@ -1839,8 +1869,6 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           }
           slotByDesign.set(idx, slot);
         }
-        overlapRequestIdRef.current += 1;
-        const myRequestId = overlapRequestIdRef.current;
         Promise.all(decodes.map(({ image, w, h }) => createImageBitmap(image, {
           resizeWidth: w,
           resizeHeight: h,
@@ -1848,33 +1876,9 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
           // downstream is "is any alpha above 20", not a visual comparison.
           resizeQuality: 'low',
         }))).then(bitmaps => {
-          const workerDesigns = designRects.map((dr, idx) => {
-            // Same rect the label is drawn from, converted into the pixels this pass works in.
-            // The artwork's own drawn height is the honest scale factor here: `rect.height` is
-            // the artwork, and the label's coordinates are relative to the artwork's centre.
-            const artH = dr.design.heightInches * dr.design.transform.s;
-            const pxPerInch = artH > 0 ? dr.rect.height / artH : 0;
-            const box = dr.label && pxPerInch > 0 ? {
-              x: dr.label.rect.x * pxPerInch,
-              y: dr.label.rect.y * pxPerInch,
-              w: dr.label.rect.width * pxPerInch,
-              h: dr.label.rect.height * pxPerInch,
-            } : undefined;
-            return {
-              id: dr.id,
-              left: dr.left, top: dr.top, right: dr.right, bottom: dr.bottom,
-              // An index into the shared `bitmaps` array rather than a bitmap of
-              // its own: copies share one, and a transferred bitmap can only be
-              // sent once anyway.
-              bitmapIndex: slotByDesign.get(idx) ?? -1,
-              drawX: dr.rect.x, drawY: dr.rect.y,
-              drawW: dr.rect.width, drawH: dr.rect.height,
-              rotation: dr.design.transform.rotation,
-              cx: dr.rect.x + dr.rect.width / 2,
-              cy: dr.rect.y + dr.rect.height / 2,
-              labelBox: box,
-            };
-          });
+          // The index is into the shared `bitmaps` array rather than a bitmap of its own:
+          // copies share one, and a transferred bitmap can only be sent once anyway.
+          const workerDesigns = designRects.map((dr, idx) => toDetectDesign(dr, slotByDesign.get(idx) ?? -1));
 
           const finish = () => {
             worker.removeEventListener('message', handler);
@@ -1952,66 +1956,67 @@ const PreviewSection = forwardRef<HTMLCanvasElement, PreviewSectionProps>(
 
       function runMainThreadOverlap() {
         try {
-        const needed = Array.from(neededSet);
-        const mtScale = 0.5;
-        const mtw = Math.max(30, Math.round(sw * mtScale));
-        const mth = Math.max(15, Math.round(sh * mtScale));
-        const alphaBuffers = new Map<number, Uint8ClampedArray>();
-        const offscreen = document.createElement('canvas');
-        offscreen.width = mtw;
-        offscreen.height = mth;
-        const octx = offscreen.getContext('2d', { willReadFrequently: true });
-        if (!octx) return;
-        for (const idx of needed) {
-          const d = designRects[idx].design;
-          octx.clearRect(0, 0, mtw, mth);
-          const rect = computeLayerRect(
-            d.imageInfo.image.width, d.imageInfo.image.height,
-            d.transform, mtw, mth,
-            artboardWidth, artboardHeight,
-            d.widthInches, d.heightInches,
-          );
-          const cx = rect.x + rect.width / 2;
-          const cy = rect.y + rect.height / 2;
-          octx.save();
-          octx.translate(cx, cy);
-          octx.rotate((d.transform.rotation * Math.PI) / 180);
-          try {
-            octx.drawImage(d.imageInfo.image, -rect.width / 2, -rect.height / 2, rect.width, rect.height);
-            const label = designRects[idx].label;
-            const artH = d.heightInches * d.transform.s;
-            if (label && artH > 0) {
-              const pxPerInch = rect.height / artH;
-              octx.fillStyle = 'rgba(0,0,0,1)';
-              octx.fillRect(
-                label.rect.x * pxPerInch, label.rect.y * pxPerInch,
-                label.rect.width * pxPerInch, label.rect.height * pxPerInch,
-              );
+          /**
+           * One canvas, resized to each pair's shared area.
+           *
+           * This used to rasterise a whole-sheet buffer per design and keep them all. That
+           * cannot be done at a resolution worth trusting — a long sheet would need hundreds
+           * of megabytes before the margins between its designs resolved — so it answered at
+           * whatever coarse scale it could afford and disagreed with the worker.
+           */
+          let scratch: HTMLCanvasElement | null = null;
+          let scratchCtx: CanvasRenderingContext2D | null = null;
+          const getContext = (w: number, h: number): CanvasRenderingContext2D | null => {
+            if (!scratch) {
+              scratch = document.createElement('canvas');
+              scratchCtx = scratch.getContext('2d', { willReadFrequently: true });
             }
-            octx.restore();
-            alphaBuffers.set(idx, new Uint8ClampedArray(octx.getImageData(0, 0, mtw, mth).data));
-          } catch { octx.restore(); continue; }
-        }
+            if (!scratchCtx) return null;
+            if (scratch.width !== w || scratch.height !== h) {
+              scratch.width = w;
+              scratch.height = h;
+            }
+            scratchCtx.setTransform(1, 0, 0, 1, 0, 0);
+            scratchCtx.clearRect(0, 0, w, h);
+            return scratchCtx;
+          };
 
-        const overlapping = new Set<string>(outOfBounds);
-        for (const [i, j] of aabbPairs) {
-          const a = alphaBuffers.get(i);
-          const b = alphaBuffers.get(j);
-          if (!a || !b) continue;
-          let found = false;
-          for (let p = 3; p < a.length; p += 16) {
-            if (a[p] > 20 && b[p] > 20) { found = true; break; }
-          }
-          if (found) {
-            overlapping.add(designRects[i].id);
-            overlapping.add(designRects[j].id);
-          }
-        }
+          const pass = overlapPasses({
+            designs: designRects.map((dr, idx) => toDetectDesign(dr, idx)),
+            sources: designRects.map(dr => dr.design.imageInfo.image),
+            sw,
+            sh,
+            getContext,
+          });
 
-        const prev = overlappingDesignsRef.current;
-        if (overlapping.size !== prev.size || Array.from(overlapping).some(id => !prev.has(id))) {
-          setOverlappingDesigns(overlapping);
-        }
+          /**
+           * Paced, not trimmed.
+           *
+           * This runs on the UI thread, and a full sheet is a lot of pixels. Dropping pairs
+           * to finish sooner would report a clean sheet for a layout that collides, so the
+           * pass instead runs in short slices and hands the thread back between them.
+           */
+          const SLICE_MS = 8;
+          const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+          const step = () => {
+            try {
+              // A newer check has started, so this answer is already stale.
+              if (myRequestId !== overlapRequestIdRef.current) return;
+              const deadline = now() + SLICE_MS;
+              let next = pass.next();
+              while (!next.done && now() < deadline) next = pass.next();
+              if (!next.done) {
+                setTimeout(step, 0);
+                return;
+              }
+              const overlapping = new Set<string>(next.value);
+              const prev = overlappingDesignsRef.current;
+              if (overlapping.size !== prev.size || Array.from(overlapping).some(id => !prev.has(id))) {
+                setOverlappingDesigns(overlapping);
+              }
+            } catch (err) { console.warn('Main-thread overlap detection failed:', err); }
+          };
+          step();
         } catch (err) { console.warn('Main-thread overlap detection failed:', err); }
       }
     }, [designs, artboardWidth, artboardHeight]);
